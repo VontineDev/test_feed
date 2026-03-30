@@ -34,7 +34,7 @@ except ImportError:
     pass  # python-dotenv 미설치 시 환경변수 직접 설정으로 동작
 
 from summarizer import summarize, Backend
-from db import create_pool, init_db, save_article, save_signal, load_seen_hashes
+from db import create_pool, init_db, save_article, save_signal, save_cross_analysis, load_seen_hashes
 from telegram_notify import send_article as tg_send, send_signal as tg_send_signal
 from signal_detector import detect_signal
 from article_fetcher import fetch_article_body
@@ -377,7 +377,7 @@ async def summary_worker() -> None:
                                 cross = None
 
                         if _db_pool and article_id:
-                            await save_signal(
+                            signal_id = await save_signal(
                                 _db_pool,
                                 article_id  = article_id,
                                 direction   = signal.direction,
@@ -386,6 +386,11 @@ async def summary_worker() -> None:
                                 tickers     = signal.tickers,
                                 llm_backend = signal.backend.value,
                             )
+                            if signal_id and cross:
+                                try:
+                                    await save_cross_analysis(_db_pool, signal_id, cross)
+                                except Exception as e:
+                                    logger.warning("[백테스트] 교차분석 저장 실패: %s", e)
 
                 # ── 4. Telegram 전송 ──────────────────────────
                 await tg_send(art, summary_ko, http=http)
@@ -442,6 +447,28 @@ async def main(interval: int, enable_summary: bool) -> None:
         max_instances=1,                            # 중복 실행 방지
         coalesce=True,                              # 밀린 잡 합치기
     )
+
+    # ── 백테스팅: 가격 체크포인트 트래커 (30분 간격) ──────────
+    async def _track_outcomes_job():
+        if not _db_pool:
+            return
+        try:
+            from backtest import track_outcomes
+            result = await track_outcomes(_db_pool)
+            if result["filled"]:
+                logger.info("[트래커] 체크포인트 %d개 채움", result["filled"])
+        except Exception as e:
+            logger.warning("[트래커] 실행 실패: %s", e)
+
+    scheduler.add_job(
+        _track_outcomes_job,
+        trigger="interval",
+        minutes=30,
+        id="price_tracker",
+        max_instances=1,
+        coalesce=True,
+    )
+
     scheduler.start()
 
     try:

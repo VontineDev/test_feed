@@ -337,6 +337,8 @@ class CrossAnalysis:
     score: int            # 0~10 (신호 신뢰도)
     summary: str          # 한 줄 요약
     price_contexts: list[PriceContext]
+    confirm_count: int = 0
+    conflict_count: int = 0
 
 
 def cross_analyze(
@@ -486,6 +488,7 @@ def cross_analyze(
     return CrossAnalysis(
         verdict=verdict, score=score,
         summary=summary, price_contexts=contexts,
+        confirm_count=confirm_count, conflict_count=conflict_count,
     )
 
 

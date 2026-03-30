@@ -1,0 +1,612 @@
+"""
+backtest.py  —  교차분석 백테스팅 모듈
+────────────────────────────────────────────────────────────
+교차분석(CONFIRM/CAUTION/FILTER/NEUTRAL) 판정의 정확도를 검증.
+
+기능:
+    track     — 미채움 체크포인트에 실제 가격 채우기
+    backfill  — 기존 신호에 대해 과거 교차분석 + 체크포인트 백필
+    report    — 판정 적중률, 수익률, 점수 상관관계 리포트
+
+실행:
+    python backtest.py track
+    python backtest.py backfill [--since 2025-03-01]
+    python backtest.py report [--verdict CONFIRM] [--checkpoint 1d]
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import logging
+import time
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+import yfinance as yf
+
+from db import (
+    create_pool,
+    fetch_pending_outcomes,
+    init_db,
+    save_cross_analysis,
+    update_outcome,
+)
+from market_data import (
+    CrossAnalysis,
+    PriceContext,
+    _calc_rsi,
+    _fetch_yfinance,
+    cross_analyze,
+    get_price_context,
+    YFINANCE_MAP,
+)
+
+logger = logging.getLogger(__name__)
+
+# ── 체크포인트 오프셋 ────────────────────────────────────────
+CHECKPOINT_OFFSETS = {
+    "1h": timedelta(hours=1),
+    "4h": timedelta(hours=4),
+    "1d": timedelta(days=1),
+    "3d": timedelta(days=3),
+}
+
+
+# ═════════════════════════════════════════════════════════════
+# Component A: 가격 트래커
+# ═════════════════════════════════════════════════════════════
+
+def _fetch_historical_price(
+    symbol: str,
+    target_time: datetime,
+) -> Optional[float]:
+    """
+    yfinance에서 target_time에 가장 가까운 종가를 조회.
+    장중 데이터(~60일)가 있으면 시간봉, 없으면 일봉 사용.
+    """
+    try:
+        t = yf.Ticker(symbol)
+        now = datetime.now(timezone.utc)
+        days_ago = (now - target_time).days
+
+        if days_ago <= 55:
+            # 시간봉 시도
+            start = (target_time - timedelta(hours=2)).strftime("%Y-%m-%d")
+            end = (target_time + timedelta(hours=6)).strftime("%Y-%m-%d")
+            hist = t.history(start=start, end=end, interval="1h")
+            if not hist.empty:
+                hist.index = hist.index.tz_convert("UTC") if hist.index.tz else hist.index.tz_localize("UTC")
+                target_utc = target_time if target_time.tzinfo else target_time.replace(tzinfo=timezone.utc)
+                diffs = abs(hist.index - target_utc)
+                closest_idx = diffs.argmin()
+                return round(float(hist["Close"].iloc[closest_idx]), 2)
+
+        # 일봉 폴백
+        start = (target_time - timedelta(days=2)).strftime("%Y-%m-%d")
+        end = (target_time + timedelta(days=2)).strftime("%Y-%m-%d")
+        hist = t.history(start=start, end=end, interval="1d")
+        if not hist.empty:
+            hist.index = hist.index.tz_convert("UTC") if hist.index.tz else hist.index.tz_localize("UTC")
+            target_utc = target_time if target_time.tzinfo else target_time.replace(tzinfo=timezone.utc)
+            diffs = abs(hist.index - target_utc)
+            closest_idx = diffs.argmin()
+            return round(float(hist["Close"].iloc[closest_idx]), 2)
+
+        return None
+    except Exception as e:
+        logger.debug("[트래커] %s 가격 조회 실패 (%s): %s", symbol, target_time, e)
+        return None
+
+
+async def track_outcomes(pool) -> dict:
+    """
+    미채움 체크포인트에 실제 가격을 채움.
+    Returns: {"filled": N, "failed": N, "total": N}
+    """
+    pending = await fetch_pending_outcomes(pool)
+    if not pending:
+        logger.info("[트래커] 채울 체크포인트 없음")
+        return {"filled": 0, "failed": 0, "total": 0}
+
+    logger.info("[트래커] %d개 체크포인트 처리 시작", len(pending))
+
+    # symbol별로 그룹화하여 API 호출 최소화
+    by_symbol: dict[str, list[dict]] = defaultdict(list)
+    for row in pending:
+        by_symbol[row["symbol"]].append(row)
+
+    filled = 0
+    failed = 0
+
+    for symbol, rows in by_symbol.items():
+        for row in rows:
+            offset = CHECKPOINT_OFFSETS.get(row["checkpoint"])
+            if not offset:
+                continue
+            target_time = row["signal_time"] + offset
+
+            price = _fetch_historical_price(symbol, target_time)
+
+            if price is not None and row["price_at_signal"] > 0:
+                return_pct = round(
+                    (price - row["price_at_signal"]) / row["price_at_signal"] * 100, 4
+                )
+                ok = await update_outcome(pool, row["outcome_id"], price, return_pct)
+                if ok:
+                    filled += 1
+                else:
+                    failed += 1
+            else:
+                # 가격 조회 실패 → NULL로 표시하되 fetched_at 채워서 무한 재시도 방지
+                await update_outcome(pool, row["outcome_id"], None, None)
+                failed += 1
+
+        # yfinance rate limit 대비
+        time.sleep(0.3)
+
+    result = {"filled": filled, "failed": failed, "total": len(pending)}
+    logger.info(
+        "[트래커] 완료 — 채움:%d 실패:%d 전체:%d",
+        filled, failed, len(pending),
+    )
+    return result
+
+
+# ═════════════════════════════════════════════════════════════
+# Component B: 과거 데이터 백필
+# ═════════════════════════════════════════════════════════════
+
+def _build_price_context_historical(
+    symbol: str,
+    ticker_name: str,
+    as_of_date: datetime,
+) -> Optional[PriceContext]:
+    """
+    as_of_date 기준 과거 시세로 PriceContext 구성.
+    """
+    try:
+        t = yf.Ticker(symbol)
+        start = (as_of_date - timedelta(days=365)).strftime("%Y-%m-%d")
+        end = as_of_date.strftime("%Y-%m-%d")
+        hist = t.history(start=start, end=end)
+        if hist.empty or len(hist) < 2:
+            return None
+
+        closes = hist["Close"].tolist()
+        volumes = hist["Volume"].tolist()
+        current = closes[-1]
+        prev = closes[-2]
+        change_pct = round((current - prev) / prev * 100, 2) if prev else 0
+
+        rsi = _calc_rsi(closes)
+
+        avg_vol = sum(volumes[-20:]) / len(volumes[-20:]) if len(volumes) >= 5 else None
+        vol_ratio = round(volumes[-1] / avg_vol, 2) if avg_vol else None
+        volume_surge = bool(vol_ratio and vol_ratio >= 2.0)
+
+        week52_high = round(max(closes), 2)
+        week52_low = round(min(closes), 2)
+
+        return PriceContext(
+            ticker=ticker_name, symbol=symbol, source="yfinance",
+            current=round(current, 2), change_pct=change_pct,
+            rsi=rsi, volume_ratio=vol_ratio,
+            week52_high=week52_high, week52_low=week52_low,
+            volume_surge=volume_surge, success=True,
+        )
+    except Exception as e:
+        logger.debug("[백필] %s 과거 시세 실패: %s", symbol, e)
+        return None
+
+
+def cross_analyze_historical(
+    direction: str,
+    strength: int,
+    tickers: list[str],
+    ticker_symbols: dict[str, str] | None,
+    as_of_date: datetime,
+) -> CrossAnalysis:
+    """
+    과거 시점(as_of_date) 기준으로 교차분석 실행.
+    cross_analyze()와 동일한 로직, 단 과거 데이터 사용.
+    """
+    # 심볼 해석 (기존 로직 재활용)
+    resolved: dict[str, str] = {}
+    if ticker_symbols:
+        resolved.update(ticker_symbols)
+    for tk in tickers:
+        if tk not in resolved:
+            key = tk.lower().strip()
+            if key in YFINANCE_MAP:
+                resolved[tk] = YFINANCE_MAP[key]
+
+    contexts: list[PriceContext] = []
+    for tk, sym in resolved.items():
+        ctx = _build_price_context_historical(sym, tk, as_of_date)
+        if ctx and ctx.success:
+            contexts.append(ctx)
+        time.sleep(0.3)
+
+    if not contexts:
+        return CrossAnalysis(
+            verdict="NEUTRAL", score=max(1, strength),
+            summary="과거 시세 데이터 없음",
+            price_contexts=[], confirm_count=0, conflict_count=0,
+        )
+
+    # 판정 로직 (cross_analyze()와 동일)
+    confirm_count = 0
+    conflict_count = 0
+    details: list[str] = []
+
+    for ctx in contexts:
+        if direction == "BUY":
+            if ctx.change_pct >= 0.5:
+                confirm_count += 1
+                details.append(f"{ctx.ticker} +{ctx.change_pct}%")
+            elif ctx.change_pct <= -2:
+                conflict_count += 1
+                details.append(f"{ctx.ticker} {ctx.change_pct}% 역방향")
+            if ctx.rsi is not None and ctx.rsi <= 30:
+                confirm_count += 1
+            if ctx.near_52w_low:
+                confirm_count += 1
+            if ctx.volume_surge:
+                confirm_count += 1
+            if ctx.near_52w_high:
+                conflict_count += 1
+        elif direction == "SELL":
+            if ctx.change_pct <= -0.5:
+                confirm_count += 1
+                details.append(f"{ctx.ticker} {ctx.change_pct}%")
+            elif ctx.change_pct >= 2:
+                conflict_count += 1
+                details.append(f"{ctx.ticker} +{ctx.change_pct}% 역방향")
+            if ctx.rsi is not None and ctx.rsi >= 70:
+                confirm_count += 1
+            if ctx.near_52w_high:
+                confirm_count += 1
+            if ctx.volume_surge:
+                confirm_count += 1
+            if ctx.near_52w_low:
+                conflict_count += 1
+        else:  # WATCH
+            if abs(ctx.change_pct) >= 2:
+                confirm_count += 1
+                details.append(f"{ctx.ticker} {ctx.change_pct}% 변동")
+            if ctx.volume_surge:
+                confirm_count += 1
+
+    base_score = min(10, strength * 2)
+    total = confirm_count + conflict_count
+
+    if confirm_count > conflict_count:
+        verdict = "CONFIRM"
+        score = min(10, base_score + min(confirm_count, 2))
+        summary = f"시세 방향 일치 ({', '.join(details[:2]) or '확인'})"
+    elif conflict_count > confirm_count:
+        conflict_ratio = conflict_count / total if total else 0
+        if conflict_count >= 2 and conflict_ratio >= 0.75:
+            verdict = "FILTER"
+            score = max(1, base_score - conflict_count * 2)
+        else:
+            verdict = "CAUTION"
+            score = max(1, base_score - conflict_count)
+        summary = f"시세 역방향 — 주의 ({', '.join(details[:2]) or '충돌'})"
+    else:
+        verdict = "NEUTRAL"
+        score = base_score
+        summary = f"시세 보합 ({', '.join(details[:2]) or '중립'})"
+
+    return CrossAnalysis(
+        verdict=verdict, score=score,
+        summary=summary, price_contexts=contexts,
+        confirm_count=confirm_count, conflict_count=conflict_count,
+    )
+
+
+async def backfill_historical(pool, since: Optional[str] = None) -> dict:
+    """
+    기존 trade_signals에 교차분석이 없는 행을 백필.
+    """
+    since_filter = ""
+    args: list = []
+    if since:
+        since_filter = "AND s.detected_at >= $1"
+        args.append(datetime.fromisoformat(since).replace(tzinfo=timezone.utc))
+
+    query = f"""
+        SELECT s.id AS signal_id, s.direction, s.strength,
+               s.tickers, s.detected_at
+        FROM   trade_signals s
+        LEFT JOIN cross_analysis_results car ON car.signal_id = s.id
+        WHERE  car.id IS NULL
+               AND s.direction IN ('BUY', 'SELL', 'WATCH')
+               {since_filter}
+        ORDER BY s.detected_at ASC
+    """
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(query, *args)
+
+    if not rows:
+        logger.info("[백필] 백필 대상 없음")
+        return {"processed": 0, "skipped": 0}
+
+    logger.info("[백필] %d개 신호 백필 시작", len(rows))
+    processed = 0
+    skipped = 0
+
+    for row in rows:
+        tickers = row["tickers"] or []
+        if not tickers:
+            skipped += 1
+            continue
+
+        as_of = row["detected_at"]
+        cross = cross_analyze_historical(
+            direction=row["direction"],
+            strength=row["strength"],
+            tickers=tickers,
+            ticker_symbols=None,
+            as_of_date=as_of,
+        )
+
+        cross_id = await save_cross_analysis(pool, row["signal_id"], cross)
+        if not cross_id:
+            skipped += 1
+            continue
+
+        # 과거 체크포인트 가격 즉시 채우기
+        for ctx in cross.price_contexts:
+            for cp, offset in CHECKPOINT_OFFSETS.items():
+                target_time = as_of + offset
+                price = _fetch_historical_price(ctx.symbol, target_time)
+                if price is not None and ctx.current > 0:
+                    return_pct = round(
+                        (price - ctx.current) / ctx.current * 100, 4
+                    )
+                else:
+                    price = None
+                    return_pct = None
+
+                # outcome 행 찾아서 업데이트
+                async with pool.acquire() as conn:
+                    outcome_row = await conn.fetchrow(
+                        """
+                        SELECT po.id FROM price_outcomes po
+                        JOIN   cross_analysis_prices cap ON cap.id = po.cross_price_id
+                        WHERE  cap.cross_id = $1
+                          AND  cap.symbol = $2
+                          AND  po.checkpoint = $3
+                        """,
+                        cross_id, ctx.symbol, cp,
+                    )
+                if outcome_row:
+                    await update_outcome(pool, outcome_row["id"], price, return_pct)
+
+            time.sleep(0.3)
+
+        processed += 1
+        if processed % 10 == 0:
+            logger.info("[백필] 진행: %d/%d", processed, len(rows))
+
+    result = {"processed": processed, "skipped": skipped}
+    logger.info("[백필] 완료 — 처리:%d 스킵:%d", processed, skipped)
+    return result
+
+
+# ═════════════════════════════════════════════════════════════
+# Component C: 지표 계산 + 리포트
+# ═════════════════════════════════════════════════════════════
+
+async def calculate_metrics(
+    pool,
+    verdict_filter: Optional[str] = None,
+    checkpoint_filter: Optional[str] = None,
+) -> dict:
+    """
+    교차분석 백테스팅 지표 계산.
+    """
+    conditions = ["po.fetched_at IS NOT NULL", "po.return_pct IS NOT NULL"]
+    args: list = []
+    idx = 0
+
+    if verdict_filter:
+        idx += 1
+        conditions.append(f"car.verdict = ${idx}")
+        args.append(verdict_filter)
+    if checkpoint_filter:
+        idx += 1
+        conditions.append(f"po.checkpoint = ${idx}")
+        args.append(checkpoint_filter)
+
+    where = " AND ".join(conditions)
+
+    query = f"""
+        SELECT car.verdict,
+               s.direction,
+               car.score,
+               po.checkpoint,
+               po.return_pct
+        FROM   price_outcomes po
+        JOIN   cross_analysis_prices cap ON cap.id = po.cross_price_id
+        JOIN   cross_analysis_results car ON car.id = cap.cross_id
+        JOIN   trade_signals s ON s.id = car.signal_id
+        WHERE  {where}
+        ORDER BY car.verdict, po.checkpoint
+    """
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(query, *args)
+
+    if not rows:
+        return {"message": "데이터 없음", "rows": 0}
+
+    # 그룹별 집계
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    for r in rows:
+        key = (r["verdict"], r["checkpoint"])
+        groups[key].append(dict(r))
+
+    metrics = {}
+    for (verdict, checkpoint), items in sorted(groups.items()):
+        returns = [i["return_pct"] for i in items]
+        directions = [i["direction"] for i in items]
+        scores = [i["score"] for i in items]
+
+        # 적중 판정
+        hits = 0
+        for ret, direction in zip(returns, directions):
+            if verdict in ("CONFIRM", "NEUTRAL"):
+                if direction == "BUY" and ret > 0:
+                    hits += 1
+                elif direction == "SELL" and ret < 0:
+                    hits += 1
+                elif direction == "WATCH":
+                    hits += 1  # WATCH는 방향 무관
+            elif verdict == "FILTER":
+                # FILTER가 맞으려면 원래 신호 방향 반대로 가야 함
+                if direction == "BUY" and ret <= 0:
+                    hits += 1
+                elif direction == "SELL" and ret >= 0:
+                    hits += 1
+
+        n = len(returns)
+        avg_ret = round(sum(returns) / n, 4) if n else 0
+        sorted_rets = sorted(returns)
+        median_ret = sorted_rets[n // 2] if n else 0
+        hit_rate = round(hits / n * 100, 1) if n else 0
+        avg_score = round(sum(scores) / n, 1) if n else 0
+
+        metrics[(verdict, checkpoint)] = {
+            "count": n,
+            "hit_rate": hit_rate,
+            "avg_return": avg_ret,
+            "median_return": median_ret,
+            "min_return": sorted_rets[0] if sorted_rets else 0,
+            "max_return": sorted_rets[-1] if sorted_rets else 0,
+            "avg_score": avg_score,
+        }
+
+    # 점수 구간별 수익률
+    score_buckets: dict[str, list[float]] = {"0-3": [], "4-6": [], "7-10": []}
+    for r in rows:
+        ret = r["return_pct"]
+        sc = r["score"]
+        if sc <= 3:
+            score_buckets["0-3"].append(ret)
+        elif sc <= 6:
+            score_buckets["4-6"].append(ret)
+        else:
+            score_buckets["7-10"].append(ret)
+
+    score_corr = {}
+    for bucket, rets in score_buckets.items():
+        if rets:
+            score_corr[bucket] = {
+                "count": len(rets),
+                "avg_return": round(sum(rets) / len(rets), 4),
+            }
+
+    return {
+        "rows": len(rows),
+        "by_verdict_checkpoint": metrics,
+        "score_correlation": score_corr,
+    }
+
+
+def _print_report(metrics: dict) -> None:
+    """지표를 터미널에 깔끔하게 출력."""
+    if metrics.get("message"):
+        print(f"\n  {metrics['message']}")
+        return
+
+    print(f"\n{'=' * 80}")
+    print(f"  교차분석 백테스팅 리포트  (데이터: {metrics['rows']}건)")
+    print(f"{'=' * 80}")
+
+    # 판정별 체크포인트 테이블
+    print(f"\n{'판정':<10} {'체크포인트':<10} {'건수':>6} {'적중률':>8} "
+          f"{'평균수익':>10} {'중앙값':>10} {'최소':>10} {'최대':>10} {'평균점수':>8}")
+    print("-" * 80)
+
+    by_vc = metrics.get("by_verdict_checkpoint", {})
+    for (verdict, checkpoint), m in sorted(by_vc.items()):
+        print(
+            f"{verdict:<10} {checkpoint:<10} {m['count']:>6} "
+            f"{m['hit_rate']:>7.1f}% "
+            f"{m['avg_return']:>9.4f}% "
+            f"{m['median_return']:>9.4f}% "
+            f"{m['min_return']:>9.4f}% "
+            f"{m['max_return']:>9.4f}% "
+            f"{m['avg_score']:>7.1f}"
+        )
+
+    # 점수 상관관계
+    sc = metrics.get("score_correlation", {})
+    if sc:
+        print(f"\n{'─' * 40}")
+        print("  점수 구간별 평균 수익률")
+        print(f"{'─' * 40}")
+        for bucket, data in sorted(sc.items()):
+            print(f"  점수 {bucket:<6}  건수:{data['count']:>4}  "
+                  f"평균수익:{data['avg_return']:>8.4f}%")
+
+    print(f"\n{'=' * 80}\n")
+
+
+# ═════════════════════════════════════════════════════════════
+# CLI
+# ═════════════════════════════════════════════════════════════
+
+async def main():
+    parser = argparse.ArgumentParser(description="교차분석 백테스팅")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    # track
+    sub.add_parser("track", help="미채움 체크포인트에 실제 가격 채우기")
+
+    # backfill
+    bf = sub.add_parser("backfill", help="기존 신호에 교차분석 백필")
+    bf.add_argument("--since", help="시작일 (예: 2025-03-01)")
+
+    # report
+    rp = sub.add_parser("report", help="백테스팅 리포트 출력")
+    rp.add_argument("--verdict", help="판정 필터 (CONFIRM/CAUTION/FILTER/NEUTRAL)")
+    rp.add_argument("--checkpoint", help="체크포인트 필터 (1h/4h/1d/3d)")
+
+    args = parser.parse_args()
+
+    pool = await create_pool()
+    await init_db(pool)
+
+    try:
+        if args.command == "track":
+            result = await track_outcomes(pool)
+            print(f"트래커 완료: 채움 {result['filled']}, "
+                  f"실패 {result['failed']}, 전체 {result['total']}")
+
+        elif args.command == "backfill":
+            result = await backfill_historical(pool, since=args.since)
+            print(f"백필 완료: 처리 {result['processed']}, 스킵 {result['skipped']}")
+
+        elif args.command == "report":
+            metrics = await calculate_metrics(
+                pool,
+                verdict_filter=args.verdict,
+                checkpoint_filter=args.checkpoint,
+            )
+            _print_report(metrics)
+    finally:
+        await pool.close()
+
+
+if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
+    asyncio.run(main())
