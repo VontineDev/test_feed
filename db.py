@@ -73,6 +73,47 @@ CREATE TABLE IF NOT EXISTS trade_signals (
 CREATE INDEX IF NOT EXISTS idx_sig_direction ON trade_signals (direction);
 CREATE INDEX IF NOT EXISTS idx_sig_detected  ON trade_signals (detected_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sig_strength  ON trade_signals (strength DESC);
+
+-- ── 백테스팅: 교차분석 결과 ──────────────────────────────────
+CREATE TABLE IF NOT EXISTS cross_analysis_results (
+    id              BIGSERIAL    PRIMARY KEY,
+    signal_id       BIGINT       NOT NULL REFERENCES trade_signals(id) ON DELETE CASCADE,
+    verdict         VARCHAR(16)  NOT NULL,
+    score           SMALLINT     NOT NULL,
+    summary         TEXT,
+    confirm_count   SMALLINT,
+    conflict_count  SMALLINT,
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cross_signal  ON cross_analysis_results (signal_id);
+CREATE INDEX IF NOT EXISTS idx_cross_verdict ON cross_analysis_results (verdict);
+
+-- ── 백테스팅: 교차분석 시점 종목별 시세 스냅샷 ───────────────
+CREATE TABLE IF NOT EXISTS cross_analysis_prices (
+    id              BIGSERIAL    PRIMARY KEY,
+    cross_id        BIGINT       NOT NULL REFERENCES cross_analysis_results(id) ON DELETE CASCADE,
+    ticker          VARCHAR(64)  NOT NULL,
+    symbol          VARCHAR(32)  NOT NULL,
+    price_at_signal FLOAT        NOT NULL,
+    change_pct      FLOAT,
+    rsi             FLOAT,
+    volume_ratio    FLOAT,
+    near_52w_high   BOOLEAN,
+    near_52w_low    BOOLEAN
+);
+CREATE INDEX IF NOT EXISTS idx_cross_prices ON cross_analysis_prices (cross_id);
+
+-- ── 백테스팅: 미래 시점 가격 체크포인트 ──────────────────────
+CREATE TABLE IF NOT EXISTS price_outcomes (
+    id              BIGSERIAL    PRIMARY KEY,
+    cross_price_id  BIGINT       NOT NULL REFERENCES cross_analysis_prices(id) ON DELETE CASCADE,
+    checkpoint      VARCHAR(8)   NOT NULL,
+    price           FLOAT,
+    return_pct      FLOAT,
+    fetched_at      TIMESTAMPTZ,
+    UNIQUE (cross_price_id, checkpoint)
+);
+CREATE INDEX IF NOT EXISTS idx_outcomes_unfilled ON price_outcomes (fetched_at) WHERE fetched_at IS NULL;
 """
 
 
@@ -278,6 +319,151 @@ async def fetch_latest_signals(
     async with pool.acquire() as conn:
         rows = await conn.fetch(query, *args)
     return [dict(r) for r in rows]
+
+
+# ── 교차분석 결과 저장 (백테스팅) ─────────────────────────────
+_DEFAULT_CHECKPOINTS = ("1h", "4h", "1d", "3d")
+
+
+async def save_cross_analysis(
+    pool: asyncpg.Pool,
+    signal_id: int,
+    cross,                          # market_data.CrossAnalysis
+    checkpoints: tuple[str, ...] = _DEFAULT_CHECKPOINTS,
+) -> Optional[int]:
+    """
+    교차분석 결과 + 종목별 시세 스냅샷 + 미래 체크포인트(빈 행) 저장.
+    단일 트랜잭션으로 처리. 저장된 cross_analysis_results.id 반환.
+    """
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                # 1) cross_analysis_results
+                cross_id = await conn.fetchval(
+                    """
+                    INSERT INTO cross_analysis_results
+                        (signal_id, verdict, score, summary,
+                         confirm_count, conflict_count)
+                    VALUES ($1,$2,$3,$4,$5,$6)
+                    RETURNING id
+                    """,
+                    signal_id,
+                    cross.verdict,
+                    cross.score,
+                    cross.summary,
+                    cross.confirm_count,
+                    cross.conflict_count,
+                )
+
+                # 2) cross_analysis_prices + price_outcomes
+                for ctx in cross.price_contexts:
+                    price_id = await conn.fetchval(
+                        """
+                        INSERT INTO cross_analysis_prices
+                            (cross_id, ticker, symbol, price_at_signal,
+                             change_pct, rsi, volume_ratio,
+                             near_52w_high, near_52w_low)
+                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                        RETURNING id
+                        """,
+                        cross_id,
+                        ctx.ticker,
+                        ctx.symbol,
+                        float(ctx.current),
+                        ctx.change_pct,
+                        ctx.rsi,
+                        ctx.volume_ratio,
+                        ctx.near_52w_high,
+                        ctx.near_52w_low,
+                    )
+
+                    # 3) 체크포인트 빈 행 미리 생성
+                    for cp in checkpoints:
+                        await conn.execute(
+                            """
+                            INSERT INTO price_outcomes
+                                (cross_price_id, checkpoint)
+                            VALUES ($1, $2)
+                            ON CONFLICT DO NOTHING
+                            """,
+                            price_id,
+                            cp,
+                        )
+
+        logger.info(
+            "[백테스트] 교차분석 저장 — signal_id=%d verdict=%s 종목:%d개 체크포인트:%d개",
+            signal_id, cross.verdict,
+            len(cross.price_contexts), len(checkpoints),
+        )
+        return cross_id
+    except Exception as e:
+        logger.error("[백테스트] 교차분석 저장 실패: %s", e)
+        return None
+
+
+async def fetch_pending_outcomes(
+    pool: asyncpg.Pool,
+    limit: int = 100,
+) -> list[dict]:
+    """
+    아직 채워지지 않은(fetched_at IS NULL) 가격 체크포인트 행 조회.
+    체크포인트 시간이 경과한 것만 반환.
+    """
+    query = """
+        SELECT po.id            AS outcome_id,
+               po.checkpoint,
+               cap.symbol,
+               cap.ticker,
+               cap.price_at_signal,
+               car.created_at   AS signal_time,
+               car.signal_id
+        FROM   price_outcomes po
+        JOIN   cross_analysis_prices cap ON cap.id = po.cross_price_id
+        JOIN   cross_analysis_results car ON car.id = cap.cross_id
+        WHERE  po.fetched_at IS NULL
+          AND  car.created_at + (
+                 CASE po.checkpoint
+                   WHEN '1h' THEN INTERVAL '1 hour'
+                   WHEN '4h' THEN INTERVAL '4 hours'
+                   WHEN '1d' THEN INTERVAL '1 day'
+                   WHEN '3d' THEN INTERVAL '3 days'
+                 END
+               ) <= now()
+        ORDER BY car.created_at ASC
+        LIMIT $1
+    """
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(query, limit)
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.error("[백테스트] 미완 체크포인트 조회 실패: %s", e)
+        return []
+
+
+async def update_outcome(
+    pool: asyncpg.Pool,
+    outcome_id: int,
+    price: Optional[float],
+    return_pct: Optional[float],
+) -> bool:
+    """가격 체크포인트 결과 채우기."""
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE price_outcomes
+                SET    price = $2, return_pct = $3, fetched_at = now()
+                WHERE  id = $1
+                """,
+                outcome_id,
+                price,
+                return_pct,
+            )
+        return True
+    except Exception as e:
+        logger.error("[백테스트] 체크포인트 업데이트 실패 id=%d: %s", outcome_id, e)
+        return False
 
 
 # ── 재시작 시 중복 해시 복원 ──────────────────────────────────
