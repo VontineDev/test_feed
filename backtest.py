@@ -18,10 +18,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
+import json
 import logging
+import os
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 
 import yfinance as yf
@@ -559,6 +563,100 @@ def _print_report(metrics: dict) -> None:
 
 
 # ═════════════════════════════════════════════════════════════
+# Component D: 리포트 파일 저장
+# ═════════════════════════════════════════════════════════════
+
+REPORT_DIR = Path(__file__).parent / "reports"
+
+
+def _ensure_report_dir() -> Path:
+    """reports/ 디렉터리 생성 (없으면)."""
+    REPORT_DIR.mkdir(exist_ok=True)
+    return REPORT_DIR
+
+
+def _report_filename(fmt: str) -> str:
+    """타임스탬프 기반 파일명 생성."""
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"backtest_{ts}.{fmt}"
+
+
+def save_report_csv(metrics: dict, path: Optional[str] = None) -> str:
+    """
+    리포트를 CSV 파일로 저장.
+    Returns: 저장된 파일 경로.
+    """
+    if metrics.get("message"):
+        logger.warning("[리포트] 저장할 데이터 없음: %s", metrics["message"])
+        return ""
+
+    report_dir = _ensure_report_dir()
+    filepath = Path(path) if path else report_dir / _report_filename("csv")
+
+    by_vc = metrics.get("by_verdict_checkpoint", {})
+    sc = metrics.get("score_correlation", {})
+
+    with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+
+        # 판정별 체크포인트 테이블
+        writer.writerow([
+            "판정", "체크포인트", "건수", "적중률(%)",
+            "평균수익(%)", "중앙값(%)", "최소(%)", "최대(%)", "평균점수",
+        ])
+        for (verdict, checkpoint), m in sorted(by_vc.items()):
+            writer.writerow([
+                verdict, checkpoint, m["count"], m["hit_rate"],
+                m["avg_return"], m["median_return"],
+                m["min_return"], m["max_return"], m["avg_score"],
+            ])
+
+        # 빈 행 구분
+        writer.writerow([])
+
+        # 점수 구간별 수익률
+        writer.writerow(["점수구간", "건수", "평균수익(%)"])
+        for bucket, data in sorted(sc.items()):
+            writer.writerow([bucket, data["count"], data["avg_return"]])
+
+    logger.info("[리포트] CSV 저장: %s", filepath)
+    return str(filepath)
+
+
+def save_report_json(metrics: dict, path: Optional[str] = None) -> str:
+    """
+    리포트를 JSON 파일로 저장.
+    Returns: 저장된 파일 경로.
+    """
+    if metrics.get("message"):
+        logger.warning("[리포트] 저장할 데이터 없음: %s", metrics["message"])
+        return ""
+
+    report_dir = _ensure_report_dir()
+    filepath = Path(path) if path else report_dir / _report_filename("json")
+
+    # dict의 tuple 키를 문자열 키로 변환 (JSON 호환)
+    by_vc = metrics.get("by_verdict_checkpoint", {})
+    serializable_vc = {}
+    for (verdict, checkpoint), m in by_vc.items():
+        key = f"{verdict}_{checkpoint}"
+        serializable_vc[key] = {"verdict": verdict, "checkpoint": checkpoint, **m}
+
+    output = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "total_rows": metrics["rows"],
+        "by_verdict_checkpoint": serializable_vc,
+        "score_correlation": metrics.get("score_correlation", {}),
+    }
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(output, f, ensure_ascii=False, indent=2)
+
+    logger.info("[리포트] JSON 저장: %s", filepath)
+    return str(filepath)
+
+
+# ═════════════════════════════════════════════════════════════
 # CLI
 # ═════════════════════════════════════════════════════════════
 
@@ -577,6 +675,9 @@ async def main():
     rp = sub.add_parser("report", help="백테스팅 리포트 출력")
     rp.add_argument("--verdict", help="판정 필터 (CONFIRM/CAUTION/FILTER/NEUTRAL)")
     rp.add_argument("--checkpoint", help="체크포인트 필터 (1h/4h/1d/3d)")
+    rp.add_argument("--output", "-o", default="both",
+                     choices=["csv", "json", "both", "none"],
+                     help="리포트 저장 형식 (기본: both)")
 
     args = parser.parse_args()
 
@@ -600,6 +701,22 @@ async def main():
                 checkpoint_filter=args.checkpoint,
             )
             _print_report(metrics)
+
+            # 파일 저장
+            fmt = args.output
+            saved = []
+            if fmt in ("csv", "both"):
+                p = save_report_csv(metrics)
+                if p:
+                    saved.append(p)
+            if fmt in ("json", "both"):
+                p = save_report_json(metrics)
+                if p:
+                    saved.append(p)
+            if saved:
+                print("📁 리포트 저장 완료:")
+                for s in saved:
+                    print(f"   {s}")
     finally:
         await pool.close()
 

@@ -53,6 +53,10 @@ def _get_chat_id() -> str:
         raise ValueError("환경변수 TELEGRAM_CHAT_ID 가 설정되지 않았습니다.")
     return chat_id
 
+def _get_channel_id() -> str:
+    """TELEGRAM_CHANNEL_ID 환경변수. 미설정 시 빈 문자열 (채널 발송 건너뜀)."""
+    return os.environ.get("TELEGRAM_CHANNEL_ID", "").strip()
+
 
 def _build_message(art: dict, summary_ko: str) -> str:
     """기사 정보 → Telegram 메시지 문자열 생성 (MarkdownV2)"""
@@ -80,6 +84,46 @@ def _build_message(art: dict, summary_ko: str) -> str:
     return "\n".join(lines)
 
 
+async def _post_message(
+    http: httpx.AsyncClient,
+    token: str,
+    chat_id: str,
+    text: str,
+    label: str = "",
+) -> bool:
+    """단일 대상(chat_id 또는 channel_id)에 메시지 발송. 재시도 포함."""
+    url = TELEGRAM_API.format(token=token, method="sendMessage")
+    payload = {
+        "chat_id":    chat_id,
+        "text":       text,
+        "parse_mode": "MarkdownV2",
+        "disable_web_page_preview": True,
+    }
+    for attempt in range(1, _SEND_MAX_RETRIES + 1):
+        try:
+            resp = await http.post(url, json=payload, timeout=10)
+            data = resp.json()
+            if data.get("ok"):
+                logger.debug("[Telegram] %s 전송 완료 → %s", label, chat_id)
+                return True
+            if resp.status_code == 429:
+                retry_after = data.get("parameters", {}).get("retry_after", _SEND_RETRY_BASE * attempt)
+                logger.warning("[Telegram] 429 Rate Limit — %s초 후 재시도 (%d/%d)", retry_after, attempt, _SEND_MAX_RETRIES)
+                await asyncio.sleep(retry_after)
+                continue
+            logger.warning("[Telegram] %s 전송 실패 → %s: %s", label, chat_id, data.get("description", ""))
+            return False
+        except Exception as e:
+            if attempt < _SEND_MAX_RETRIES:
+                delay = _SEND_RETRY_BASE * (2 ** (attempt - 1))
+                logger.warning("[Telegram] %s 요청 오류 (%d/%d) — %.0f초 후 재시도: %s", label, attempt, _SEND_MAX_RETRIES, delay, e)
+                await asyncio.sleep(delay)
+            else:
+                logger.warning("[Telegram] %s 요청 오류 (최종 실패): %s", label, e)
+                return False
+    return False
+
+
 async def send_article(
     art: dict,
     summary_ko: str,
@@ -87,7 +131,7 @@ async def send_article(
 ) -> bool:
     """
     단일 기사를 Telegram으로 전송.
-    성공 시 True, 실패 시 False 반환.
+    개인 DM + 채널(설정 시) 모두 발송. DM 성공 여부를 반환.
     """
     try:
         token   = _get_token()
@@ -96,45 +140,20 @@ async def send_article(
         logger.warning("[Telegram] 설정 오류: %s", e)
         return False
 
-    message = _build_message(art, summary_ko)
-    url     = TELEGRAM_API.format(token=token, method="sendMessage")
-    payload = {
-        "chat_id":    chat_id,
-        "text":       message,
-        "parse_mode": "MarkdownV2",
-        "disable_web_page_preview": True,
-    }
+    message    = _build_message(art, summary_ko)
+    channel_id = _get_channel_id()
 
     _own_client = http is None
     if _own_client:
         http = httpx.AsyncClient()
 
     try:
-        for attempt in range(1, _SEND_MAX_RETRIES + 1):
-            try:
-                resp = await http.post(url, json=payload, timeout=10)
-                data = resp.json()
-                if data.get("ok"):
-                    logger.debug("[Telegram] 전송 완료: %s", art["title"][:50])
-                    return True
-                err = data.get("description", "")
-                # 429 Too Many Requests — retry_after 준수
-                if resp.status_code == 429:
-                    retry_after = data.get("parameters", {}).get("retry_after", _SEND_RETRY_BASE * attempt)
-                    logger.warning("[Telegram] 429 Rate Limit — %s초 후 재시도 (%d/%d)", retry_after, attempt, _SEND_MAX_RETRIES)
-                    await asyncio.sleep(retry_after)
-                    continue
-                logger.warning("[Telegram] 전송 실패: %s", err)
-                return False
-            except Exception as e:
-                if attempt < _SEND_MAX_RETRIES:
-                    delay = _SEND_RETRY_BASE * (2 ** (attempt - 1))
-                    logger.warning("[Telegram] 요청 오류 (%d/%d) — %.0f초 후 재시도: %s", attempt, _SEND_MAX_RETRIES, delay, e)
-                    await asyncio.sleep(delay)
-                else:
-                    logger.warning("[Telegram] 요청 오류 (최종 실패): %s", e)
-                    return False
-        return False
+        # 채널 설정 시 채널로만 발송, 미설정 시 개인 DM으로 발송
+        if channel_id:
+            ok = await _post_message(http, token, channel_id, message, label="기사(채널)")
+        else:
+            ok = await _post_message(http, token, chat_id, message, label="기사")
+        return ok
     finally:
         if _own_client:
             await http.aclose()
@@ -224,41 +243,19 @@ async def send_signal(
         f"[원문 보기]({art['url']})",
     ]
 
-    url_req = TELEGRAM_API.format(token=token, method="sendMessage")
-    payload = {
-        "chat_id":    chat_id,
-        "text":       "\n".join(lines),
-        "parse_mode": "MarkdownV2",
-        "disable_web_page_preview": True,
-    }
+    message    = "\n".join(lines)
+    channel_id = _get_channel_id()
 
     _own_client = http is None
     if _own_client:
         http = httpx.AsyncClient()
     try:
-        for attempt in range(1, _SEND_MAX_RETRIES + 1):
-            try:
-                resp = await http.post(url_req, json=payload, timeout=10)
-                data = resp.json()
-                if data.get("ok"):
-                    logger.info("[Telegram] 신호 알림 전송 완료: %s %s", signal.direction, art["title"][:40])
-                    return True
-                if resp.status_code == 429:
-                    retry_after = data.get("parameters", {}).get("retry_after", _SEND_RETRY_BASE * attempt)
-                    logger.warning("[Telegram] 429 Rate Limit — %s초 후 재시도 (%d/%d)", retry_after, attempt, _SEND_MAX_RETRIES)
-                    await asyncio.sleep(retry_after)
-                    continue
-                logger.warning("[Telegram] 신호 알림 실패: %s", data.get("description"))
-                return False
-            except Exception as e:
-                if attempt < _SEND_MAX_RETRIES:
-                    delay = _SEND_RETRY_BASE * (2 ** (attempt - 1))
-                    logger.warning("[Telegram] 신호 알림 오류 (%d/%d) — %.0f초 후 재시도: %s", attempt, _SEND_MAX_RETRIES, delay, e)
-                    await asyncio.sleep(delay)
-                else:
-                    logger.warning("[Telegram] 신호 알림 오류 (최종 실패): %s", e)
-                    return False
-        return False
+        # 채널 설정 시 채널로만 발송, 미설정 시 개인 DM으로 발송
+        if channel_id:
+            ok = await _post_message(http, token, channel_id, message, label="신호(채널)")
+        else:
+            ok = await _post_message(http, token, chat_id, message, label="신호")
+        return ok
     finally:
         if _own_client:
             await http.aclose()
