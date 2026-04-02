@@ -106,8 +106,11 @@ Guidelines:
 def _parse_signal_json(raw: str, backend: Backend) -> TradeSignal:
     """LLM 응답에서 JSON 추출 → TradeSignal 변환"""
     try:
-        # <think>...</think> 추론 토큰 제거 (DeepSeek-R1)
+        # <think>...</think> 추론 토큰 제거 (DeepSeek-R1 / Qwen3)
         text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+        # 닫히지 않은 <think> — 이후 전부 제거
+        text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)
+        text = re.sub(r"</think>", "", text)
         # 코드블록 제거
         text = re.sub(r"```(?:json)?|```", "", text).strip()
         # 첫 번째 완성된 JSON 객체만 추출 (중복 출력 방지)
@@ -190,19 +193,29 @@ async def detect_signal(
         http = httpx.AsyncClient()
 
     try:
-        # Ollama 우선
+        # Ollama 우선 (실패 시 1회 재시도)
         if await _ollama_is_alive(http):
-            try:
-                raw = await _call_ollama_native(
-                    http, OLLAMA_MODEL, prompt,
-                    timeout=60.0,
-                    max_tokens=800,
-                    system_prompt=SYSTEM_PROMPT_SIGNAL,
-                    enable_thinking=False,
-                )
-                return _parse_signal_json(raw, Backend.OLLAMA)
-            except Exception as e:
-                logger.warning("[신호감지] Ollama 실패 → LM Studio: %s", e)
+            for attempt in range(2):
+                try:
+                    raw = await _call_ollama_native(
+                        http, OLLAMA_MODEL, prompt,
+                        timeout=60.0,
+                        max_tokens=800,
+                        system_prompt=SYSTEM_PROMPT_SIGNAL,
+                        enable_thinking=False,
+                    )
+                    sig = _parse_signal_json(raw, Backend.OLLAMA)
+                    if sig.success:
+                        return sig
+                    if attempt == 0:
+                        logger.info("[신호감지] Ollama JSON 파싱 실패 → 재시도")
+                        continue
+                except Exception as e:
+                    if attempt == 0:
+                        logger.info("[신호감지] Ollama 오류 → 재시도: %s", e)
+                        continue
+                    logger.warning("[신호감지] Ollama 실패 → LM Studio: %s", e)
+                    break
 
         # LM Studio fallback
         if await _lmstudio_is_alive(http):
