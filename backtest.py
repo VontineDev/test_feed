@@ -21,6 +21,7 @@ import asyncio
 import csv
 import json
 import logging
+import math
 import os
 import time
 from collections import defaultdict
@@ -85,7 +86,10 @@ def _fetch_historical_price(
                 target_utc = target_time if target_time.tzinfo else target_time.replace(tzinfo=timezone.utc)
                 diffs = abs(hist.index - target_utc)
                 closest_idx = diffs.argmin()
-                return round(float(hist["Close"].iloc[closest_idx]), 2)
+                price = float(hist["Close"].iloc[closest_idx])
+                if math.isnan(price):
+                    return None
+                return round(price, 2)
 
         # 일봉 폴백
         start = (target_time - timedelta(days=2)).strftime("%Y-%m-%d")
@@ -96,7 +100,10 @@ def _fetch_historical_price(
             target_utc = target_time if target_time.tzinfo else target_time.replace(tzinfo=timezone.utc)
             diffs = abs(hist.index - target_utc)
             closest_idx = diffs.argmin()
-            return round(float(hist["Close"].iloc[closest_idx]), 2)
+            price = float(hist["Close"].iloc[closest_idx])
+            if math.isnan(price):
+                return None
+            return round(price, 2)
 
         return None
     except Exception as e:
@@ -457,14 +464,19 @@ async def calculate_metrics(
 
     metrics = {}
     for (verdict, checkpoint), items in sorted(groups.items()):
-        returns = [i["return_pct"] for i in items]
-        directions = [i["direction"] for i in items]
-        scores = [i["score"] for i in items]
+        # NaN/None 필터링 — yfinance에서 NaN이 DB에 저장된 경우 방어
+        valid = [i for i in items
+                 if i["return_pct"] is not None and not math.isnan(i["return_pct"])]
+        returns = [i["return_pct"] for i in valid]
+        directions = [i["direction"] for i in valid]
+        scores = [i["score"] for i in valid]
 
         # 적중 판정
         hits = 0
         for ret, direction in zip(returns, directions):
-            if verdict in ("CONFIRM", "NEUTRAL"):
+            if verdict in ("CONFIRM", "NEUTRAL", "CAUTION"):
+                # CAUTION: 기술적 지표가 약하게 반대이지만 원래 신호가 맞을 수 있음
+                # → 원래 신호 방향과 동일 기준으로 적중 측정
                 if direction == "BUY" and ret > 0:
                     hits += 1
                 elif direction == "SELL" and ret < 0:
@@ -495,10 +507,12 @@ async def calculate_metrics(
             "avg_score": avg_score,
         }
 
-    # 점수 구간별 수익률
+    # 점수 구간별 수익률 (NaN 제외)
     score_buckets: dict[str, list[float]] = {"0-3": [], "4-6": [], "7-10": []}
     for r in rows:
         ret = r["return_pct"]
+        if ret is None or math.isnan(ret):
+            continue
         sc = r["score"]
         if sc <= 3:
             score_buckets["0-3"].append(ret)
