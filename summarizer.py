@@ -124,11 +124,39 @@ async def _call_openai_compat(
 def _strip_thinking(raw: str) -> str:
     """Qwen3 추론 블록 + EOS 토큰 제거."""
     import re as _re
+    # 1) 정상 쌍: <think>...</think> 제거
     text = _re.sub(r'<think>.*?</think>', '', raw, flags=_re.DOTALL)
+    # 2) 닫히지 않은 <think> — 이후 전부 제거 (토큰 한도 초과 시 발생)
+    text = _re.sub(r'<think>.*', '', text, flags=_re.DOTALL)
     text = _re.sub(r'Thinking Process:[\s\S]*?(?=\n\n|$)', '', text)
     text = _re.sub(r'<\|[^|]+\|>.*', '', text, flags=_re.DOTALL)  # EOS 토큰 제거
     text = _re.sub(r'</think>', '', text)   # 쌍 없이 남은 닫는 태그 제거
-    return text.strip()
+    # 3) 반복 문장 제거 — 동일 문장이 2회 이상 나오면 첫 번째만 유지
+    text = _dedup_sentences(text.strip())
+    return text
+
+
+def _dedup_sentences(text: str) -> str:
+    """동일 문장 반복 제거 + 불완전 꼬리 문장 제거."""
+    import re as _re
+    # 마침표/개행 기준으로 문장 분리
+    parts = _re.split(r'(?<=[.!?다])\s*\n|\n{2,}', text)
+    seen: set[str] = set()
+    unique: list[str] = []
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        # 정규화: 공백 제거 후 비교
+        key = _re.sub(r'\s+', '', p)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(p)
+    # 마지막 조각이 마침표 없이 끝나면 불완전 문장 — 제거
+    if unique and not _re.search(r'[.!?다]\s*$', unique[-1]):
+        unique.pop()
+    return '\n'.join(unique) if unique else text
 
 # ── Ollama 네이티브 호출 (/api/chat) ────────────────────────
 async def _call_ollama_native(
@@ -154,7 +182,11 @@ async def _call_ollama_native(
             "model": model,
             "messages": messages,
             "stream": False,
-            "options": {"num_predict": max_tokens, "temperature": 0.3},
+            "options": {
+                "num_predict": max_tokens,
+                "temperature": 0.3,
+                "repeat_penalty": 1.3,
+            },
             "think": enable_thinking,
         },
         timeout=timeout,
