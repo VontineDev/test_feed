@@ -19,6 +19,7 @@ import asyncio
 import calendar
 import hashlib
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import sys
 from datetime import datetime, timezone, timedelta
 
@@ -48,7 +49,13 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("news_crawler.log", encoding="utf-8"),
+        TimedRotatingFileHandler(
+            "news_crawler.log",
+            when="midnight",
+            interval=1,
+            backupCount=14,
+            encoding="utf-8",
+        ),
     ],
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
