@@ -114,6 +114,48 @@ CREATE TABLE IF NOT EXISTS price_outcomes (
     UNIQUE (cross_price_id, checkpoint)
 );
 CREATE INDEX IF NOT EXISTS idx_outcomes_unfilled ON price_outcomes (fetched_at) WHERE fetched_at IS NULL;
+
+-- ── 일봉 OHLCV (1년치 히스토리) ─────────────────────────────
+CREATE TABLE IF NOT EXISTS daily_ohlcv (
+    id              BIGSERIAL       PRIMARY KEY,
+    symbol          VARCHAR(32)     NOT NULL,
+    market          VARCHAR(4)      NOT NULL,      -- 'US' | 'KR' | 'IDX' | 'CMD'
+    date            DATE            NOT NULL,
+    open            FLOAT,
+    high            FLOAT,
+    low             FLOAT,
+    close           FLOAT           NOT NULL,
+    volume          BIGINT,
+    source          VARCHAR(16)     NOT NULL,       -- 'yfinance'
+    fetched_at      TIMESTAMPTZ     NOT NULL DEFAULT now(),
+    UNIQUE (symbol, date)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_sym_date
+    ON daily_ohlcv (symbol, date DESC);
+CREATE INDEX IF NOT EXISTS idx_daily_market
+    ON daily_ohlcv (market, date DESC);
+
+-- ── 분봉 거래량 데이터 (StockData.org / yfinance) ────────────
+CREATE TABLE IF NOT EXISTS intraday_volumes (
+    id              BIGSERIAL       PRIMARY KEY,
+    symbol          VARCHAR(32)     NOT NULL,
+    market          VARCHAR(4)      NOT NULL,      -- 'US' | 'KR'
+    ts              TIMESTAMPTZ     NOT NULL,       -- 캔들 시작 시각 (UTC)
+    interval        VARCHAR(8)      NOT NULL,       -- '1m' | '5m'
+    open            FLOAT,
+    high            FLOAT,
+    low             FLOAT,
+    close           FLOAT,
+    volume          BIGINT          NOT NULL,
+    is_extended     BOOLEAN         NOT NULL DEFAULT FALSE,
+    source          VARCHAR(16)     NOT NULL,       -- 'stockdata' | 'yfinance'
+    fetched_at      TIMESTAMPTZ     NOT NULL DEFAULT now(),
+    UNIQUE (symbol, ts, interval)
+);
+CREATE INDEX IF NOT EXISTS idx_intraday_sym_ts
+    ON intraday_volumes (symbol, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_intraday_market
+    ON intraday_volumes (market, ts DESC);
 """
 
 
@@ -464,6 +506,166 @@ async def update_outcome(
     except Exception as e:
         logger.error("[백테스트] 체크포인트 업데이트 실패 id=%d: %s", outcome_id, e)
         return False
+
+
+# ── 분봉 거래량 저장 ─────────────────────────────────────────
+async def save_intraday_volumes(
+    pool: asyncpg.Pool,
+    rows: list[dict],
+) -> int:
+    """
+    분봉 거래량 데이터 일괄 저장. 중복(symbol+ts+interval) 시 건너뛴다.
+    저장된 건수 반환.
+    """
+    if not rows:
+        return 0
+    inserted = 0
+    try:
+        async with pool.acquire() as conn:
+            for r in rows:
+                result = await conn.execute(
+                    """
+                    INSERT INTO intraday_volumes
+                        (symbol, market, ts, interval,
+                         open, high, low, close, volume,
+                         is_extended, source)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                    ON CONFLICT (symbol, ts, interval) DO NOTHING
+                    """,
+                    r["symbol"],
+                    r["market"],
+                    r["ts"],
+                    r["interval"],
+                    r.get("open"),
+                    r.get("high"),
+                    r.get("low"),
+                    r.get("close"),
+                    r["volume"],
+                    r.get("is_extended", False),
+                    r["source"],
+                )
+                if result.endswith("1"):
+                    inserted += 1
+        logger.info("[분봉] %s 저장 %d/%d건", rows[0]["symbol"], inserted, len(rows))
+    except Exception as e:
+        logger.error("[분봉] 저장 실패: %s", e)
+    return inserted
+
+
+async def fetch_intraday_volumes(
+    pool: asyncpg.Pool,
+    symbol: str,
+    interval: str = "5m",
+    limit: int = 2000,
+) -> list[dict]:
+    """저장된 분봉 거래량 조회 (최신순)."""
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT symbol, market, ts, interval,
+                       open, high, low, close, volume,
+                       is_extended, source
+                FROM   intraday_volumes
+                WHERE  symbol = $1 AND interval = $2
+                ORDER  BY ts DESC
+                LIMIT  $3
+                """,
+                symbol,
+                interval,
+                limit,
+            )
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.error("[분봉] 조회 실패: %s", e)
+        return []
+
+
+# ── 일봉 OHLCV 저장 ─────────────────────────────────────────
+async def save_daily_ohlcv(
+    pool: asyncpg.Pool,
+    rows: list[dict],
+) -> int:
+    """
+    일봉 OHLCV 데이터 일괄 저장. 중복(symbol+date) 시 최신 값으로 갱신.
+    저장/갱신된 건수 반환.
+    """
+    if not rows:
+        return 0
+    upserted = 0
+    try:
+        async with pool.acquire() as conn:
+            for r in rows:
+                result = await conn.execute(
+                    """
+                    INSERT INTO daily_ohlcv
+                        (symbol, market, date, open, high, low, close, volume, source)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                    ON CONFLICT (symbol, date) DO UPDATE SET
+                        open = EXCLUDED.open, high = EXCLUDED.high,
+                        low = EXCLUDED.low, close = EXCLUDED.close,
+                        volume = EXCLUDED.volume, fetched_at = now()
+                    """,
+                    r["symbol"],
+                    r["market"],
+                    r["date"],
+                    r.get("open"),
+                    r.get("high"),
+                    r.get("low"),
+                    r["close"],
+                    r.get("volume"),
+                    r["source"],
+                )
+                if result.endswith("1"):
+                    upserted += 1
+        logger.info("[일봉] %s 저장 %d/%d건", rows[0]["symbol"], upserted, len(rows))
+    except Exception as e:
+        logger.error("[일봉] 저장 실패: %s", e)
+    return upserted
+
+
+async def fetch_daily_ohlcv(
+    pool: asyncpg.Pool,
+    symbol: str,
+    limit: int = 365,
+) -> list[dict]:
+    """저장된 일봉 OHLCV 조회 (최신순)."""
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT symbol, market, date, open, high, low, close, volume, source
+                FROM   daily_ohlcv
+                WHERE  symbol = $1
+                ORDER  BY date DESC
+                LIMIT  $2
+                """,
+                symbol,
+                limit,
+            )
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.error("[일봉] 조회 실패: %s", e)
+        return []
+
+
+async def get_daily_ohlcv_symbols(pool: asyncpg.Pool) -> list[dict]:
+    """저장된 종목별 일봉 데이터 현황 조회."""
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT symbol, market, COUNT(*) AS cnt,
+                       MIN(date) AS first_date, MAX(date) AS last_date
+                FROM   daily_ohlcv
+                GROUP  BY symbol, market
+                ORDER  BY symbol
+                """
+            )
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.error("[일봉] 종목 현황 조회 실패: %s", e)
+        return []
 
 
 # ── 재시작 시 중복 해시 복원 ──────────────────────────────────
