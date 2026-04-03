@@ -445,7 +445,7 @@ async def save_cross_analysis(
 
 async def fetch_pending_outcomes(
     pool: asyncpg.Pool,
-    limit: int = 100,
+    limit: int = 500,
 ) -> list[dict]:
     """
     아직 채워지지 않은(fetched_at IS NULL) 가격 체크포인트 행 조회.

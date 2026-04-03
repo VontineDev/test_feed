@@ -353,6 +353,7 @@ def cross_analyze(
     strength: int,                           # 1~5
     tickers: list[str],
     ticker_symbols: dict[str, str] | None = None,  # LLM 제공 심볼
+    _contexts: list[PriceContext] | None = None,   # 과거 데이터용 (cross_analyze_historical)
 ) -> CrossAnalysis:
     """
     뉴스 신호 + 시세 교차 분석.
@@ -363,7 +364,7 @@ def cross_analyze(
         FILTER   — 강한 역방향 시세 → 노이즈 필터
         NEUTRAL  — 시세 데이터 없거나 보합
     """
-    contexts = get_price_context(tickers, symbols=ticker_symbols)
+    contexts = _contexts if _contexts is not None else get_price_context(tickers, symbols=ticker_symbols)
 
     if not contexts:
         return CrossAnalysis(

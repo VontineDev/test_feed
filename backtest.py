@@ -23,7 +23,6 @@ import json
 import logging
 import math
 import os
-import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -130,6 +129,7 @@ async def track_outcomes(pool) -> dict:
 
     filled = 0
     failed = 0
+    fail_by_symbol: dict[str, int] = defaultdict(int)
 
     for symbol, rows in by_symbol.items():
         for row in rows:
@@ -149,19 +149,33 @@ async def track_outcomes(pool) -> dict:
                     filled += 1
                 else:
                     failed += 1
+                    fail_by_symbol[symbol] += 1
             else:
                 # 가격 조회 실패 → NULL로 표시하되 fetched_at 채워서 무한 재시도 방지
                 await update_outcome(pool, row["outcome_id"], None, None)
                 failed += 1
+                fail_by_symbol[symbol] += 1
 
         # yfinance rate limit 대비
-        time.sleep(0.3)
+        await asyncio.sleep(0.3)
 
     result = {"filled": filled, "failed": failed, "total": len(pending)}
     logger.info(
         "[트래커] 완료 — 채움:%d 실패:%d 전체:%d",
         filled, failed, len(pending),
     )
+
+    # 데이터 품질 경고: 실패율 > 30% 이면 심볼별 분류 로그
+    total = len(pending)
+    if total > 0 and failed / total > 0.30:
+        breakdown = ", ".join(
+            f"{sym}:{cnt}" for sym, cnt in sorted(fail_by_symbol.items())
+        )
+        logger.warning(
+            "[트래커] 데이터 품질 경고 — 실패율 %.0f%% (%d/%d). 심볼별: %s",
+            failed / total * 100, failed, total, breakdown,
+        )
+
     return result
 
 
@@ -212,7 +226,7 @@ def _build_price_context_historical(
         return None
 
 
-def cross_analyze_historical(
+async def cross_analyze_historical(
     direction: str,
     strength: int,
     tickers: list[str],
@@ -221,7 +235,7 @@ def cross_analyze_historical(
 ) -> CrossAnalysis:
     """
     과거 시점(as_of_date) 기준으로 교차분석 실행.
-    cross_analyze()와 동일한 로직, 단 과거 데이터 사용.
+    cross_analyze()를 직접 호출하여 판정 로직 중복 방지.
     """
     # 심볼 해석 (기존 로직 재활용)
     resolved: dict[str, str] = {}
@@ -238,84 +252,17 @@ def cross_analyze_historical(
         ctx = _build_price_context_historical(sym, tk, as_of_date)
         if ctx and ctx.success:
             contexts.append(ctx)
-        time.sleep(0.3)
+        await asyncio.sleep(0.3)
 
     if not contexts:
         return CrossAnalysis(
-            verdict="NEUTRAL", score=max(1, strength),
+            verdict="NEUTRAL", score=strength * 2,
             summary="과거 시세 데이터 없음",
             price_contexts=[], confirm_count=0, conflict_count=0,
         )
 
-    # 판정 로직 (cross_analyze()와 동일)
-    confirm_count = 0
-    conflict_count = 0
-    details: list[str] = []
-
-    for ctx in contexts:
-        if direction == "BUY":
-            if ctx.change_pct >= 0.5:
-                confirm_count += 1
-                details.append(f"{ctx.ticker} +{ctx.change_pct}%")
-            elif ctx.change_pct <= -2:
-                conflict_count += 1
-                details.append(f"{ctx.ticker} {ctx.change_pct}% 역방향")
-            if ctx.rsi is not None and ctx.rsi <= 30:
-                confirm_count += 1
-            if ctx.near_52w_low:
-                confirm_count += 1
-            if ctx.volume_surge:
-                confirm_count += 1
-            if ctx.near_52w_high:
-                conflict_count += 1
-        elif direction == "SELL":
-            if ctx.change_pct <= -0.5:
-                confirm_count += 1
-                details.append(f"{ctx.ticker} {ctx.change_pct}%")
-            elif ctx.change_pct >= 2:
-                conflict_count += 1
-                details.append(f"{ctx.ticker} +{ctx.change_pct}% 역방향")
-            if ctx.rsi is not None and ctx.rsi >= 70:
-                confirm_count += 1
-            if ctx.near_52w_high:
-                confirm_count += 1
-            if ctx.volume_surge:
-                confirm_count += 1
-            if ctx.near_52w_low:
-                conflict_count += 1
-        else:  # WATCH
-            if abs(ctx.change_pct) >= 2:
-                confirm_count += 1
-                details.append(f"{ctx.ticker} {ctx.change_pct}% 변동")
-            if ctx.volume_surge:
-                confirm_count += 1
-
-    base_score = min(10, strength * 2)
-    total = confirm_count + conflict_count
-
-    if confirm_count > conflict_count:
-        verdict = "CONFIRM"
-        score = min(10, base_score + min(confirm_count, 2))
-        summary = f"시세 방향 일치 ({', '.join(details[:2]) or '확인'})"
-    elif conflict_count > confirm_count:
-        conflict_ratio = conflict_count / total if total else 0
-        if conflict_count >= 2 and conflict_ratio >= 0.75:
-            verdict = "FILTER"
-            score = max(1, base_score - conflict_count * 2)
-        else:
-            verdict = "CAUTION"
-            score = max(1, base_score - conflict_count)
-        summary = f"시세 역방향 — 주의 ({', '.join(details[:2]) or '충돌'})"
-    else:
-        verdict = "NEUTRAL"
-        score = base_score
-        summary = f"시세 보합 ({', '.join(details[:2]) or '중립'})"
-
-    return CrossAnalysis(
-        verdict=verdict, score=score,
-        summary=summary, price_contexts=contexts,
-        confirm_count=confirm_count, conflict_count=conflict_count,
-    )
+    # cross_analyze()에 과거 컨텍스트를 직접 전달 — 판정 로직은 한 곳에만 존재
+    return cross_analyze(direction, strength, tickers, ticker_symbols, _contexts=contexts)
 
 
 async def backfill_historical(pool, since: Optional[str] = None) -> dict:
@@ -357,7 +304,7 @@ async def backfill_historical(pool, since: Optional[str] = None) -> dict:
             continue
 
         as_of = row["detected_at"]
-        cross = cross_analyze_historical(
+        cross = await cross_analyze_historical(
             direction=row["direction"],
             strength=row["strength"],
             tickers=tickers,
@@ -398,7 +345,7 @@ async def backfill_historical(pool, since: Optional[str] = None) -> dict:
                 if outcome_row:
                     await update_outcome(pool, outcome_row["id"], price, return_pct)
 
-            time.sleep(0.3)
+            await asyncio.sleep(0.3)
 
         processed += 1
         if processed % 10 == 0:
@@ -473,6 +420,7 @@ async def calculate_metrics(
 
         # 적중 판정
         hits = 0
+        has_watch = any(d == "WATCH" for d in directions)
         for ret, direction in zip(returns, directions):
             if verdict in ("CONFIRM", "NEUTRAL", "CAUTION"):
                 # CAUTION: 기술적 지표가 약하게 반대이지만 원래 신호가 맞을 수 있음
@@ -481,8 +429,7 @@ async def calculate_metrics(
                     hits += 1
                 elif direction == "SELL" and ret < 0:
                     hits += 1
-                elif direction == "WATCH":
-                    hits += 1  # WATCH는 방향 무관
+                # WATCH는 방향성 없음 — hit_rate 계산 제외
             elif verdict == "FILTER":
                 # FILTER가 맞으려면 원래 신호 방향 반대로 가야 함
                 if direction == "BUY" and ret <= 0:
@@ -494,7 +441,14 @@ async def calculate_metrics(
         avg_ret = round(sum(returns) / n, 4) if n else 0
         sorted_rets = sorted(returns)
         median_ret = sorted_rets[n // 2] if n else 0
-        hit_rate = round(hits / n * 100, 1) if n else 0
+        # WATCH 방향은 적중률 의미 없음 (방향성 없는 모니터링 신호)
+        directional_n = sum(1 for d in directions if d != "WATCH")
+        if has_watch and directional_n == 0:
+            hit_rate = None
+        elif directional_n > 0:
+            hit_rate = round(hits / directional_n * 100, 1)
+        else:
+            hit_rate = None
         avg_score = round(sum(scores) / n, 1) if n else 0
 
         metrics[(verdict, checkpoint)] = {
@@ -668,6 +622,185 @@ def save_report_json(metrics: dict, path: Optional[str] = None) -> str:
 
     logger.info("[리포트] JSON 저장: %s", filepath)
     return str(filepath)
+
+
+# ═════════════════════════════════════════════════════════════
+# Component E: Telegram 리포트 포맷터
+# ═════════════════════════════════════════════════════════════
+
+def _esc(s: str) -> str:
+    """Telegram MarkdownV2 이스케이프. &도 포함 (S&P500 등)."""
+    for ch in r'_*[]()~`>#+-=|{}.!&':
+        s = s.replace(ch, f'\\{ch}')
+    return s
+
+
+async def _fetch_ticker_breakdown(pool, min_signals: int = 5) -> list[dict]:
+    """
+    CONFIRM 판정의 종목별 적중률 (1d 체크포인트).
+    min_signals 이상인 종목만 반환.
+    """
+    query = """
+        SELECT cap.symbol,
+               s.direction,
+               po.return_pct
+        FROM   price_outcomes po
+        JOIN   cross_analysis_prices cap ON cap.id = po.cross_price_id
+        JOIN   cross_analysis_results car ON car.id = cap.cross_id
+        JOIN   trade_signals s ON s.id = car.signal_id
+        WHERE  po.checkpoint = '1d'
+          AND  po.return_pct IS NOT NULL
+          AND  car.verdict = 'CONFIRM'
+        ORDER  BY cap.symbol
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(query)
+
+    by_symbol: dict[str, list] = defaultdict(list)
+    for r in rows:
+        if not math.isnan(r["return_pct"]):
+            by_symbol[r["symbol"]].append((r["direction"], r["return_pct"]))
+
+    result = []
+    for symbol, items in sorted(by_symbol.items()):
+        n = len(items)
+        if n < min_signals:
+            continue
+        hits = sum(
+            1 for direction, ret in items
+            if (direction == "BUY" and ret > 0) or (direction == "SELL" and ret < 0)
+        )
+        directional = sum(1 for direction, _ in items if direction != "WATCH")
+        if directional == 0:
+            continue
+        result.append({
+            "symbol": symbol,
+            "count": n,
+            "hit_rate": round(hits / directional * 100, 1),
+        })
+    return result
+
+
+async def backtest_report_telegram(pool) -> str:
+    """
+    백테스팅 리포트를 Telegram MarkdownV2 포맷 문자열로 반환.
+    pool=None 이면 에러 메시지 반환.
+    """
+    if pool is None:
+        return "❌ DB 미연결 상태입니다\\."
+
+    BACKTEST_MIN_SIGNALS = int(os.environ.get("BACKTEST_MIN_SIGNALS", "10"))
+
+    metrics = await calculate_metrics(pool)
+
+    if metrics.get("message"):
+        return (
+            "📊 *백테스팅 리포트*\n\n"
+            "데이터 없음\\. `python backtest\\.py backfill` 을 먼저 실행해주세요\\."
+        )
+
+    # 데이터 신선도 체크
+    freshness_warning = ""
+    try:
+        async with pool.acquire() as conn:
+            latest = await conn.fetchval(
+                "SELECT MAX(fetched_at) FROM price_outcomes WHERE fetched_at IS NOT NULL"
+            )
+        if latest:
+            from datetime import timezone as _tz
+            now_utc = datetime.now(_tz.utc)
+            if latest.tzinfo is None:
+                latest = latest.replace(tzinfo=_tz.utc)
+            hours_ago = (now_utc - latest).total_seconds() / 3600
+            if hours_ago > 48:
+                freshness_warning = (
+                    f"⚠️ *데이터 경고*: 최근 업데이트 {_esc(f'{hours_ago:.0f}')}시간 전"
+                    " \\(가격 데이터가 오래되었을 수 있음\\)\n\n"
+                )
+    except Exception:
+        pass
+
+    today = _esc(datetime.now().strftime("%Y-%m-%d"))
+    lines = []
+    if freshness_warning:
+        lines.append(freshness_warning)
+
+    lines.append(f"📊 *백테스팅 리포트* \\({today}\\)")
+    lines.append(f"총 데이터: {_esc(str(metrics['rows']))}건\n")
+
+    # 판정별 적중률 (1d 체크포인트)
+    by_vc = metrics.get("by_verdict_checkpoint", {})
+    verdict_1d = {
+        verdict: m for (verdict, cp), m in by_vc.items() if cp == "1d"
+    }
+
+    verdict_icons = {
+        "CONFIRM": "✅", "CAUTION": "⚠️", "FILTER": "🔴", "NEUTRAL": "➖",
+    }
+
+    if verdict_1d:
+        lines.append("🎯 *판정별 적중률* \\(1d 체크포인트\\)")
+        lines.append("─────────────────────────")
+        for verdict in ("CONFIRM", "CAUTION", "FILTER", "NEUTRAL"):
+            m = verdict_1d.get(verdict)
+            if not m:
+                continue
+            icon = verdict_icons.get(verdict, "")
+            count_str = _esc(str(m["count"]))
+            avg_ret_str = _esc(f"{m['avg_return']:+.2f}%")
+            if verdict == "FILTER":
+                lines.append(
+                    f"{icon} {verdict}   {count_str}건 차단  "
+                    f"avg {avg_ret_str}"
+                )
+            elif m["hit_rate"] is None:
+                lines.append(
+                    f"{icon} {verdict}   {count_str}건  적중률 N/A  avg {avg_ret_str}"
+                )
+            else:
+                hr_str = _esc(f"{m['hit_rate']:.1f}%")
+                lines.append(
+                    f"{icon} {verdict}   {hr_str} \\({count_str}건\\)  avg {avg_ret_str}"
+                )
+        lines.append("")
+
+    # 체크포인트별 CONFIRM 적중률
+    confirm_by_cp = {
+        cp: m for (verdict, cp), m in by_vc.items()
+        if verdict == "CONFIRM" and m.get("hit_rate") is not None
+    }
+    if confirm_by_cp:
+        cp_parts = []
+        for cp in ("1h", "4h", "1d", "3d"):
+            m = confirm_by_cp.get(cp)
+            if m:
+                hr_str = "{:.1f}%".format(m["hit_rate"])
+                cp_parts.append(f"{cp}: {_esc(hr_str)}")
+        if cp_parts:
+            lines.append("⏱️ *체크포인트별 CONFIRM 적중률*")
+            lines.append(_esc(" | ").join(cp_parts))
+            lines.append("")
+
+    # 종목별 적중률 (CONFIRM, 1d, 5건 이상)
+    try:
+        ticker_rows = await _fetch_ticker_breakdown(pool, min_signals=5)
+    except Exception:
+        ticker_rows = []
+
+    if ticker_rows:
+        lines.append(f"📈 *종목별 정확도* \\(CONFIRM 1d, {_esc(str(BACKTEST_MIN_SIGNALS))}건 이상\\)")
+        lines.append("─────────────────────────")
+        for row in ticker_rows:
+            sym = _esc(row["symbol"])
+            hr = _esc(f"{row['hit_rate']:.1f}%")
+            cnt = _esc(str(row["count"]))
+            if row["count"] >= BACKTEST_MIN_SIGNALS:
+                lines.append(f"{sym}   {hr} \\({cnt}건\\)")
+            else:
+                # 5~(min-1)건: 낮은 신뢰도 표시
+                lines.append(f"{sym}   {hr} \\({cnt}건\\) ⚠️ 낮은 신뢰도")
+
+    return "\n".join(lines)
 
 
 # ═════════════════════════════════════════════════════════════
