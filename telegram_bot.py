@@ -7,6 +7,7 @@ Long polling 방식으로 명령어를 수신하고 DB 조회 결과를 응답.
     /status   — 크롤러 현재 상태 (수집 건수, 마지막 수집 시각 등)
     /signals  — 최근 매매 신호 10건 (BUY/SELL/WATCH)
     /today    — 오늘 수집된 기사 요약 (카테고리별 건수 + 최신 5건)
+    /backtest — 교차분석 백테스팅 리포트 (판정별/종목별 적중률)
     /help     — 명령어 목록
 """
 
@@ -231,6 +232,13 @@ async def _handle_today(http: httpx.AsyncClient, chat_id: str, pool) -> None:
     await _send(http, chat_id, "\n".join(lines))
 
 
+async def _handle_backtest(http: httpx.AsyncClient, chat_id: str, pool) -> None:
+    """/backtest — 교차분석 백테스팅 리포트"""
+    from backtest import backtest_report_telegram
+    report = await backtest_report_telegram(pool)
+    await _send(http, chat_id, report)
+
+
 async def _handle_help(http: httpx.AsyncClient, chat_id: str) -> None:
     """/help — 명령어 목록"""
     lines = [
@@ -242,6 +250,7 @@ async def _handle_help(http: httpx.AsyncClient, chat_id: str) -> None:
         "/signals sell — SELL 신호만 조회",
         "/signals watch — WATCH 신호만 조회",
         "/today — 오늘 수집 현황 \\+ 최신 기사",
+        "/backtest — 교차분석 백테스팅 리포트",
         "/help — 이 도움말",
     ]
     await _send(http, chat_id, "\n".join(lines))
@@ -292,6 +301,8 @@ async def _process_update(http: httpx.AsyncClient, update: dict, pool) -> None:
         await _handle_signals(http, chat_id, pool, direction_filter)
     elif cmd == "/today":
         await _handle_today(http, chat_id, pool)
+    elif cmd == "/backtest":
+        await _handle_backtest(http, chat_id, pool)
     elif cmd in ("/help", "/start"):
         await _handle_help(http, chat_id)
     else:

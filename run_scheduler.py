@@ -19,12 +19,14 @@ import asyncio
 import calendar
 import hashlib
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import sys
 from datetime import datetime, timezone, timedelta
 
 import feedparser
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 # ── .env 파일 자동 로드 ──────────────────────────────────────
 try:
@@ -48,7 +50,13 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("news_crawler.log", encoding="utf-8"),
+        TimedRotatingFileHandler(
+            "news_crawler.log",
+            when="midnight",
+            interval=1,
+            backupCount=14,
+            encoding="utf-8",
+        ),
     ],
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -467,6 +475,39 @@ async def main(interval: int, enable_summary: bool) -> None:
         id="price_tracker",
         max_instances=1,
         coalesce=True,
+    )
+
+    # ── 백테스팅: 주간 리포트 (일요일 20:00 KST) ───────────────
+    async def _weekly_backtest_report_job():
+        if not _db_pool:
+            return
+        try:
+            from backtest import backtest_report_telegram
+            from telegram_notify import _get_token, _get_chat_id
+            import httpx as _httpx
+            report = await backtest_report_telegram(_db_pool)
+            token = _get_token()
+            chat_id = _get_chat_id()
+            if not token or not chat_id:
+                logger.warning("[주간리포트] TELEGRAM_BOT_TOKEN 또는 TELEGRAM_CHAT_ID 미설정")
+                return
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            async with _httpx.AsyncClient() as http:
+                await http.post(url, json={
+                    "chat_id": chat_id,
+                    "text": report,
+                    "parse_mode": "MarkdownV2",
+                }, timeout=30)
+            logger.info("[주간리포트] 백테스팅 주간 리포트 전송 완료")
+        except Exception as e:
+            logger.warning("[주간리포트] 실행 실패: %s", e)
+
+    scheduler.add_job(
+        _weekly_backtest_report_job,
+        CronTrigger(day_of_week="sun", hour=20, minute=0, timezone="Asia/Seoul"),
+        id="weekly_backtest",
+        max_instances=1,
+        misfire_grace_time=3600,
     )
 
     scheduler.start()

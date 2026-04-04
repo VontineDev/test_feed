@@ -9,8 +9,15 @@ pykrx는 Python 3.14 미지원으로 yfinance로 통일.
 한국 지수: ^KS11 (KOSPI), ^KQ11 (KOSDAQ)
 
 주요 기능:
-    get_price_context()  — 종목명 리스트 → 시세 컨텍스트 반환
-    cross_analyze()      — 뉴스 신호 + 시세 교차 분석 → 강화/약화/필터 판정
+    get_price_context()          — 종목명 리스트 → 시세 컨텍스트 반환
+    cross_analyze()              — 뉴스 신호 + 시세 교차 분석 → 강화/약화/필터 판정
+    fetch_and_store_daily_ohlcv()— 1년치 일봉 수집 → DB 저장
+    export_daily_ohlcv()         — DB 데이터 → CSV/Excel/JSON 내보내기
+
+CLI 사용법:
+    python market_data.py --daily [심볼...]           일봉 수집 → DB
+    python market_data.py --export [--format csv|xlsx|json] [심볼...]  내보내기
+    python market_data.py --help                      도움말
 """
 
 from __future__ import annotations
@@ -346,6 +353,7 @@ def cross_analyze(
     strength: int,                           # 1~5
     tickers: list[str],
     ticker_symbols: dict[str, str] | None = None,  # LLM 제공 심볼
+    _contexts: list[PriceContext] | None = None,   # 과거 데이터용 (cross_analyze_historical)
 ) -> CrossAnalysis:
     """
     뉴스 신호 + 시세 교차 분석.
@@ -356,7 +364,7 @@ def cross_analyze(
         FILTER   — 강한 역방향 시세 → 노이즈 필터
         NEUTRAL  — 시세 데이터 없거나 보합
     """
-    contexts = get_price_context(tickers, symbols=ticker_symbols)
+    contexts = _contexts if _contexts is not None else get_price_context(tickers, symbols=ticker_symbols)
 
     if not contexts:
         return CrossAnalysis(
@@ -492,12 +500,407 @@ def cross_analyze(
     )
 
 
+# ── 1년치 일봉 OHLCV 수집 & DB 저장 ─────────────────────────
+
+def _classify_market(symbol: str) -> str:
+    """심볼로 마켓 분류."""
+    if symbol.endswith((".KS", ".KQ")):
+        return "KR"
+    if symbol.startswith("^"):
+        return "IDX"
+    if symbol.endswith("=F"):
+        return "CMD"
+    return "US"
+
+
+def _normalize_symbol(symbol: str) -> str:
+    """한국 종목코드(6자리 숫자)에 .KS/.KQ 접미사 자동 부여."""
+    import re
+    if re.fullmatch(r"\d{6}", symbol):
+        # .KS(코스피) 먼저 시도, 실패 시 .KQ(코스닥)
+        for suffix in (".KS", ".KQ"):
+            candidate = symbol + suffix
+            try:
+                t = yf.Ticker(candidate)
+                hist = t.history(period="5d", interval="1d")
+                if not hist.empty:
+                    logger.info("[일봉] %s → %s 자동 매핑", symbol, candidate)
+                    return candidate
+            except Exception:
+                continue
+        logger.warning("[일봉] %s — .KS/.KQ 모두 실패, 원본 사용", symbol)
+    return symbol
+
+
+def _fetch_daily_ohlcv(symbol: str) -> list[dict]:
+    """yfinance로 1년치 일봉 OHLCV를 가져와 dict 리스트로 반환."""
+    if not YFINANCE_OK:
+        logger.error("[일봉] yfinance 미설치")
+        return []
+    try:
+        symbol = _normalize_symbol(symbol)
+        t = yf.Ticker(symbol)
+        hist = t.history(period="1y", interval="1d")
+        if hist.empty:
+            logger.warning("[일봉] 데이터 없음: %s", symbol)
+            return []
+
+        market = _classify_market(symbol)
+        rows = []
+        for idx, row in hist.iterrows():
+            dt = idx.date() if hasattr(idx, "date") else idx
+            rows.append({
+                "symbol": symbol,
+                "market": market,
+                "date": dt,
+                "open": float(row["Open"]) if row.get("Open") is not None else None,
+                "high": float(row["High"]) if row.get("High") is not None else None,
+                "low": float(row["Low"]) if row.get("Low") is not None else None,
+                "close": float(row["Close"]),
+                "volume": int(row["Volume"]) if row.get("Volume") is not None else None,
+                "source": "yfinance",
+            })
+        logger.info("[일봉] %s — %d일치 조회 완료 (%s ~ %s)",
+                     symbol, len(rows),
+                     rows[0]["date"] if rows else "?",
+                     rows[-1]["date"] if rows else "?")
+        return rows
+    except Exception as e:
+        logger.error("[일봉] %s 조회 실패: %s", symbol, e)
+        return []
+
+
+async def _check_db_freshness(pool, symbol: str, max_age_days: int = 1) -> tuple[bool, str]:
+    """
+    DB에 저장된 일봉 데이터가 최신인지 확인한다.
+
+    Returns:
+        (is_fresh, last_date_str)
+        - is_fresh: True면 수집 불필요 (최근 거래일 데이터 존재)
+        - last_date_str: DB 최신 날짜 문자열 (없으면 "없음")
+    """
+    import db
+    from datetime import date, timedelta
+
+    rows = await db.fetch_daily_ohlcv(pool, symbol, limit=1)
+    if not rows:
+        return False, "없음"
+
+    last_date = rows[0]["date"]
+    last_str = str(last_date)
+
+    # 오늘 기준 영업일 판단 (주말/공휴일 고려)
+    today = date.today()
+    weekday = today.weekday()  # 0=월 ~ 6=일
+
+    # 최근 거래일 추정: 오늘이 월요일이면 금요일, 주말이면 금요일
+    if weekday == 0:    # 월요일 → 금요일 데이터까지 OK
+        latest_expected = today - timedelta(days=3)
+    elif weekday == 6:  # 일요일 → 금요일
+        latest_expected = today - timedelta(days=2)
+    elif weekday == 5:  # 토요일 → 금요일
+        latest_expected = today - timedelta(days=1)
+    else:               # 화~금 → 전일 (장 마감 전이면 전전일도 OK)
+        latest_expected = today - timedelta(days=max_age_days)
+
+    is_fresh = last_date >= latest_expected
+    return is_fresh, last_str
+
+
+async def fetch_and_store_daily_ohlcv(
+    pool,
+    symbols: list[str] | None = None,
+    force: bool = False,
+) -> dict[str, int]:
+    """
+    1년치 일봉 OHLCV를 수집하여 DB에 저장.
+    DB에 최신 데이터가 있으면 건너뛴다 (force=True면 강제 재수집).
+
+    Args:
+        pool: asyncpg 커넥션 풀
+        symbols: 수집할 심볼 리스트. None이면 YFINANCE_MAP의 모든 고유 심볼.
+        force: True면 DB 캐시 무시하고 강제 재수집
+
+    Returns:
+        {symbol: 저장건수} dict  (DB 캐시 사용 시 -1)
+    """
+    import db  # lazy import — 순환 참조 방지
+
+    if symbols is None:
+        symbols = sorted(set(YFINANCE_MAP.values()))
+
+    results = {}
+    skipped = 0
+    fetched = 0
+    total = len(symbols)
+
+    for i, sym in enumerate(symbols, 1):
+        # DB 캐시 확인
+        if not force:
+            is_fresh, last_date = await _check_db_freshness(pool, sym)
+            if is_fresh:
+                logger.info("[일봉] (%d/%d) %s — DB 최신 (%s) ✓ 건너뜀",
+                            i, total, sym, last_date)
+                results[sym] = -1   # -1 = 캐시 사용
+                skipped += 1
+                continue
+            else:
+                logger.info("[일봉] (%d/%d) %s — DB 마지막: %s → API 수집",
+                            i, total, sym, last_date)
+        else:
+            logger.info("[일봉] (%d/%d) %s — 강제 재수집", i, total, sym)
+
+        rows = _fetch_daily_ohlcv(sym)
+        if rows:
+            count = await db.save_daily_ohlcv(pool, rows)
+            results[sym] = count
+            fetched += 1
+        else:
+            results[sym] = 0
+
+    api_saved = sum(v for v in results.values() if v > 0)
+    logger.info(
+        "[일봉] 완료 — %d종목 중 API수집 %d개(%d건 저장) / DB캐시 %d개 건너뜀",
+        total, fetched, api_saved, skipped,
+    )
+    return results
+
+
+# ── DB 데이터 내보내기 ──────────────────────────────────────────
+
+async def export_daily_ohlcv(
+    symbols: list[str] | None = None,
+    fmt: str = "csv",
+    out_dir: str = "exports",
+) -> str:
+    """
+    DB에 저장된 일봉 OHLCV 데이터를 파일로 내보낸다.
+
+    Args:
+        symbols: 내보낼 심볼 리스트. None이면 DB에 저장된 모든 종목.
+        fmt: 출력 포맷 — "csv" | "xlsx" | "json"
+        out_dir: 출력 디렉터리 (기본 exports/)
+
+    Returns:
+        저장된 파일 경로
+    """
+    import os
+    import pandas as pd
+    import db
+
+    pool = await db.create_pool()
+    await db.init_db(pool)
+
+    try:
+        # 내보낼 심볼 결정
+        if symbols:
+            target_symbols = symbols
+        else:
+            sym_info = await db.get_daily_ohlcv_symbols(pool)
+            target_symbols = [s["symbol"] for s in sym_info]
+
+        if not target_symbols:
+            print("  ⚠️  DB에 저장된 일봉 데이터가 없습니다.")
+            return ""
+
+        # 역방향 매핑: yfinance 심볼 → 한글 이름
+        reverse_map: dict[str, str] = {}
+        for name, sym in YFINANCE_MAP.items():
+            if sym not in reverse_map:
+                reverse_map[sym] = name
+
+        # 전 종목 데이터 수집
+        all_frames = []
+        for sym in sorted(target_symbols):
+            rows = await db.fetch_daily_ohlcv(pool, sym, limit=365)
+            if not rows:
+                continue
+            df = pd.DataFrame(rows)
+            df["name"] = reverse_map.get(sym, "")
+            all_frames.append(df)
+
+        if not all_frames:
+            print("  ⚠️  내보낼 데이터가 없습니다.")
+            return ""
+
+        combined = pd.concat(all_frames, ignore_index=True)
+
+        # 컬럼 정리 및 정렬
+        col_order = ["symbol", "name", "market", "date", "open", "high", "low", "close", "volume", "source"]
+        for c in col_order:
+            if c not in combined.columns:
+                combined[c] = None
+        combined = combined[col_order].sort_values(["symbol", "date"]).reset_index(drop=True)
+
+        # 출력 디렉터리 생성
+        os.makedirs(out_dir, exist_ok=True)
+        date_str = datetime.now().strftime("%Y%m%d_%H%M")
+
+        # 포맷별 저장
+        fmt = fmt.lower()
+        if fmt == "xlsx":
+            filepath = os.path.join(out_dir, f"daily_ohlcv_{date_str}.xlsx")
+            # 종목별 시트 + 통합 시트
+            with pd.ExcelWriter(filepath, engine="openpyxl") as writer:
+                combined.to_excel(writer, sheet_name="전체", index=False)
+                for sym in sorted(combined["symbol"].unique()):
+                    sheet_df = combined[combined["symbol"] == sym].copy()
+                    name_label = reverse_map.get(sym, sym)
+                    # 시트 이름 31자 제한 & 특수문자 제거
+                    safe_sheet = name_label[:28].replace("/", "_").replace("\\", "_")
+                    safe_sheet = safe_sheet.replace(":", "").replace("*", "").replace("?", "")
+                    safe_sheet = safe_sheet.replace("[", "(").replace("]", ")")
+                    sheet_df.to_excel(writer, sheet_name=safe_sheet, index=False)
+
+        elif fmt == "json":
+            filepath = os.path.join(out_dir, f"daily_ohlcv_{date_str}.json")
+            # date를 문자열로 변환
+            combined["date"] = combined["date"].astype(str)
+            combined.to_json(filepath, orient="records", force_ascii=False, indent=2)
+
+        else:  # csv (기본값)
+            filepath = os.path.join(out_dir, f"daily_ohlcv_{date_str}.csv")
+            combined.to_csv(filepath, index=False, encoding="utf-8-sig")
+
+        n_symbols = combined["symbol"].nunique()
+        n_rows = len(combined)
+        print(f"\n  ✅ 내보내기 완료")
+        print(f"     포맷:  {fmt.upper()}")
+        print(f"     종목:  {n_symbols}개")
+        print(f"     데이터: {n_rows:,}건")
+        print(f"     파일:  {filepath}")
+        return filepath
+
+    finally:
+        await pool.close()
+
+
 # ── 단독 테스트 ───────────────────────────────────────────────
 
 if __name__ == "__main__":
     import sys
+    import asyncio
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
+    # --- 사용법 안내 ---
+    def _print_usage():
+        print("""
+사용법:
+    python market_data.py --daily [옵션] [심볼...]    일봉 OHLCV 수집 → DB 저장
+    python market_data.py --export [옵션] [심볼...]   DB 데이터 → 파일 내보내기
+    python market_data.py                             교차분석 테스트
+
+--daily 옵션:
+    --force                   DB 캐시 무시, 강제 재수집
+
+--export 옵션:
+    --format csv|xlsx|json    출력 포맷 (기본: csv)
+    --out-dir <폴더>          출력 디렉터리 (기본: exports/)
+
+예시:
+    python market_data.py --daily                     전체 종목 수집 (DB에 있으면 건너뜀)
+    python market_data.py --daily --force             전체 종목 강제 재수집
+    python market_data.py --daily NVDA AAPL           지정 종목만 수집
+    python market_data.py --daily --force NVDA        지정 종목 강제 재수집
+    python market_data.py --export                    전체 CSV 내보내기
+    python market_data.py --export --format xlsx      Excel 내보내기
+    python market_data.py --export --format json      JSON 내보내기
+    python market_data.py --export NVDA 005930.KS     지정 종목만 내보내기
+    python market_data.py --export --format xlsx --out-dir ./data  폴더 지정
+        """)
+
+    if "--help" in sys.argv or "-h" in sys.argv:
+        _print_usage()
+        sys.exit(0)
+
+    # --- 일봉 OHLCV 수집 모드 ---
+    if "--daily" in sys.argv:
+        idx = sys.argv.index("--daily")
+        rest = sys.argv[idx+1:]
+        force = "--force" in rest
+        symbols = [s for s in rest if not s.startswith("--")] or None
+
+        async def _run_daily():
+            import db
+            pool = await db.create_pool()
+            await db.init_db(pool)
+            result = await fetch_and_store_daily_ohlcv(pool, symbols or None, force=force)
+
+            # 결과 분류
+            cached  = {s: v for s, v in result.items() if v == -1}
+            saved   = {s: v for s, v in result.items() if v > 0}
+            no_data = {s: v for s, v in result.items() if v == 0}
+
+            print(f"\n{'='*60}")
+            print(f"  일봉 OHLCV 수집 결과 — {len(result)}종목")
+            print(f"{'='*60}")
+
+            if saved:
+                print(f"\n  📥 API 수집 ({len(saved)}종목)")
+                for sym, cnt in sorted(saved.items()):
+                    print(f"     {sym:16s} : {cnt:>4d}건 저장")
+
+            if cached:
+                print(f"\n  ✅ DB 캐시 최신 ({len(cached)}종목) — 건너뜀")
+                for sym in sorted(cached.keys()):
+                    print(f"     {sym}")
+
+            if no_data:
+                print(f"\n  ⚠️  데이터 없음 ({len(no_data)}종목)")
+                for sym in sorted(no_data.keys()):
+                    print(f"     {sym}")
+
+            print(f"\n{'─'*60}")
+            print(f"  API 수집: {len(saved)}종목 ({sum(saved.values()):,}건)")
+            print(f"  DB 캐시:  {len(cached)}종목 (건너뜀)")
+            print(f"  실패:     {len(no_data)}종목")
+            print(f"{'='*60}")
+            await pool.close()
+
+        asyncio.run(_run_daily())
+        sys.exit(0)
+
+    # --- 내보내기 모드 ---
+    if "--export" in sys.argv:
+        idx = sys.argv.index("--export")
+        rest = sys.argv[idx+1:]
+
+        # 옵션 파싱
+        export_fmt = "csv"
+        export_dir = "exports"
+        export_symbols = []
+
+        i = 0
+        while i < len(rest):
+            if rest[i] == "--format" and i + 1 < len(rest):
+                export_fmt = rest[i + 1]
+                i += 2
+            elif rest[i] == "--out-dir" and i + 1 < len(rest):
+                export_dir = rest[i + 1]
+                i += 2
+            elif rest[i].startswith("--"):
+                i += 1  # 알 수 없는 옵션 건너뜀
+            else:
+                export_symbols.append(rest[i])
+                i += 1
+
+        if export_fmt not in ("csv", "xlsx", "json"):
+            print(f"  ❌ 지원하지 않는 포맷: {export_fmt}")
+            print(f"     사용 가능: csv, xlsx, json")
+            sys.exit(1)
+
+        print(f"\n{'='*60}")
+        print(f"  일봉 OHLCV 내보내기 — {export_fmt.upper()}")
+        print(f"{'='*60}")
+
+        asyncio.run(export_daily_ohlcv(
+            symbols=export_symbols or None,
+            fmt=export_fmt,
+            out_dir=export_dir,
+        ))
+        sys.exit(0)
+
+    # --- 기존 교차분석 테스트 ---
     print("\n" + "="*60)
     print("시세 데이터 + 교차 분석 테스트")
     print("="*60)
