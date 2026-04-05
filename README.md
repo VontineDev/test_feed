@@ -98,4 +98,4 @@ pytest test_backtest.py -v
 
 ## 버전
 
-현재 버전: `0.1.0.0` — [CHANGELOG](CHANGELOG.md) 참고
+현재 버전: `0.2.0.0` — [CHANGELOG](CHANGELOG.md) 참고
