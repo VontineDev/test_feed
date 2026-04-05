@@ -102,6 +102,33 @@ FEEDS = [
         "source": "cnbc", "category": "korea",
         "url": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100727362",
     },
+    # 연합뉴스 — 공식 경제·마켓 RSS
+    {
+        "source": "yonhap", "category": "korea",
+        "url": "https://www.yna.co.kr/rss/economy.xml",
+    },
+    {
+        "source": "yonhap", "category": "korea",
+        "url": "https://www.yna.co.kr/rss/market.xml",
+    },
+    # 한국경제 — 경제·시장 RSS
+    {
+        "source": "hankyung", "category": "korea",
+        "url": "https://www.hankyung.com/feed/economy",
+    },
+    {
+        "source": "hankyung", "category": "korea",
+        "url": "https://www.hankyung.com/feed/finance",
+    },
+    # 매일경제 — 경제·증권 RSS
+    {
+        "source": "mk", "category": "korea",
+        "url": "https://www.mk.co.kr/rss/30100041/",  # 경제
+    },
+    {
+        "source": "mk", "category": "korea",
+        "url": "https://www.mk.co.kr/rss/50200011/",  # 증권
+    },
 ]
 
 HEADERS = {
