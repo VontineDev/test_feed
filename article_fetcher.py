@@ -149,6 +149,44 @@ def _parse_bloomberg(soup: BeautifulSoup) -> str:
     return ""
 
 
+def _parse_yonhap(soup: BeautifulSoup) -> str:
+    """연합뉴스 본문 파서"""
+    container = soup.find("div", class_="story-news")
+    if container:
+        article = container.find("article")
+        if article:
+            paras = article.find_all("p")
+            return " ".join(p.get_text(strip=True) for p in paras if len(p.get_text(strip=True)) > 20)
+    return ""
+
+
+def _parse_hankyung(soup: BeautifulSoup) -> str:
+    """한국경제 본문 파서"""
+    container = soup.find("div", class_="article-body")
+    if container:
+        paras = container.find_all("p")
+        text = " ".join(p.get_text(strip=True) for p in paras if len(p.get_text(strip=True)) > 20)
+        if text:
+            return text
+    # fallback: outer wrapper
+    container = soup.find("div", class_="article-body-wrap")
+    if container:
+        paras = container.find_all("p")
+        return " ".join(p.get_text(strip=True) for p in paras if len(p.get_text(strip=True)) > 20)
+    return ""
+
+
+def _parse_mk(soup: BeautifulSoup) -> str:
+    """매일경제 본문 파서"""
+    container = soup.find("div", class_="art_txt")
+    if container:
+        paras = container.find_all("p")
+        text = " ".join(p.get_text(strip=True) for p in paras if len(p.get_text(strip=True)) > 20)
+        if text:
+            return text
+    return ""
+
+
 def _parse_fallback(soup: BeautifulSoup) -> str:
     """
     범용 fallback 파서.
@@ -261,6 +299,12 @@ async def fetch_article_body(
                 body = _parse_marketwatch(soup)
             elif source == "bloomberg":
                 body = _parse_bloomberg(soup)
+            elif source == "yonhap":
+                body = _parse_yonhap(soup)
+            elif source == "hankyung":
+                body = _parse_hankyung(soup)
+            elif source == "mk":
+                body = _parse_mk(soup)
 
         # 3순위: 범용 fallback
         if not body:

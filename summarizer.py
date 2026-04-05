@@ -71,7 +71,7 @@ SYSTEM_PROMPT_SIGNAL = (
 )
 
 SUMMARY_PROMPT = """You are a Korean financial news summarizer.
-Summarize the following English news in 2-3 Korean sentences.
+Summarize the following financial news in 2-3 Korean sentences.
 Include key numbers, stock names, and index names.
 Output ONLY the Korean summary sentences. Do not repeat the title. Do not include labels like '제목:' or '내용:'.
 Write in Korean only. Do not use Chinese characters or Chinese language.
