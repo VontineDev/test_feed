@@ -82,21 +82,5 @@ GROUP BY direction
 ## Completed
 
 - `/backtest` command, `backtest_report_telegram()`, weekly Sunday report, DRY fix for `cross_analyze_historical()`, `await asyncio.sleep()`, WATCH hit_rate=None, data quality log, `fetch_pending_outcomes` limit 500, `test_backtest.py` (12 tests) **Completed:** v0.1.0.0 (2026-04-04)
-
----
-
-## P4: Update Stale Comment in `signal_detector.py`
-
-**What:** Line 104 has comment `# /think 프롬프트 prefix 제거 — enable_thinking=True 파라미터로 대체`
-which says the /think prefix was removed in favor of enable_thinking=True. But ISSUE-002 fix
-actually added /no_think prefix back (via _call_ollama_native in summarizer.py). Comment is now misleading.
-
-**How:** Change comment to describe the current behavior:
-```python
-# Qwen3: _call_ollama_native prepends /no_think when enable_thinking=False
-# Non-Qwen3 models silently ignore the prefix
-```
-
-**Found by:** /qa on 2026-04-06 (ISSUE-004)
-**Priority:** P4 (cosmetic)
-**Effort:** XS
+- ISSUE-005 Telegram routing: all articles (Korean + foreign) gated behind `signal.is_actionable`; dead `tg_send` import removed (ISSUE-006); `test_telegram_routing.py` (4 regression tests) **Completed:** v0.2.1.0 (2026-04-06)
+- ISSUE-001 LM Studio health check inference probe; ISSUE-002 Qwen3 `/no_think` prefix in `_call_ollama_native`; ISSUE-003 `requirements.txt`; ISSUE-004 stale comment in `signal_detector.py:104`; `test_summarizer_regression_1.py` regression tests **Completed:** v0.2.1.0 (2026-04-06)

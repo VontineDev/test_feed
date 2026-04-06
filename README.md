@@ -67,7 +67,9 @@ telegram_bot.py       # 봇 명령어 처리
 telegram_notify.py    # 신호 알림 전송
 volume_pattern.py     # 거래량 패턴 분석
 batch_run.py          # 배치 OHLCV 내보내기 + 분석 스크립트
-test_backtest.py      # pytest 단위 테스트
+test_backtest.py                   # pytest — 백테스팅 로직 (12개)
+test_telegram_routing.py           # pytest — 텔레그램 신호 라우팅 회귀 (4개)
+test_summarizer_regression_1.py    # pytest — LLM 헬스체크·Qwen3 thinking 회귀
 ```
 
 ## 환경변수
@@ -93,9 +95,15 @@ ALLOWED_CHAT_IDS=123456789,987654321
 ## 테스트 실행
 
 ```bash
-pytest test_backtest.py -v
+# 전체 테스트
+pytest -v
+
+# 개별 파일
+pytest test_backtest.py -v                    # 백테스팅 로직 (12개)
+pytest test_telegram_routing.py -v            # 텔레그램 라우팅 신호 게이팅 (4개)
+pytest test_summarizer_regression_1.py -v     # LLM 헬스체크·Qwen3 thinking (회귀)
 ```
 
 ## 버전
 
-현재 버전: `0.2.0.0` — [CHANGELOG](CHANGELOG.md) 참고
+현재 버전: `0.2.1.0` — [CHANGELOG](CHANGELOG.md) 참고
