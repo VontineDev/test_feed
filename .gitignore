@@ -38,4 +38,6 @@ volume_pattern_report_*.html
 Thumbs.db
 
 # ── Claude Code / gstack (contains large binaries) ───────────
-.claude/
+.gstack/
+.claude/skills/gstack/
+.context/
