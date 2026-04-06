@@ -174,7 +174,12 @@ async def _call_ollama_native(
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt})
+    # Qwen3 respects /no_think as a model-level instruction to skip the
+    # reasoning phase.  Prepend it when thinking is disabled so the model
+    # doesn't fill max_tokens with <think> content and leave nothing for
+    # the actual response.  Non-Qwen3 models silently ignore the prefix.
+    user_content = f"/no_think\n\n{prompt}" if not enable_thinking else prompt
+    messages.append({"role": "user", "content": user_content})
 
     resp = await http.post(
         f"{OLLAMA_BASE}/api/chat",
@@ -214,7 +219,21 @@ async def _ollama_is_alive(http: httpx.AsyncClient) -> bool:
 async def _lmstudio_is_alive(http: httpx.AsyncClient) -> bool:
     try:
         r = await http.get(f"{LM_STUDIO_BASE}/v1/models", timeout=3.0)
-        return r.status_code == 200
+        if r.status_code != 200:
+            return False
+        # /v1/models can return 200 with models listed even when none are
+        # actually loaded for inference.  Verify with a minimal probe request.
+        probe = await http.post(
+            f"{LM_STUDIO_BASE}/v1/chat/completions",
+            json={
+                "model": LM_STUDIO_MODEL,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 1,
+                "stream": False,
+            },
+            timeout=5.0,
+        )
+        return probe.status_code == 200
     except Exception:
         return False
 
