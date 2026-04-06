@@ -1,12 +1,11 @@
 """
 test_telegram_routing.py  —  Regression tests for ISSUE-005
 ────────────────────────────────────────────────────────────
-Verifies that tg_send is never called unconditionally and that
-tg_send_signal fires only when an actionable signal is detected,
-regardless of article category (Korean or foreign).
+Verifies that tg_send_signal fires only when an actionable signal is
+detected, regardless of article category (Korean or foreign).
 
-Fix: run_scheduler.py:433 — tg_send removed, all articles go through
-tg_send_signal gated by signal.is_actionable.
+Fix: run_scheduler.py:432 — all articles gated by signal.is_actionable.
+tg_send (send_article) removed from run_scheduler imports entirely.
 """
 
 from __future__ import annotations
@@ -51,7 +50,7 @@ def _make_buy_signal(strength: int = 3):
     return sig
 
 
-async def _run_routing(art, signal, mock_send, mock_send_sig):
+async def _run_routing(art, signal, mock_send_sig):
     """Simulate the Telegram routing logic from summary_worker."""
     import run_scheduler
     import httpx
@@ -70,12 +69,9 @@ async def test_korean_article_no_signal_sends_nothing():
     art = _make_art("korea", "yonhap")
     signal = _make_none_signal()
 
-    with patch("run_scheduler.tg_send", new_callable=AsyncMock) as mock_send, \
-         patch("run_scheduler.tg_send_signal", new_callable=AsyncMock) as mock_send_sig:
+    with patch("run_scheduler.tg_send_signal", new_callable=AsyncMock) as mock_send_sig:
+        await _run_routing(art, signal, mock_send_sig)
 
-        await _run_routing(art, signal, mock_send, mock_send_sig)
-
-    mock_send.assert_not_called()
     mock_send_sig.assert_not_called()
 
 
@@ -85,40 +81,31 @@ async def test_foreign_article_no_signal_sends_nothing():
     art = _make_art("markets", "bloomberg")
     signal = _make_none_signal()
 
-    with patch("run_scheduler.tg_send", new_callable=AsyncMock) as mock_send, \
-         patch("run_scheduler.tg_send_signal", new_callable=AsyncMock) as mock_send_sig:
+    with patch("run_scheduler.tg_send_signal", new_callable=AsyncMock) as mock_send_sig:
+        await _run_routing(art, signal, mock_send_sig)
 
-        await _run_routing(art, signal, mock_send, mock_send_sig)
-
-    mock_send.assert_not_called()
     mock_send_sig.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_korean_article_with_signal_sends_signal_message():
-    """category='korea' + actionable signal → only tg_send_signal called."""
+    """category='korea' + actionable signal → tg_send_signal called once."""
     art = _make_art("korea", "hankyung")
     signal = _make_buy_signal(strength=3)
 
-    with patch("run_scheduler.tg_send", new_callable=AsyncMock) as mock_send, \
-         patch("run_scheduler.tg_send_signal", new_callable=AsyncMock) as mock_send_sig:
+    with patch("run_scheduler.tg_send_signal", new_callable=AsyncMock) as mock_send_sig:
+        await _run_routing(art, signal, mock_send_sig)
 
-        await _run_routing(art, signal, mock_send, mock_send_sig)
-
-    mock_send.assert_not_called()
     mock_send_sig.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_foreign_article_with_signal_sends_signal_message():
-    """category='markets' + actionable signal → only tg_send_signal called."""
+    """category='markets' + actionable signal → tg_send_signal called once."""
     art = _make_art("markets", "reuters")
     signal = _make_buy_signal(strength=4)
 
-    with patch("run_scheduler.tg_send", new_callable=AsyncMock) as mock_send, \
-         patch("run_scheduler.tg_send_signal", new_callable=AsyncMock) as mock_send_sig:
+    with patch("run_scheduler.tg_send_signal", new_callable=AsyncMock) as mock_send_sig:
+        await _run_routing(art, signal, mock_send_sig)
 
-        await _run_routing(art, signal, mock_send, mock_send_sig)
-
-    mock_send.assert_not_called()
     mock_send_sig.assert_called_once()

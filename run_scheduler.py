@@ -37,7 +37,7 @@ except ImportError:
 
 from summarizer import summarize, Backend
 from db import create_pool, init_db, save_article, save_signal, save_cross_analysis, load_seen_hashes
-from telegram_notify import send_article as tg_send, send_signal as tg_send_signal
+from telegram_notify import send_signal as tg_send_signal
 from signal_detector import detect_signal
 from article_fetcher import fetch_article_body
 from telegram_bot import bot_polling_loop, init_bot

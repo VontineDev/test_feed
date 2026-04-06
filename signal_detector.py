@@ -101,7 +101,7 @@ Guidelines:
 - If no specific ticker, use empty list []
 - reason: Write in Korean only. Do not mix Chinese characters or Chinese language."""
 
-# /think 프롬프트 prefix 제거 — enable_thinking=True 파라미터로 대체
+# Qwen3 사고 억제: enable_thinking=False 시 _call_ollama_native가 /no_think\n\n 을 prepend
 # ── JSON 파싱 ─────────────────────────────────────────────────
 def _parse_signal_json(raw: str, backend: Backend) -> TradeSignal:
     """LLM 응답에서 JSON 추출 → TradeSignal 변환"""
