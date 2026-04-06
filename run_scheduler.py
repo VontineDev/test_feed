@@ -428,10 +428,7 @@ async def summary_worker() -> None:
                                     logger.warning("[백테스트] 교차분석 저장 실패: %s", e)
 
                 # ── 4. Telegram 전송 ──────────────────────────
-                # 한국 카테고리: 항상 기사 알림 전송 (국내 주식 관련 모든 뉴스 수신)
-                # 외신 (markets/macro): 신호 감지 시에만 전송 (노이즈 방지)
-                if art.get("category") == "korea":
-                    await tg_send(art, summary_ko, http=http)
+                # 신호 감지 시에만 전송 (한국·외신 모두 동일)
                 if signal and signal.is_actionable:
                     # FILTER 판정이면 신호 알림 억제
                     if cross and cross.verdict == "FILTER":
