@@ -537,6 +537,62 @@ async def main(interval: int, enable_summary: bool) -> None:
         misfire_grace_time=3600,
     )
 
+    # ── 거래량 분석: 일일 배치 리포트 (평일 15:40 KST) ──────────
+    async def _daily_volume_report_job():
+        try:
+            from batch_run import run_batch
+            from telegram_notify import _get_token, _get_chat_id
+            import httpx as _httpx
+
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, run_batch)
+
+            summaries = result["summaries"]
+            success = result["success"]
+            total = result["total"]
+
+            def _fmt_pct(pct: float) -> str:
+                return f"+{pct:.2f}%" if pct > 0 else f"{pct:.2f}%"
+
+            up = sorted(
+                [s for s in summaries if s.get("has_data") and s["pct"] > 0],
+                key=lambda x: -x["pct"],
+            )[:3]
+            down = sorted(
+                [s for s in summaries if s.get("has_data") and s["pct"] < 0],
+                key=lambda x: x["pct"],
+            )[:3]
+
+            up_lines   = "\n".join(f"  📈 {s['name']} {_fmt_pct(s['pct'])}" for s in up)   or "  없음"
+            down_lines = "\n".join(f"  📉 {s['name']} {_fmt_pct(s['pct'])}" for s in down) or "  없음"
+
+            msg = (
+                f"📊 오늘의 거래량 패턴 리포트\n"
+                f"분석 완료: {success}/{total}종목\n\n"
+                f"상승 상위 3:\n{up_lines}\n\n"
+                f"하락 상위 3:\n{down_lines}"
+            )
+
+            token = _get_token()
+            chat_id = _get_chat_id()
+            if not token or not chat_id:
+                logger.warning("[볼륨리포트] TELEGRAM_TOKEN 또는 TELEGRAM_CHAT_ID 미설정")
+                return
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            async with _httpx.AsyncClient() as http:
+                await http.post(url, json={"chat_id": chat_id, "text": msg}, timeout=30)
+            logger.info("[볼륨리포트] 일일 배치 리포트 전송 완료 (%d/%d)", success, total)
+        except Exception as e:
+            logger.warning("[볼륨리포트] 실행 실패: %s", e)
+
+    scheduler.add_job(
+        _daily_volume_report_job,
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=40, timezone="Asia/Seoul"),
+        id="daily_volume_report",
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
     scheduler.start()
 
     try:

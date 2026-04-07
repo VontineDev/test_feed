@@ -185,6 +185,85 @@ def batch_download(tickers_ks: list[str]) -> dict:
     return result
 
 
+def compute_daily_change(df: pd.DataFrame) -> float:
+    """5분봉 데이터에서 당일 등락률을 자동 계산한다."""
+    if df.empty:
+        return 0.0
+    dates = sorted(df.index.normalize().unique())
+    if len(dates) < 2:
+        return 0.0
+    today = dates[-1]
+    yesterday = dates[-2]
+    today_close = df[df.index.normalize() == today]["Close"].iloc[-1]
+    yesterday_close = df[df.index.normalize() == yesterday]["Close"].iloc[-1]
+    if yesterday_close == 0:
+        return 0.0
+    return float((today_close - yesterday_close) / yesterday_close * 100)
+
+
+def run_batch(output_dir: str | None = None) -> dict:
+    """배치 볼륨 분석 실행 후 결과 요약을 반환한다.
+
+    run_scheduler.py 등 외부에서 import하여 호출하는 함수.
+    CHANGE_PCT 딕셔너리 대신 다운로드된 데이터로 등락률을 자동 산출한다.
+
+    Returns:
+        {html_path, total, success, failed, summaries}
+    """
+    if output_dir is None:
+        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports")
+    os.makedirs(output_dir, exist_ok=True)
+    date_str = datetime.now().strftime("%Y%m%d")
+    tickers_ks = [f"{code}.KS" for _, code in STOCKS]
+
+    data_map = batch_download(tickers_ks)
+    summaries: list[dict] = []
+    failed: list[str] = []
+
+    for (name, code), ticker in zip(STOCKS, tickers_ks):
+        df = data_map.get(ticker, pd.DataFrame())
+        pct = compute_daily_change(df)
+        summary: dict = {"name": name, "ticker": ticker, "pct": pct, "has_data": False}
+
+        if df is None or df.empty:
+            summary["report_text"] = "yfinance 데이터를 가져올 수 없었습니다."
+            failed.append(name)
+        else:
+            try:
+                report_txt = build_report(df, ticker, name, "", "KR", "yfinance")
+                save_report(report_txt, name, "")
+
+                df2 = df.copy()
+                df2["hour"] = df2.index.hour
+                trading_days = df2.index.normalize().nunique() or 1
+                hourly = df2.groupby("hour")["Volume"].sum()
+                peak_hour = int(hourly.idxmax()) if not hourly.empty else None
+                avg_vol = int(df2["Volume"].sum() / trading_days)
+
+                summary["has_data"] = True
+                summary["peak_hour"] = f"{peak_hour:02d}:00" if peak_hour is not None else "N/A"
+                summary["avg_daily_vol"] = avg_vol
+                summary["report_text"] = report_txt
+            except Exception as e:
+                summary["report_text"] = f"리포트 생성 오류: {e}"
+                failed.append(name)
+
+        summaries.append(summary)
+
+    html = make_html_report(summaries, date_str)
+    html_path = os.path.join(output_dir, f"volume_pattern_report_{date_str}.html")
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(html)
+
+    return {
+        "html_path": html_path,
+        "total": len(summaries),
+        "success": len(summaries) - len(failed),
+        "failed": failed,
+        "summaries": summaries,
+    }
+
+
 def make_html_report(summaries: list[dict], date_str: str) -> str:
     """개별 리포트 요약을 하나의 HTML 파일로 합친다."""
     up   = [s for s in summaries if s["pct"] > 0]
@@ -340,8 +419,7 @@ def main():
 
     # ── 3) 통합 HTML 저장 ─────────────────────────────────────────
     html = make_html_report(summaries, date_str)
-    out_dir = "/sessions/blissful-inspiring-planck/mnt/test_feed"
-    os.makedirs(out_dir, exist_ok=True)
+    out_dir = "reports"
     html_path = os.path.join(out_dir, f"volume_pattern_report_{date_str}.html")
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(html)

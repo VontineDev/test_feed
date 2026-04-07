@@ -96,6 +96,22 @@ async def _send(http: httpx.AsyncClient, chat_id: str, text: str) -> None:
         logger.warning("[봇] 전송 오류: %s", e)
 
 
+async def _send_plain(http: httpx.AsyncClient, chat_id: str, text: str) -> None:
+    """MarkdownV2 없이 일반 텍스트 전송 (박스 문자·그래프 포함 메시지용)"""
+    token = _get_token()
+    url = TELEGRAM_API.format(token=token, method="sendMessage")
+    try:
+        resp = await http.post(url, json={
+            "chat_id": chat_id,
+            "text": text,
+            "disable_web_page_preview": True,
+        }, timeout=10)
+        if not resp.json().get("ok"):
+            logger.warning("[봇] 메시지 전송 실패: %s", resp.json().get("description"))
+    except Exception as e:
+        logger.warning("[봇] 전송 오류: %s", e)
+
+
 # ── 명령어 핸들러 ─────────────────────────────────────────────
 
 async def _handle_status(http: httpx.AsyncClient, chat_id: str, pool) -> None:
@@ -239,6 +255,49 @@ async def _handle_backtest(http: httpx.AsyncClient, chat_id: str, pool) -> None:
     await _send(http, chat_id, report)
 
 
+async def _handle_volume(http: httpx.AsyncClient, chat_id: str, args: list[str]) -> None:
+    """/volume <종목명|티커> — 시간대별 거래량 패턴 분석"""
+    import functools
+    from volume_pattern import resolve_ticker, fetch_data, build_report
+
+    if not args:
+        await _send_plain(http, chat_id,
+            "사용법: /volume <종목명 또는 티커>\n"
+            "예) /volume 삼성전자\n"
+            "    /volume AAPL\n"
+            "    /volume 005930"
+        )
+        return
+
+    raw_input = " ".join(args)
+    await _send_plain(http, chat_id, f"📊 {raw_input} 거래량 패턴 조회 중...")
+
+    try:
+        ticker, display_name, market = resolve_ticker(raw_input)
+
+        loop = asyncio.get_running_loop()
+        df, full_name, data_source = await loop.run_in_executor(
+            None,
+            functools.partial(fetch_data, ticker, market),
+        )
+
+        if df is None or df.empty:
+            await _send_plain(http, chat_id,
+                f"'{raw_input}'에 대한 데이터를 가져올 수 없습니다.\n"
+                "티커/종목명을 확인해 주세요."
+            )
+            return
+
+        report = build_report(df, ticker, display_name, full_name, market, data_source)
+        if len(report) > 4090:
+            report = report[:4090] + "\n...(생략)"
+
+        await _send_plain(http, chat_id, report)
+    except Exception as e:
+        logger.warning("[봇] /volume 오류: %s", e)
+        await _send_plain(http, chat_id, f"오류가 발생했습니다: {e}")
+
+
 async def _handle_help(http: httpx.AsyncClient, chat_id: str) -> None:
     """/help — 명령어 목록"""
     lines = [
@@ -251,6 +310,7 @@ async def _handle_help(http: httpx.AsyncClient, chat_id: str) -> None:
         "/signals watch — WATCH 신호만 조회",
         "/today — 오늘 수집 현황 \\+ 최신 기사",
         "/backtest — 교차분석 백테스팅 리포트",
+        "/volume <종목명\\|티커> — 시간대별 거래량 패턴 분석",
         "/help — 이 도움말",
     ]
     await _send(http, chat_id, "\n".join(lines))
@@ -303,6 +363,8 @@ async def _process_update(http: httpx.AsyncClient, update: dict, pool) -> None:
         await _handle_today(http, chat_id, pool)
     elif cmd == "/backtest":
         await _handle_backtest(http, chat_id, pool)
+    elif cmd == "/volume":
+        await _handle_volume(http, chat_id, args)
     elif cmd in ("/help", "/start"):
         await _handle_help(http, chat_id)
     else:
