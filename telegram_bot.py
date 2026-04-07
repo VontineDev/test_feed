@@ -289,8 +289,9 @@ async def _handle_volume(http: httpx.AsyncClient, chat_id: str, args: list[str])
             return
 
         report = build_report(df, ticker, display_name, full_name, market, data_source)
-        if len(report) > 4090:
-            report = report[:4090] + "\n...(생략)"
+        _suffix = "\n...(생략)"
+        if len(report) > 4096 - len(_suffix):
+            report = report[:4096 - len(_suffix)] + _suffix
 
         await _send_plain(http, chat_id, report)
     except Exception as e:
