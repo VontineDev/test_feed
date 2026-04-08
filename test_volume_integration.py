@@ -6,6 +6,7 @@ Covers:
   - _send_plain           (telegram_bot.py) — no MarkdownV2 parse_mode
   - _handle_volume        (telegram_bot.py) — no args, empty data, truncation
   - run_batch             (batch_run.py)    — return structure
+  - fetch_data tz         (volume_pattern.py) — US market uses America/New_York
 
 Regression: feat: integrate volume_pattern analysis into Telegram bot and scheduler
 Found by /qa on 2026-04-08
@@ -249,3 +250,67 @@ class TestRunBatch:
         assert result["total"] == 2
         assert result["success"] == 1
         assert "가짜종목" in result["failed"]
+
+
+# ── fetch_data timezone regression (ISSUE-001) ───────────────────
+
+class TestFetchDataTimezone:
+    """Regression: volume_pattern.fetch_data line 193 had inverted tz condition.
+    US market was getting Asia/Seoul instead of America/New_York."""
+
+    def _make_ny_df(self) -> pd.DataFrame:
+        """5-minute DataFrame already in America/New_York timezone."""
+        idx = pd.date_range(
+            "2026-04-07 09:30", periods=3, freq="5min", tz="America/New_York"
+        )
+        return pd.DataFrame(
+            {"Open": 150.0, "High": 151.0, "Low": 149.0, "Close": 150.5, "Volume": 1000},
+            index=idx,
+        )
+
+    def test_us_market_gets_new_york_timezone(self):
+        """fetch_data for US stocks must convert index to America/New_York, not Asia/Seoul."""
+        from volume_pattern import fetch_data
+
+        ny_df = self._make_ny_df()
+
+        with patch("volume_pattern.yf.Ticker") as mock_ticker, \
+             patch("volume_pattern._load_from_db", return_value=pd.DataFrame()), \
+             patch("volume_pattern._is_db_fresh", return_value=False):
+            mock_t = MagicMock()
+            mock_t.info = {}
+            mock_t.history.return_value = ny_df
+            mock_ticker.return_value = mock_t
+
+            df, _, _ = fetch_data("AAPL", "US")
+
+        assert df.index.tzinfo is not None
+        tz_name = str(df.index.tz)
+        assert "New_York" in tz_name or "America" in tz_name, (
+            f"Expected America/New_York timezone for US stocks, got: {tz_name}"
+        )
+
+    def test_kr_market_gets_seoul_timezone(self):
+        """fetch_data for KR stocks must convert index to Asia/Seoul."""
+        from volume_pattern import fetch_data
+
+        kr_df = pd.DataFrame(
+            {"Open": 70000.0, "High": 71000.0, "Low": 69000.0, "Close": 70500.0, "Volume": 5000},
+            index=pd.date_range("2026-04-07 09:00", periods=3, freq="5min", tz="Asia/Seoul"),
+        )
+
+        with patch("volume_pattern.yf.Ticker") as mock_ticker, \
+             patch("volume_pattern._load_from_db", return_value=pd.DataFrame()), \
+             patch("volume_pattern._is_db_fresh", return_value=False):
+            mock_t = MagicMock()
+            mock_t.info = {}
+            mock_t.history.return_value = kr_df
+            mock_ticker.return_value = mock_t
+
+            df, _, _ = fetch_data("005930.KS", "KR")
+
+        assert df.index.tzinfo is not None
+        tz_name = str(df.index.tz)
+        assert "Seoul" in tz_name, (
+            f"Expected Asia/Seoul timezone for KR stocks, got: {tz_name}"
+        )

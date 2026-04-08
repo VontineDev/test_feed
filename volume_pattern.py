@@ -190,7 +190,7 @@ def fetch_data(ticker: str, market: str):
     if df.empty:
         return df, "", "yfinance"
 
-    tz = "Asia/Seoul" if market == "US" else MARKET_TZ[market]
+    tz = MARKET_TZ[market]
     df.index = df.index.tz_convert(tz)
     return df, full_name, "yfinance"
 
