@@ -4,6 +4,63 @@ Items deferred from code review and planning sessions.
 
 ---
 
+## P3: KOREA_BASE_RATE Staleness Warning
+
+**What:** On scheduler startup, log the current `KOREA_BASE_RATE` value and warn if
+it hasn't been updated in 90+ days (infer from `.env` file mtime or git blame on the
+env.example entry).
+
+**Why:** KOREA_BASE_RATE is a hardcoded env var that must be updated manually when
+the Bank of Korea changes the base rate (up to 8x/year). If nobody updates it, the
+LLM receives confidently wrong macro context — e.g., "base rate: 2.5%" when it was
+cut to 2.25% two months ago. The LLM won't know it's wrong.
+
+**How to apply:**
+```python
+# In main() startup in run_scheduler.py
+import os, stat
+env_mtime = os.stat(".env").st_mtime if os.path.exists(".env") else None
+if env_mtime:
+    age_days = (time.time() - env_mtime) / 86400
+    if age_days > 90:
+        logger.warning("KOREA_BASE_RATE may be stale — .env last modified %d days ago. Check BOK rate.", int(age_days))
+```
+
+**Pros:** Zero network calls. Catches silent stale macro context. One-time ~5 min fix.
+**Cons:** .env mtime isn't reliable if the file is regenerated without a real change.
+**Effort:** XS (human: ~30 min / CC: ~5 min)
+**Priority:** P3
+**Blocked by:** Macro signal enrichment feature must ship first.
+
+---
+
+## P3: Replace Deprecated asyncio.get_event_loop() in cross_analyze Call
+
+**What:** Replace `asyncio.get_event_loop().run_in_executor(...)` with
+`asyncio.get_running_loop().run_in_executor(...)` at `run_scheduler.py:393`.
+
+**Why:** `asyncio.get_event_loop()` is deprecated inside a running coroutine in
+Python 3.10+ and will raise `DeprecationWarning`. In Python 3.12+ it emits a
+`DeprecationWarning` by default; future versions will break. The macro signal
+enrichment feature correctly uses `get_running_loop()` — the same fix should be
+applied to the existing `cross_analyze` call.
+
+**How to apply:**
+```python
+# run_scheduler.py:393 — change:
+cross = await asyncio.get_event_loop().run_in_executor(
+# to:
+cross = await asyncio.get_running_loop().run_in_executor(
+```
+
+**Pros:** One-line fix. Removes Python version fragility.
+**Cons:** None.
+**Effort:** XS (human: ~5 min / CC: ~2 min)
+**Priority:** P3
+**Blocked by:** Nothing.
+
+---
+
 ## P3: APScheduler Job Persistence for Weekly Backtest Report
 
 **What:** Add Postgres-backed job store (`SQLAlchemyJobStore`) to APScheduler in

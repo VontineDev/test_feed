@@ -27,6 +27,7 @@ try:
 except ImportError:
     pass
 
+from market_data import MacroContext
 from summarizer import (
     _call_openai_compat,
     _call_ollama_native,
@@ -99,9 +100,31 @@ Guidelines:
 - strength 3  : moderate signal
 - strength 4-5: strong/direct signal
 - If no specific ticker, use empty list []
-- reason: Write in Korean only. Do not mix Chinese characters or Chinese language."""
+- reason: Write in Korean only. Do not mix Chinese characters or Chinese language.
+{macro_section}"""
 
 # Qwen3 사고 억제: enable_thinking=False 시 _call_ollama_native가 /no_think\n\n 을 prepend
+
+
+def _build_macro_section(macro: Optional[MacroContext]) -> str:
+    """Return macro context block for the LLM prompt. Returns empty string if nothing available."""
+    parts = []
+    if macro and macro.usd_krw is not None:
+        parts.append(f"- USD/KRW exchange rate: {macro.usd_krw:.1f}")
+        # Note: weekend/holiday data may be up to 3 days stale (last close)
+    if macro and macro.korea_base_rate is not None:
+        parts.append(f"- Korea base rate: {macro.korea_base_rate}%")
+    if not parts:
+        return ""
+    header = "\nMacro context (use this to adjust your signal assessment):"
+    note = (
+        "Note: High USD/KRW (weak KRW) benefits exporters (Samsung, Hyundai, LG Electronics). "
+        "Low USD/KRW (strong KRW) benefits importers and rate-sensitive sectors. "
+        "Rising base rate suppresses construction, real estate, and high-debt companies."
+    )
+    return "\n".join([header] + parts + [note]) + "\n"
+
+
 # ── JSON 파싱 ─────────────────────────────────────────────────
 def _parse_signal_json(raw: str, backend: Backend) -> TradeSignal:
     """LLM 응답에서 JSON 추출 → TradeSignal 변환"""
@@ -178,15 +201,21 @@ async def detect_signal(
     title: str,
     summary_ko: str,
     http: Optional[httpx.AsyncClient] = None,
+    macro: Optional[MacroContext] = None,
 ) -> TradeSignal:
     """
     뉴스 제목 + 한글 요약 → 매매 신호 판단.
     요약이 없으면 NONE 즉시 반환.
+    macro: MacroContext — LLM 프롬프트에 매크로 컨텍스트 주입 (없으면 생략)
     """
     if not summary_ko.strip():
         return NONE_SIGNAL
 
-    prompt = SIGNAL_PROMPT.format(title=title, summary_ko=summary_ko)
+    prompt = SIGNAL_PROMPT.format(
+        title=title,
+        summary_ko=summary_ko,
+        macro_section=_build_macro_section(macro),
+    )
 
     _own_client = http is None
     if _own_client:

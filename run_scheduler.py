@@ -21,7 +21,9 @@ import hashlib
 import logging
 from logging.handlers import TimedRotatingFileHandler
 import sys
+import time
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 
 import feedparser
 import httpx
@@ -41,7 +43,7 @@ from telegram_notify import send_signal as tg_send_signal
 from signal_detector import detect_signal
 from article_fetcher import fetch_article_body
 from telegram_bot import bot_polling_loop, init_bot
-from market_data import cross_analyze, CrossAnalysis
+from market_data import cross_analyze, CrossAnalysis, MacroContext, get_macro_context
 
 # ── 로깅 설정 ────────────────────────────────────────────────
 logging.basicConfig(
@@ -145,6 +147,23 @@ HEADERS = {
 _seen_hashes: set[str] = set()       # 중복 방지 (인메모리)
 _summary_queue: asyncio.Queue = None # 수집 → 요약 워커 전달용
 _db_pool = None                      # asyncpg 커넥션 풀
+
+# ── 매크로 컨텍스트 TTL 캐시 (5분) ──────────────────────────
+_macro_cache: Optional[MacroContext] = None
+_macro_cache_ts: float = 0.0
+MACRO_CACHE_TTL = 300.0  # 5 minutes — one yfinance call per batch, not per article
+
+
+async def _get_macro() -> Optional[MacroContext]:
+    """Return cached MacroContext, refreshing if stale. Never raises."""
+    global _macro_cache, _macro_cache_ts
+    try:
+        if _macro_cache is None or time.monotonic() - _macro_cache_ts > MACRO_CACHE_TTL:
+            _macro_cache = await get_macro_context()
+            _macro_cache_ts = time.monotonic()
+    except Exception as e:
+        logger.warning("[매크로] 컨텍스트 조회 실패 (무시): %s", e)
+    return _macro_cache
 
 MAX_AGE_HOURS = 24  # 이 시간보다 오래된 기사는 수집 제외
 MIN_INPUT_LEN = 50   # 이 글자 수 미만이면 LLM 요약 스킵 — 제목 보강 후 기준
@@ -373,10 +392,12 @@ async def summary_worker() -> None:
                 signal = None
                 cross  = None
                 if summary_ko:
+                    macro = await _get_macro()
                     signal = await detect_signal(
                         title=art["title"],
                         summary_ko=summary_ko,
                         http=http,
+                        macro=macro,
                     )
                     if signal.is_actionable:
                         icon = {"BUY": "🟢", "SELL": "🔴", "WATCH": "🟡"}.get(signal.direction, "")
@@ -414,12 +435,14 @@ async def summary_worker() -> None:
                         if _db_pool and article_id:
                             signal_id = await save_signal(
                                 _db_pool,
-                                article_id  = article_id,
-                                direction   = signal.direction,
-                                strength    = signal.strength,
-                                reason      = signal.reason,
-                                tickers     = signal.tickers,
-                                llm_backend = signal.backend.value,
+                                article_id      = article_id,
+                                direction       = signal.direction,
+                                strength        = signal.strength,
+                                reason          = signal.reason,
+                                tickers         = signal.tickers,
+                                llm_backend     = signal.backend.value,
+                                macro_usd_krw   = macro.usd_krw if macro else None,
+                                macro_base_rate = macro.korea_base_rate if macro else None,
                             )
                             if signal_id and cross:
                                 try:

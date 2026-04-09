@@ -61,18 +61,23 @@ CREATE INDEX IF NOT EXISTS idx_news_pub     ON news_articles (published_at DESC 
 CREATE INDEX IF NOT EXISTS idx_news_fetched ON news_articles (fetched_at  DESC);
 
 CREATE TABLE IF NOT EXISTS trade_signals (
-    id           BIGSERIAL    PRIMARY KEY,
-    article_id   BIGINT       REFERENCES news_articles(id) ON DELETE CASCADE,
-    direction    VARCHAR(8)   NOT NULL,
-    strength     SMALLINT     NOT NULL,
-    reason       TEXT,
-    tickers      TEXT[],
-    llm_backend  VARCHAR(16),
-    detected_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
+    id               BIGSERIAL    PRIMARY KEY,
+    article_id       BIGINT       REFERENCES news_articles(id) ON DELETE CASCADE,
+    direction        VARCHAR(8)   NOT NULL,
+    strength         SMALLINT     NOT NULL,
+    reason           TEXT,
+    tickers          TEXT[],
+    llm_backend      VARCHAR(16),
+    macro_usd_krw    FLOAT,
+    macro_base_rate  FLOAT,
+    detected_at      TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_sig_direction ON trade_signals (direction);
 CREATE INDEX IF NOT EXISTS idx_sig_detected  ON trade_signals (detected_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sig_strength  ON trade_signals (strength DESC);
+-- Idempotent migration: add macro columns to existing deployments
+ALTER TABLE trade_signals ADD COLUMN IF NOT EXISTS macro_usd_krw   FLOAT;
+ALTER TABLE trade_signals ADD COLUMN IF NOT EXISTS macro_base_rate FLOAT;
 
 -- ── 백테스팅: 교차분석 결과 ──────────────────────────────────
 CREATE TABLE IF NOT EXISTS cross_analysis_results (
@@ -277,18 +282,22 @@ async def save_signal(
     reason: str,
     tickers: list[str],
     llm_backend: str,
+    macro_usd_krw: Optional[float] = None,
+    macro_base_rate: Optional[float] = None,
 ) -> Optional[int]:
     """
     매매 신호를 trade_signals 테이블에 저장.
     저장된 신호의 id 반환, 실패 시 None.
+    macro_usd_krw / macro_base_rate: nullable — 매크로 컨텍스트 스냅샷 (백테스팅용)
     """
     try:
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 INSERT INTO trade_signals
-                    (article_id, direction, strength, reason, tickers, llm_backend)
-                VALUES ($1, $2, $3, $4, $5, $6)
+                    (article_id, direction, strength, reason, tickers, llm_backend,
+                     macro_usd_krw, macro_base_rate)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 RETURNING id
                 """,
                 article_id,
@@ -297,6 +306,8 @@ async def save_signal(
                 reason,
                 tickers,
                 llm_backend,
+                macro_usd_krw,
+                macro_base_rate,
             )
         return row["id"] if row else None
     except Exception as e:

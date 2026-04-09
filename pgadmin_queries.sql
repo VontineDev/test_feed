@@ -217,3 +217,24 @@ FROM  news_articles
 WHERE DATE(fetched_at AT TIME ZONE 'Asia/Seoul') = CURRENT_DATE
 ORDER BY fetched_at DESC
 LIMIT 50;
+
+
+-- ================================================================
+-- 매크로 컨텍스트 — 참고용 (init_db에서 자동 실행됨)
+-- ================================================================
+-- 이 ALTER TABLE은 db.py의 init_db()에서 자동 실행됩니다.
+-- 수동 실행이 필요한 경우에만 아래 쿼리를 사용하세요.
+
+-- ALTER TABLE trade_signals ADD COLUMN IF NOT EXISTS macro_usd_krw   FLOAT;
+-- ALTER TABLE trade_signals ADD COLUMN IF NOT EXISTS macro_base_rate FLOAT;
+
+-- 매크로 레짐별 신호 정확도 (30일+ 데이터 누적 후 의미 있음)
+SELECT
+    CASE WHEN macro_usd_krw > 1400 THEN 'USD/KRW > 1400 (약원)' ELSE 'USD/KRW ≤ 1400 (강원)' END AS 환율_레짐,
+    direction,
+    COUNT(*) AS 신호수,
+    ROUND(AVG(strength), 2) AS 평균강도
+FROM trade_signals
+WHERE macro_usd_krw IS NOT NULL
+GROUP BY 1, 2
+ORDER BY 1, 2;

@@ -22,12 +22,55 @@ CLI 사용법:
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+# ── 매크로 컨텍스트 ───────────────────────────────────────────
+@dataclass
+class MacroContext:
+    usd_krw: Optional[float]         # e.g. 1470.5 — from yfinance KRW=X
+    korea_base_rate: Optional[float]  # e.g. 2.5 — from KOREA_BASE_RATE env var
+    fetched_at: str                   # ISO timestamp (timezone-aware)
+    is_fresh: bool                    # False if USD/KRW fetch failed
+
+
+def _fetch_usd_krw_sync() -> Optional[float]:
+    """Synchronous yfinance call — must be wrapped in run_in_executor from async."""
+    if not YFINANCE_OK:
+        return None
+    try:
+        hist = yf.Ticker("KRW=X").history(period="2d")
+        return float(hist["Close"].iloc[-1]) if not hist.empty else None
+    except Exception:
+        return None
+
+
+async def get_macro_context() -> MacroContext:
+    """Fetch macro context. Non-blocking: yfinance runs in thread executor."""
+    loop = asyncio.get_running_loop()
+    usd_krw = await loop.run_in_executor(None, _fetch_usd_krw_sync)
+
+    # Korea base rate: update KOREA_BASE_RATE in .env when BOK announces a change
+    # (8x/year max). Defaults to 2.5 if not set.
+    base_rate_str = os.getenv("KOREA_BASE_RATE", "2.5")
+    try:
+        korea_base_rate = float(base_rate_str)
+    except (ValueError, TypeError):
+        korea_base_rate = None
+
+    return MacroContext(
+        usd_krw=usd_krw,
+        korea_base_rate=korea_base_rate,
+        fetched_at=datetime.now(timezone.utc).isoformat(),
+        is_fresh=usd_krw is not None,
+    )
 
 try:
     import yfinance as yf
