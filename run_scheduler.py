@@ -20,9 +20,11 @@ import calendar
 import hashlib
 import logging
 from logging.handlers import TimedRotatingFileHandler
+import os
 import sys
 import time
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from typing import Optional
 
 import feedparser
@@ -473,6 +475,22 @@ async def main(interval: int, enable_summary: bool) -> None:
     logger.info("구조: [수집 잡] → Queue → [요약 워커] (완전 분리)")
     logger.info("한글 요약: %s | 피드 %d개 | Ctrl+C 로 종료\n",
                 "ON (Ollama→LM Studio)" if enable_summary else "OFF", len(FEEDS))
+
+    # ── KOREA_BASE_RATE 신선도 체크 ───────────────────────────
+    _env_path = Path(".env")
+    if _env_path.exists():
+        age_days = (time.time() - _env_path.stat().st_mtime) / 86400
+        _base_rate_str = os.getenv("KOREA_BASE_RATE", "2.5")
+        try:
+            logger.info("KOREA_BASE_RATE=%.2f%% (env loaded)", float(_base_rate_str))
+        except ValueError:
+            logger.warning("KOREA_BASE_RATE 값이 숫자가 아닙니다: %r — 2.5%%로 기본값 사용", _base_rate_str)
+        if age_days > 90:
+            logger.warning(
+                "KOREA_BASE_RATE may be stale — .env last modified %d days ago. "
+                "Check BOK rate at https://www.bok.or.kr/eng/main/contents.do?menuNo=400652",
+                int(age_days),
+            )
 
     # ── DB 초기화 ─────────────────────────────────────────────
     try:
