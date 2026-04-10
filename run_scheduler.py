@@ -506,6 +506,20 @@ async def main(interval: int, enable_summary: bool) -> None:
         logger.error("DB 없이 계속 실행합니다 (콘솔 출력만)")
         _db_pool = None
 
+    # ── KRX 종목 캐시 초기화 ─────────────────────────────────────
+    if _db_pool:
+        from krx_sync import sync_krx_listings
+        from ticker_cache import ticker_cache as _ticker_cache
+        try:
+            await sync_krx_listings(_db_pool)
+        except Exception as _krx_e:
+            logger.warning("[krx_sync] 초기 동기화 실패: %s — DB에 기존 데이터로 캐시 로드", _krx_e)
+        finally:
+            try:
+                await _ticker_cache.load(_db_pool)
+            except Exception as _cache_e:
+                logger.warning("[ticker_cache] 캐시 로드 실패: %s — 정적 맵으로 운영", _cache_e)
+
     # ── 봇 초기화 ─────────────────────────────────────────────
     init_bot(_seen_hashes)
     bot_task = asyncio.create_task(bot_polling_loop(_db_pool))
@@ -594,6 +608,32 @@ async def main(interval: int, enable_summary: bool) -> None:
         _weekly_backtest_report_job,
         CronTrigger(day_of_week="sun", hour=20, minute=0, timezone="Asia/Seoul"),
         id="weekly_backtest",
+        max_instances=1,
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+
+    # ── KRX 종목 리스트 일일 갱신 (매일 20:00 KST — 장 마감 후) ──
+    async def _daily_krx_refresh_job():
+        if not _db_pool:
+            return
+        from krx_sync import sync_krx_listings
+        from ticker_cache import ticker_cache as _ticker_cache
+        try:
+            n = await sync_krx_listings(_db_pool)
+            logger.info("[krx_sync] 일일 갱신 완료: %d행", n)
+        except Exception as e:
+            logger.error("[krx_sync] 일일 갱신 실패: %s — 기존 DB 데이터로 캐시 재로드", e)
+        finally:
+            try:
+                await _ticker_cache.load(_db_pool)
+            except Exception as _cache_e:
+                logger.warning("[ticker_cache] 캐시 재로드 실패: %s", _cache_e)
+
+    scheduler.add_job(
+        _daily_krx_refresh_job,
+        CronTrigger(hour=20, minute=0, timezone="Asia/Seoul"),
+        id="krx_daily_refresh",
         max_instances=1,
         misfire_grace_time=3600,
         replace_existing=True,
