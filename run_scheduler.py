@@ -479,6 +479,10 @@ async def main(interval: int, enable_summary: bool) -> None:
 
     # ── KOREA_BASE_RATE 신선도 체크 ───────────────────────────
     _env_path = Path(".env")
+    if not _env_path.exists():
+        logger.info(
+            "KOREA_BASE_RATE 신선도 체크 생략 — .env 파일 없음 (컨테이너/플랫폼 환경변수로 주입된 경우 수동 확인 필요)"
+        )
     if _env_path.exists():
         age_days = (time.time() - _env_path.stat().st_mtime) / 86400
         _base_rate_str = os.getenv("KOREA_BASE_RATE", "2.5")
@@ -514,11 +518,19 @@ async def main(interval: int, enable_summary: bool) -> None:
         worker_task = asyncio.create_task(summary_worker())
 
     # 수집 스케줄러 등록
-    from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
-    # Normalize both postgresql:// and postgres:// (e.g. Heroku/Render DATABASE_URL) to
-    # the explicit psycopg2 dialect so SQLAlchemy 2.x doesn't emit SAWarning.
-    _dsn = re.sub(r"^postgres(ql)?://", "postgresql+psycopg2://", get_dsn(), count=1)
-    jobstores = {"default": SQLAlchemyJobStore(url=_dsn)}
+    # Build jobstores — fall back to MemoryJobStore if Postgres is unreachable
+    # at startup (e.g. container cold-start race) so the scheduler doesn't crash.
+    try:
+        from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+        # Normalize both postgresql:// and postgres:// (e.g. Heroku/Render DATABASE_URL)
+        # to the explicit psycopg2 dialect so SQLAlchemy 2.x doesn't emit SAWarning.
+        _dsn = re.sub(r"^postgres(ql)?://", "postgresql+psycopg2://", get_dsn(), count=1)
+        jobstores = {"default": SQLAlchemyJobStore(url=_dsn)}
+        logger.info("[스케줄러] APScheduler jobstore: Postgres (%s)", _dsn.split("@")[-1])
+    except Exception as _jse:
+        from apscheduler.jobstores.memory import MemoryJobStore
+        jobstores = {"default": MemoryJobStore()}
+        logger.warning("[스케줄러] APScheduler jobstore: MemoryJobStore (Postgres 연결 실패: %s)", _jse)
     scheduler = AsyncIOScheduler(timezone="UTC", jobstores=jobstores)
     scheduler.add_job(
         collect_job,

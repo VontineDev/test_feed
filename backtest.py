@@ -264,7 +264,9 @@ async def cross_analyze_historical(
             ctx = _ctx_cache[cache_key]
         else:
             ctx = _build_price_context_historical(sym, tk, as_of_date)
-            if _ctx_cache is not None:
+            # Only cache successful fetches — do NOT cache None (transient failures).
+            # Caching None would poison all signals in the same (symbol, week).
+            if _ctx_cache is not None and ctx is not None and ctx.success:
                 _ctx_cache[cache_key] = ctx
             await asyncio.sleep(0.3)
         if ctx and ctx.success:
