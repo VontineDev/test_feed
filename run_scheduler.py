@@ -19,6 +19,7 @@ import asyncio
 import calendar
 import hashlib
 import logging
+import re
 from logging.handlers import TimedRotatingFileHandler
 import os
 import sys
@@ -514,7 +515,9 @@ async def main(interval: int, enable_summary: bool) -> None:
 
     # 수집 스케줄러 등록
     from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
-    _dsn = get_dsn().replace("postgresql://", "postgresql+psycopg2://", 1)
+    # Normalize both postgresql:// and postgres:// (e.g. Heroku/Render DATABASE_URL) to
+    # the explicit psycopg2 dialect so SQLAlchemy 2.x doesn't emit SAWarning.
+    _dsn = re.sub(r"^postgres(ql)?://", "postgresql+psycopg2://", get_dsn(), count=1)
     jobstores = {"default": SQLAlchemyJobStore(url=_dsn)}
     scheduler = AsyncIOScheduler(timezone="UTC", jobstores=jobstores)
     scheduler.add_job(

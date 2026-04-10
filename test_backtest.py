@@ -246,9 +246,11 @@ class TestMarketBaseline:
         ]
         pool = _make_pool_two_queries(metrics_rows, baseline_rows)
         metrics = await calculate_metrics(pool)
-        # total=0 row is skipped — market_baseline may be None or {}
-        bl = metrics["market_baseline"]
-        assert bl is None or "BUY" not in bl
+        # Function must complete without exception
+        assert "by_verdict_checkpoint" in metrics
+        assert metrics.get("rows") == 1
+        # total=0 row is skipped — market_baseline must be None (empty bl → None)
+        assert metrics["market_baseline"] is None
 
     @pytest.mark.asyncio
     async def test_baseline_in_market_baseline_key(self):

@@ -252,6 +252,10 @@ async def cross_analyze_historical(
 
     iso = as_of_date.isocalendar()
     cache_week = (iso.year, iso.week)
+    # ISO week granularity: signals on Mon–Fri of the same week share one 365-day
+    # history fetch. Price accuracy is off by up to 4 trading days for week-end
+    # signals — acceptable for backfill; live path uses _build_price_context_historical
+    # directly without this cache.
 
     contexts: list[PriceContext] = []
     for tk, sym in resolved.items():
@@ -413,6 +417,9 @@ async def calculate_metrics(
 
     async with pool.acquire() as conn:
         rows = await conn.fetch(query, *args)
+        # Baseline always uses 1d checkpoint — it has the most data and represents
+        # the primary holding period in the Telegram report. checkpoint_filter does
+        # not apply here; callers wanting other checkpoints can compute separately.
         baseline_rows = await conn.fetch("""
             SELECT s.direction,
                    COUNT(*) FILTER (WHERE po.return_pct > 0) AS up_count,
@@ -434,7 +441,7 @@ async def calculate_metrics(
     if baseline_rows:
         bl: dict[str, float] = {}
         for br in baseline_rows:
-            total = br["total"] or 0
+            total = br["total"] if br["total"] is not None else 0
             if total == 0:
                 continue
             direction = br["direction"]
