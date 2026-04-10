@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.4.0] - 2026-04-11
+
+### Fixed
+
+- **Ollama empty JSON responses** (`summarizer.py`): `repeat_penalty: 1.3` penalised `{` `"` `:` tokens that already appeared in the *generated output*, making the model unable to produce multi-key JSON. Reset to `1.0` (disabled). Affects both summarisation and signal detection calls.
+- **Summariser always empty after thinking block** (`summarizer.py`): `max_tokens=300` was exhausted by Qwen3's ~290-token `<think>` block, leaving no room for the Korean summary. Raised to `600`. Summary failures drop from ~50/day to near zero.
+- **Signal detector echoed macro context instead of JSON** (`signal_detector.py`): `SIGNAL_PROMPT` ended with `{macro_section}` — the last text the model saw was "Note: High USD/KRW..." so it continued/echoed that instead of outputting JSON. Added explicit output instruction after the macro section. Fixes `JSON 없음 | raw: Macro context:` parse failures.
+- **Silent Ollama model-not-found errors** (`summarizer.py`): Some Ollama versions return HTTP 200 with `{"error": "model not found"}` instead of 4xx. Added `data.get("error")` check before the empty-content path so the error is logged clearly instead of masquerading as two empty-response retries.
+- **Misleading empty-response error when Ollama returns thinking content** (`summarizer.py`): When Ollama separates `message.thinking` from `message.content`, an empty content field now logs `think=Nchar` so operators can tune `max_tokens` or verify `think:false` is working.
+
+### Changed
+
+- Removed explicit `frequency_penalty: 0` / `presence_penalty: 0` from `_call_openai_compat` payload — these are defaults and caused `400 Bad Request` on strict OpenAI-compat backends.
+
+### Tests
+
+- Regression tests for all five fixed failure modes (ISSUE-003 through ISSUE-007) in `test_summarizer_regression_1.py` and new `test_signal_prompt.py`.
+
 ## [0.2.3.0] - 2026-04-10
 
 ### Security

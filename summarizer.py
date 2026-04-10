@@ -190,7 +190,13 @@ async def _call_ollama_native(
             "options": {
                 "num_predict": max_tokens,
                 "temperature": 0.3,
-                "repeat_penalty": 1.3,
+                # repeat_penalty > 1.0 penalises tokens that have already
+                # appeared in the *generated output*.  Multi-key JSON requires
+                # { " : to repeat many times; a penalty above 1.0 compounds
+                # on each occurrence and eventually makes those tokens
+                # impossible, producing empty or truncated JSON.  Keep at 1.0
+                # (disabled) regardless of how the prompt looks.
+                "repeat_penalty": 1.0,
             },
             "think": enable_thinking,
         },
@@ -198,8 +204,20 @@ async def _call_ollama_native(
     )
     resp.raise_for_status()
     data = resp.json()
-    text = data.get("message", {}).get("content", "").strip()
+    # Some Ollama versions return HTTP 200 with {"error": "..."} instead of 4xx.
+    if err := data.get("error"):
+        raise ValueError(f"Ollama 오류 응답: {err}")
+    msg = data.get("message", {})
+    text = msg.get("content", "").strip()
     if not text:
+        # If Ollama returned thinking content but empty actual content, the
+        # model used all tokens for reasoning.  Log the thinking length so
+        # callers can tune max_tokens accordingly.
+        thinking = msg.get("thinking", "")
+        if thinking:
+            raise ValueError(
+                f"Ollama 빈 응답 (think={len(thinking)}자) — max_tokens를 늘리거나 think:false 확인 필요"
+            )
         raise ValueError("Ollama 네이티브 빈 응답 반환")
     return text
 
@@ -250,7 +268,10 @@ async def _summarize_ollama(
     # → 네이티브 /api/chat 엔드포인트 사용
     raw = await _call_ollama_native(
         http, OLLAMA_MODEL, prompt,
-        timeout=120.0, max_tokens=300,
+        # 600 tokens: enough for ~300-token think block + 2-3 Korean summary
+        # sentences.  300 was too small — thinking filled the budget and the
+        # actual summary was cut off entirely.
+        timeout=120.0, max_tokens=600,
         system_prompt=SYSTEM_PROMPT_SUMMARY,
         enable_thinking=False,
     )
