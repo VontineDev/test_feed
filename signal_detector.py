@@ -101,7 +101,8 @@ Guidelines:
 - strength 4-5: strong/direct signal
 - If no specific ticker, use empty list []
 - reason: Write in Korean only. Do not mix Chinese characters or Chinese language.
-{macro_section}"""
+{macro_section}
+Output ONLY the JSON object. Do not repeat any context. No preamble, no explanation."""
 
 # Qwen3 사고 억제: enable_thinking=False 시 _call_ollama_native가 /no_think\n\n 을 prepend
 
