@@ -381,6 +381,28 @@ async def _process_update(http: httpx.AsyncClient, update: dict, pool) -> None:
 
 # ── 봇 폴링 루프 (별도 asyncio 태스크로 실행) ────────────────
 
+async def _register_commands(http: httpx.AsyncClient) -> None:
+    """Telegram에 봇 명령어 목록을 등록 (/ 입력 시 자동완성에 표시됨)."""
+    token = _get_token()
+    url = TELEGRAM_API.format(token=token, method="setMyCommands")
+    commands = [
+        {"command": "status",   "description": "크롤러 상태 (업타임, 수집 건수)"},
+        {"command": "signals",  "description": "최근 매매 신호 10건"},
+        {"command": "today",    "description": "오늘 수집 현황 + 최신 기사"},
+        {"command": "backtest", "description": "교차분석 백테스팅 리포트"},
+        {"command": "volume",   "description": "시간대별 거래량 패턴 분석"},
+        {"command": "help",     "description": "명령어 목록"},
+    ]
+    try:
+        resp = await http.post(url, json={"commands": commands}, timeout=10)
+        if resp.json().get("ok"):
+            logger.info("[봇] 명령어 목록 등록 완료 (%d개)", len(commands))
+        else:
+            logger.warning("[봇] 명령어 등록 실패: %s", resp.json().get("description"))
+    except Exception as e:
+        logger.warning("[봇] 명령어 등록 오류: %s", e)
+
+
 async def bot_polling_loop(pool) -> None:
     """
     run_scheduler의 main()에서 asyncio.create_task()로 실행.
@@ -390,6 +412,7 @@ async def bot_polling_loop(pool) -> None:
     logger.info("[봇] 명령어 수신 시작 (/status /signals /today /help)")
 
     async with httpx.AsyncClient() as http:
+        await _register_commands(http)
         while True:
             try:
                 updates = await _get_updates(http, _last_update_id + 1)

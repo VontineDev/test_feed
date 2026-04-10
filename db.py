@@ -15,6 +15,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import quote
 
 import asyncpg
 
@@ -42,7 +43,8 @@ def get_dsn() -> str:
             "DB_PASSWORD 환경변수가 설정되지 않았습니다. "
             ".env 파일에 DB_PASSWORD=<password>를 추가하거나 DATABASE_URL을 사용하세요."
         )
-    return f"postgresql://{user}:{password}@{host}:{port}/{dbname}"
+    # URL-encode password so special chars (&, #, /, @, etc.) don't break DSN parsing
+    return f"postgresql://{quote(user, safe='')}:{quote(password, safe='')}@{host}:{port}/{dbname}"
 
 
 # ── 테이블 DDL ────────────────────────────────────────────────
