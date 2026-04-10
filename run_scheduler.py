@@ -29,6 +29,7 @@ from typing import Optional
 
 import feedparser
 import httpx
+from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -40,7 +41,7 @@ except ImportError:
     pass  # python-dotenv 미설치 시 환경변수 직접 설정으로 동작
 
 from summarizer import summarize, Backend
-from db import create_pool, init_db, save_article, save_signal, save_cross_analysis, load_seen_hashes
+from db import create_pool, get_dsn, init_db, save_article, save_signal, save_cross_analysis, load_seen_hashes
 from telegram_notify import send_signal as tg_send_signal
 from signal_detector import detect_signal
 from article_fetcher import fetch_article_body
@@ -513,7 +514,9 @@ async def main(interval: int, enable_summary: bool) -> None:
         worker_task = asyncio.create_task(summary_worker())
 
     # 수집 스케줄러 등록
-    scheduler = AsyncIOScheduler(timezone="UTC")
+    _dsn = get_dsn().replace("postgresql://", "postgresql+psycopg2://", 1)
+    jobstores = {"default": SQLAlchemyJobStore(url=_dsn)}
+    scheduler = AsyncIOScheduler(timezone="UTC", jobstores=jobstores)
     scheduler.add_job(
         collect_job,
         trigger="interval",
@@ -522,6 +525,7 @@ async def main(interval: int, enable_summary: bool) -> None:
         next_run_time=datetime.now(timezone.utc) + timedelta(seconds=3),  # 스케줄러 시작 후 3초 뒤 첫 실행
         max_instances=1,                            # 중복 실행 방지
         coalesce=True,                              # 밀린 잡 합치기
+        replace_existing=True,
     )
 
     # ── 백테스팅: 가격 체크포인트 트래커 (30분 간격) ──────────
@@ -543,6 +547,7 @@ async def main(interval: int, enable_summary: bool) -> None:
         id="price_tracker",
         max_instances=1,
         coalesce=True,
+        replace_existing=True,
     )
 
     # ── 백테스팅: 주간 리포트 (일요일 20:00 KST) ───────────────
@@ -576,6 +581,7 @@ async def main(interval: int, enable_summary: bool) -> None:
         id="weekly_backtest",
         max_instances=1,
         misfire_grace_time=3600,
+        replace_existing=True,
     )
 
     # ── 거래량 분석: 일일 배치 리포트 (평일 15:40 KST) ──────────
@@ -632,6 +638,7 @@ async def main(interval: int, enable_summary: bool) -> None:
         id="daily_volume_report",
         max_instances=1,
         misfire_grace_time=3600,
+        replace_existing=True,
     )
 
     scheduler.start()

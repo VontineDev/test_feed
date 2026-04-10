@@ -16,9 +16,11 @@ pandas>=2.0.0
 
 # Database
 asyncpg>=0.29.0
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
 
 # Scheduling
-APScheduler>=3.10.0
+APScheduler>=3.10.4
 
 # Environment variables
 python-dotenv>=1.0.0
