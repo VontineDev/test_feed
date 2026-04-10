@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 # ── backtest 모듈 import ──────────────────────────────────────
-from backtest import _esc, calculate_metrics, backtest_report_telegram
+from backtest import _esc, calculate_metrics, backtest_report_telegram, cross_analyze_historical
 
 
 # ═════════════════════════════════════════════════════════════
@@ -288,3 +288,76 @@ class TestBaselineTelegramEsc:
         assert "48\\.3%" in line
         assert "\\(BUY\\)" in line
         assert "\\(SELL\\)" in line
+
+
+# ═════════════════════════════════════════════════════════════
+# TestBuildPriceContextCache — isocalendar cache in backfill_historical
+# ═════════════════════════════════════════════════════════════
+
+class TestBuildPriceContextCache:
+    @pytest.mark.asyncio
+    async def test_same_symbol_week_not_refetched(self):
+        """Second call with same (symbol, iso_week) does NOT re-fetch from yfinance."""
+        from datetime import datetime, timezone
+        from unittest.mock import patch
+        from market_data import PriceContext
+
+        mock_ctx = PriceContext(
+            ticker="삼성전자", symbol="005930.KS", source="yfinance",
+            current=70000.0, change_pct=0.5,
+            rsi=50.0, volume_ratio=1.0,
+            week52_high=80000.0, week52_low=60000.0,
+            volume_surge=False, success=True,
+        )
+
+        as_of = datetime(2026, 4, 7, tzinfo=timezone.utc)  # ISO week 15
+        cache: dict = {}
+
+        with patch("backtest._build_price_context_historical", return_value=mock_ctx) as mock_build:
+            # First call: cache miss — should call _build_price_context_historical
+            await cross_analyze_historical(
+                direction="BUY", strength=3,
+                tickers=["삼성전자"], ticker_symbols={"삼성전자": "005930.KS"},
+                as_of_date=as_of, _ctx_cache=cache,
+            )
+            assert mock_build.call_count == 1
+
+            # Second call: same symbol, same ISO week — should NOT call again
+            await cross_analyze_historical(
+                direction="BUY", strength=3,
+                tickers=["삼성전자"], ticker_symbols={"삼성전자": "005930.KS"},
+                as_of_date=as_of, _ctx_cache=cache,
+            )
+            assert mock_build.call_count == 1  # still 1, not 2
+
+    @pytest.mark.asyncio
+    async def test_different_week_refetches(self):
+        """Different ISO week for same symbol fetches independently."""
+        from datetime import datetime, timezone
+        from unittest.mock import patch
+        from market_data import PriceContext
+
+        mock_ctx = PriceContext(
+            ticker="삼성전자", symbol="005930.KS", source="yfinance",
+            current=70000.0, change_pct=0.5,
+            rsi=50.0, volume_ratio=1.0,
+            week52_high=80000.0, week52_low=60000.0,
+            volume_surge=False, success=True,
+        )
+
+        week1 = datetime(2026, 4, 7, tzinfo=timezone.utc)   # ISO week 15
+        week2 = datetime(2026, 4, 14, tzinfo=timezone.utc)  # ISO week 16
+        cache: dict = {}
+
+        with patch("backtest._build_price_context_historical", return_value=mock_ctx) as mock_build:
+            await cross_analyze_historical(
+                direction="BUY", strength=3,
+                tickers=["삼성전자"], ticker_symbols={"삼성전자": "005930.KS"},
+                as_of_date=week1, _ctx_cache=cache,
+            )
+            await cross_analyze_historical(
+                direction="BUY", strength=3,
+                tickers=["삼성전자"], ticker_symbols={"삼성전자": "005930.KS"},
+                as_of_date=week2, _ctx_cache=cache,
+            )
+            assert mock_build.call_count == 2  # different week → two fetches

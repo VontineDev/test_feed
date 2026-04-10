@@ -232,10 +232,13 @@ async def cross_analyze_historical(
     tickers: list[str],
     ticker_symbols: dict[str, str] | None,
     as_of_date: datetime,
+    _ctx_cache: Optional[dict] = None,
 ) -> CrossAnalysis:
     """
     과거 시점(as_of_date) 기준으로 교차분석 실행.
     cross_analyze()를 직접 호출하여 판정 로직 중복 방지.
+    _ctx_cache: session-scoped dict keyed by (symbol, iso_year, iso_week) —
+    avoids re-fetching 365-day history for the same symbol/week combo.
     """
     # 심볼 해석 (기존 로직 재활용)
     resolved: dict[str, str] = {}
@@ -247,12 +250,21 @@ async def cross_analyze_historical(
             if key in YFINANCE_MAP:
                 resolved[tk] = YFINANCE_MAP[key]
 
+    iso = as_of_date.isocalendar()
+    cache_week = (iso.year, iso.week)
+
     contexts: list[PriceContext] = []
     for tk, sym in resolved.items():
-        ctx = _build_price_context_historical(sym, tk, as_of_date)
+        cache_key = (sym, cache_week[0], cache_week[1])
+        if _ctx_cache is not None and cache_key in _ctx_cache:
+            ctx = _ctx_cache[cache_key]
+        else:
+            ctx = _build_price_context_historical(sym, tk, as_of_date)
+            if _ctx_cache is not None:
+                _ctx_cache[cache_key] = ctx
+            await asyncio.sleep(0.3)
         if ctx and ctx.success:
             contexts.append(ctx)
-        await asyncio.sleep(0.3)
 
     if not contexts:
         return CrossAnalysis(
@@ -296,6 +308,7 @@ async def backfill_historical(pool, since: Optional[str] = None) -> dict:
     logger.info("[백필] %d개 신호 백필 시작", len(rows))
     processed = 0
     skipped = 0
+    _ctx_cache: dict = {}  # (symbol, iso_year, iso_week) → PriceContext | None
 
     for row in rows:
         tickers = row["tickers"] or []
@@ -310,6 +323,7 @@ async def backfill_historical(pool, since: Optional[str] = None) -> dict:
             tickers=tickers,
             ticker_symbols=None,
             as_of_date=as_of,
+            _ctx_cache=_ctx_cache,
         )
 
         cross_id = await save_cross_analysis(pool, row["signal_id"], cross)
