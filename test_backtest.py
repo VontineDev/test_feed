@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 # ── backtest 모듈 import ──────────────────────────────────────
-from backtest import _esc, calculate_metrics
+from backtest import _esc, calculate_metrics, backtest_report_telegram
 
 
 # ═════════════════════════════════════════════════════════════
@@ -52,9 +52,8 @@ class TestEsc:
 # ═════════════════════════════════════════════════════════════
 
 def _make_pool(rows: list[dict]):
-    """asyncpg pool mock — conn.fetch() 가 rows를 반환."""
-    conn = AsyncMock()
-    conn.fetch = AsyncMock(return_value=[
+    """asyncpg pool mock — first conn.fetch() returns rows, second (baseline) returns []."""
+    metrics_result = [
         {
             "verdict": r["verdict"],
             "direction": r["direction"],
@@ -63,7 +62,9 @@ def _make_pool(rows: list[dict]):
             "return_pct": r["return_pct"],
         }
         for r in rows
-    ])
+    ]
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(side_effect=[metrics_result, []])
     pool = MagicMock()
     pool.acquire = MagicMock(return_value=AsyncMock(
         __aenter__=AsyncMock(return_value=conn),
@@ -165,3 +166,125 @@ async def test_calculate_metrics_mixed_watch_directional():
     # 3 total rows, but only 2 directional (BUY) — hit_rate = 1/2 = 50%
     assert confirm_1d["count"] == 3
     assert confirm_1d["hit_rate"] == 50.0
+
+
+# ═════════════════════════════════════════════════════════════
+# TestMarketBaseline — two-query calculate_metrics()
+# ═════════════════════════════════════════════════════════════
+
+def _make_pool_two_queries(metrics_rows: list[dict], baseline_rows: list[dict]):
+    """
+    asyncpg pool mock where conn.fetch() returns different results for each call:
+    first call → metrics_rows, second call → baseline_rows.
+    """
+    metrics_result = [
+        {
+            "verdict": r["verdict"],
+            "direction": r["direction"],
+            "score": r.get("score", 5),
+            "checkpoint": r.get("checkpoint", "1d"),
+            "return_pct": r["return_pct"],
+        }
+        for r in metrics_rows
+    ]
+    baseline_result = [
+        {
+            "direction": r["direction"],
+            "up_count": r["up_count"],
+            "down_count": r["down_count"],
+            "total": r["total"],
+        }
+        for r in baseline_rows
+    ]
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(side_effect=[metrics_result, baseline_result])
+    pool = MagicMock()
+    pool.acquire = MagicMock(return_value=AsyncMock(
+        __aenter__=AsyncMock(return_value=conn),
+        __aexit__=AsyncMock(return_value=False),
+    ))
+    return pool
+
+
+class TestMarketBaseline:
+    @pytest.mark.asyncio
+    async def test_baseline_buy_sell_computed(self):
+        """BUY baseline = up_count/total, SELL baseline = down_count/total."""
+        metrics_rows = [
+            {"verdict": "CONFIRM", "direction": "BUY", "return_pct": 1.0, "checkpoint": "1d"},
+        ]
+        baseline_rows = [
+            {"direction": "BUY",  "up_count": 54, "down_count": 46, "total": 100},
+            {"direction": "SELL", "up_count": 48, "down_count": 52, "total": 100},
+        ]
+        pool = _make_pool_two_queries(metrics_rows, baseline_rows)
+        metrics = await calculate_metrics(pool)
+
+        assert metrics["market_baseline"] is not None
+        assert metrics["market_baseline"]["BUY"] == 54.0
+        assert metrics["market_baseline"]["SELL"] == 52.0
+
+    @pytest.mark.asyncio
+    async def test_baseline_none_when_no_data(self):
+        """Empty baseline query → market_baseline is None."""
+        metrics_rows = [
+            {"verdict": "CONFIRM", "direction": "BUY", "return_pct": 1.0, "checkpoint": "1d"},
+        ]
+        pool = _make_pool_two_queries(metrics_rows, [])
+        metrics = await calculate_metrics(pool)
+
+        assert metrics["market_baseline"] is None
+
+    @pytest.mark.asyncio
+    async def test_baseline_zero_total_no_division_error(self):
+        """total=0 in baseline row should not raise ZeroDivisionError."""
+        metrics_rows = [
+            {"verdict": "CONFIRM", "direction": "BUY", "return_pct": 1.0, "checkpoint": "1d"},
+        ]
+        baseline_rows = [
+            {"direction": "BUY", "up_count": 0, "down_count": 0, "total": 0},
+        ]
+        pool = _make_pool_two_queries(metrics_rows, baseline_rows)
+        metrics = await calculate_metrics(pool)
+        # total=0 row is skipped — market_baseline may be None or {}
+        bl = metrics["market_baseline"]
+        assert bl is None or "BUY" not in bl
+
+    @pytest.mark.asyncio
+    async def test_baseline_in_market_baseline_key(self):
+        """market_baseline is a top-level key on the metrics dict."""
+        metrics_rows = [
+            {"verdict": "CONFIRM", "direction": "BUY", "return_pct": 1.0, "checkpoint": "1d"},
+        ]
+        baseline_rows = [
+            {"direction": "BUY", "up_count": 60, "down_count": 40, "total": 100},
+        ]
+        pool = _make_pool_two_queries(metrics_rows, baseline_rows)
+        metrics = await calculate_metrics(pool)
+
+        assert "market_baseline" in metrics
+        assert isinstance(metrics["market_baseline"], dict)
+        assert metrics["market_baseline"]["BUY"] == 60.0
+
+
+# ═════════════════════════════════════════════════════════════
+# TestBaselineTelegramEsc — "랜덤 기준선" line in MarkdownV2
+# ═════════════════════════════════════════════════════════════
+
+class TestBaselineTelegramEsc:
+    def test_baseline_percent_escaped(self):
+        """Percentage values in baseline line must have '.' escaped as '\\.'."""
+        # 54.1% → 54\\.1% in MarkdownV2
+        result = _esc("54.1%")
+        assert "\\." in result
+        assert result == "54\\.1%"
+
+    def test_baseline_line_format(self):
+        """랜덤 기준선 line contains escaped percent values for BUY and SELL."""
+        buy = _esc("54.1%")
+        sell = _esc("48.3%")
+        line = f"랜덤 기준선: {buy} \\(BUY\\) / {sell} \\(SELL\\)"
+        assert "54\\.1%" in line
+        assert "48\\.3%" in line
+        assert "\\(BUY\\)" in line
+        assert "\\(SELL\\)" in line

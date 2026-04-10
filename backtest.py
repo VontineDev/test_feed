@@ -399,9 +399,37 @@ async def calculate_metrics(
 
     async with pool.acquire() as conn:
         rows = await conn.fetch(query, *args)
+        baseline_rows = await conn.fetch("""
+            SELECT s.direction,
+                   COUNT(*) FILTER (WHERE po.return_pct > 0) AS up_count,
+                   COUNT(*) FILTER (WHERE po.return_pct < 0) AS down_count,
+                   COUNT(*) AS total
+            FROM price_outcomes po
+            JOIN cross_analysis_prices cap ON cap.id = po.cross_price_id
+            JOIN cross_analysis_results car ON car.id = cap.cross_id
+            JOIN trade_signals s ON s.id = car.signal_id
+            WHERE po.checkpoint = '1d' AND po.return_pct IS NOT NULL
+            GROUP BY s.direction
+        """)
 
     if not rows:
         return {"message": "데이터 없음", "rows": 0}
+
+    # 시장 기준선 계산
+    market_baseline: dict[str, float] | None = None
+    if baseline_rows:
+        bl: dict[str, float] = {}
+        for br in baseline_rows:
+            total = br["total"] or 0
+            if total == 0:
+                continue
+            direction = br["direction"]
+            if direction == "BUY":
+                bl["BUY"] = round(br["up_count"] / total * 100, 1)
+            elif direction == "SELL":
+                bl["SELL"] = round(br["down_count"] / total * 100, 1)
+        if bl:
+            market_baseline = bl
 
     # 그룹별 집계
     groups: dict[tuple, list[dict]] = defaultdict(list)
@@ -487,6 +515,7 @@ async def calculate_metrics(
         "rows": len(rows),
         "by_verdict_checkpoint": metrics,
         "score_correlation": score_corr,
+        "market_baseline": market_baseline,
     }
 
 
@@ -587,6 +616,17 @@ def save_report_csv(metrics: dict, path: Optional[str] = None) -> str:
         for bucket, data in sorted(sc.items()):
             writer.writerow([bucket, data["count"], data["avg_return"]])
 
+        # 시장 기준선
+        baseline = metrics.get("market_baseline")
+        if baseline:
+            writer.writerow([])
+            writer.writerow(["시장기준선", "BUY(%)", "SELL(%)"])
+            writer.writerow([
+                "랜덤기준선",
+                baseline.get("BUY", ""),
+                baseline.get("SELL", ""),
+            ])
+
     logger.info("[리포트] CSV 저장: %s", filepath)
     return str(filepath)
 
@@ -615,6 +655,7 @@ def save_report_json(metrics: dict, path: Optional[str] = None) -> str:
         "total_rows": metrics["rows"],
         "by_verdict_checkpoint": serializable_vc,
         "score_correlation": metrics.get("score_correlation", {}),
+        "market_baseline": metrics.get("market_baseline"),
     }
 
     with open(filepath, "w", encoding="utf-8") as f:
@@ -726,7 +767,14 @@ async def backtest_report_telegram(pool) -> str:
         lines.append(freshness_warning)
 
     lines.append(f"📊 *백테스팅 리포트* \\({today}\\)")
-    lines.append(f"총 데이터: {_esc(str(metrics['rows']))}건\n")
+    lines.append(f"총 데이터: {_esc(str(metrics['rows']))}건")
+
+    baseline = metrics.get("market_baseline")
+    if baseline:
+        buy_str = _esc(f"{baseline['BUY']:.1f}%") if "BUY" in baseline else "N/A"
+        sell_str = _esc(f"{baseline['SELL']:.1f}%") if "SELL" in baseline else "N/A"
+        lines.append(f"랜덤 기준선: {buy_str} \\(BUY\\) / {sell_str} \\(SELL\\)")
+    lines.append("")
 
     # 판정별 적중률 (1d 체크포인트)
     by_vc = metrics.get("by_verdict_checkpoint", {})
