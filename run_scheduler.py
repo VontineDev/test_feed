@@ -29,7 +29,6 @@ from typing import Optional
 
 import feedparser
 import httpx
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -514,6 +513,7 @@ async def main(interval: int, enable_summary: bool) -> None:
         worker_task = asyncio.create_task(summary_worker())
 
     # 수집 스케줄러 등록
+    from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
     _dsn = get_dsn().replace("postgresql://", "postgresql+psycopg2://", 1)
     jobstores = {"default": SQLAlchemyJobStore(url=_dsn)}
     scheduler = AsyncIOScheduler(timezone="UTC", jobstores=jobstores)
