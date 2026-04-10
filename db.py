@@ -180,10 +180,37 @@ async def create_pool(dsn: Optional[str] = None) -> asyncpg.Pool:
 
 
 # ── 테이블 생성 ───────────────────────────────────────────────
+_CREATE_KRX_TABLE = """
+CREATE TABLE IF NOT EXISTS krx_listings (
+    isin_code       TEXT PRIMARY KEY,
+    short_code      TEXT NOT NULL,
+    name_ko         TEXT NOT NULL,
+    name_ko_abbr    TEXT,
+    name_en         TEXT,
+    listed_at       DATE,
+    market          TEXT,
+    security_type   TEXT,
+    sector          TEXT,
+    stock_type      TEXT,
+    par_value       TEXT,
+    listed_shares   BIGINT,
+    yfinance_symbol TEXT NOT NULL,
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_krx_listings_name_ko
+    ON krx_listings (name_ko);
+CREATE INDEX IF NOT EXISTS idx_krx_listings_name_ko_abbr
+    ON krx_listings (name_ko_abbr);
+CREATE INDEX IF NOT EXISTS idx_krx_listings_short_code
+    ON krx_listings (short_code);
+"""
+
+
 async def init_db(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
         await conn.execute(_CREATE_TABLE)
-    logger.info("DB 테이블 준비 완료 (news_articles)")
+        await conn.execute(_CREATE_KRX_TABLE)
+    logger.info("DB 테이블 준비 완료 (news_articles, krx_listings)")
 
 
 # ── 중복 체크 ─────────────────────────────────────────────────

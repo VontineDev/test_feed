@@ -57,6 +57,10 @@ class TestParseListedAt:
     def test_non_numeric_returns_none(self):
         assert _parse_listed_at("abcdefgh") is None
 
+    def test_invalid_calendar_date_returns_none(self):
+        # Passes length/digit check but fails date(2000, 13, 40) → ValueError
+        assert _parse_listed_at("20001340") is None
+
 
 # ── _parse_listed_shares ─────────────────────────────────────────────────────
 
@@ -247,10 +251,15 @@ class TestSyncKrxListings:
         mock_resp.raise_for_status = MagicMock()
         mock_resp.content = euc_kr_bytes
 
+        mock_tx = MagicMock()
+        mock_tx.__aenter__ = AsyncMock(return_value=None)
+        mock_tx.__aexit__ = AsyncMock(return_value=False)
+
         mock_conn = AsyncMock()
         mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
         mock_conn.__aexit__ = AsyncMock(return_value=False)
-        mock_conn.execute = AsyncMock()
+        mock_conn.transaction = MagicMock(return_value=mock_tx)
+        mock_conn.execute = AsyncMock(return_value="DELETE 0")
         mock_conn.executemany = AsyncMock()
 
         mock_pool = AsyncMock()
@@ -292,4 +301,36 @@ class TestSyncKrxListings:
             mock_client_cls.return_value = mock_http
 
             with pytest.raises(ValueError, match="OutBlock_1"):
+                await sync_krx_listings(mock_pool)
+
+    @pytest.mark.asyncio
+    async def test_itotcnt_mismatch_raises(self):
+        """iTotCnt mismatch should raise ValueError (possible pagination)."""
+        from krx_sync import sync_krx_listings
+
+        sample_row = {
+            "ISU_CD": "KR7005930003", "ISU_SRT_CD": "005930",
+            "ISU_NM": "삼성전자", "ISU_ABBRV": "삼성전자",
+            "ISU_ENG_NM": "Samsung Electronics", "LIST_DD": "19750611",
+            "MKT_NM": "KOSPI", "SECUGRP_NM": "주권",
+            "SECT_TP_NM": "대형주", "KIND_STKCERT_TP_NM": "보통주",
+            "PAR_VAL": "100", "LIST_SHRS": "5969782550",
+        }
+        # iTotCnt claims 2 rows but only 1 delivered
+        payload = json.dumps({"OutBlock_1": [sample_row], "iTotCnt": "2"})
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.content = payload.encode("utf-8")
+
+        mock_pool = AsyncMock()
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_http = AsyncMock()
+            mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+            mock_http.__aexit__ = AsyncMock(return_value=False)
+            mock_http.post = AsyncMock(return_value=mock_resp)
+            mock_client_cls.return_value = mock_http
+
+            with pytest.raises(ValueError, match="iTotCnt"):
                 await sync_krx_listings(mock_pool)

@@ -1,12 +1,14 @@
 """
 krx_sync.py — KRX 전체 종목 리스트를 krx_listings 테이블에 동기화.
 출처: data.krx.co.kr (공개 API, 인증 불필요)
+
+krx_listings 테이블은 db.py의 init_db()에서 생성됩니다.
 """
 from __future__ import annotations
 
 import json
 import logging
-from datetime import date
+from datetime import date, timezone, datetime
 from typing import Any, Optional
 
 import asyncpg
@@ -25,31 +27,6 @@ KRX_PAYLOAD = {
 
 # KOSPI와 KOSDAQ만 yfinance로 조회 가능. KONEX 등은 심볼이 없으므로 제외.
 SUPPORTED_MARKETS: frozenset[str] = frozenset({"KOSPI", "KOSDAQ"})
-
-CREATE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS krx_listings (
-    isin_code       TEXT PRIMARY KEY,
-    short_code      TEXT NOT NULL,
-    name_ko         TEXT NOT NULL,
-    name_ko_abbr    TEXT,
-    name_en         TEXT,
-    listed_at       DATE,
-    market          TEXT,
-    security_type   TEXT,
-    sector          TEXT,
-    stock_type      TEXT,
-    par_value       TEXT,
-    listed_shares   BIGINT,
-    yfinance_symbol TEXT NOT NULL,
-    updated_at      TIMESTAMPTZ DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_krx_listings_name_ko
-    ON krx_listings (name_ko);
-CREATE INDEX IF NOT EXISTS idx_krx_listings_name_ko_abbr
-    ON krx_listings (name_ko_abbr);
-CREATE INDEX IF NOT EXISTS idx_krx_listings_short_code
-    ON krx_listings (short_code);
-"""
 
 UPSERT_SQL = """
 INSERT INTO krx_listings
@@ -138,11 +115,9 @@ async def sync_krx_listings(pool: asyncpg.Pool) -> int:
     """
     data.krx.co.kr에서 전체 종목 리스트를 가져와 krx_listings에 upsert.
     반환값: upsert된 행 수. 오류 시 예외 발생.
-    """
-    # 테이블이 없으면 생성
-    async with pool.acquire() as conn:
-        await conn.execute(CREATE_TABLE_SQL)
 
+    전제: init_db()가 먼저 호출되어 krx_listings 테이블이 생성돼 있어야 합니다.
+    """
     logger.info("[krx_sync] data.krx.co.kr 전체 종목 조회 시작 ...")
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(KRX_API_URL, data=KRX_PAYLOAD)
@@ -155,16 +130,14 @@ async def sync_krx_listings(pool: asyncpg.Pool) -> int:
 
     rows_raw = data.get("OutBlock_1", [])
     if not rows_raw:
-        raise ValueError(
-            f"[krx_sync] OutBlock_1이 비어 있음 — 응답 키: {list(data)}"
-        )
+        raise ValueError("[krx_sync] OutBlock_1이 비어 있음")
 
-    # 총 건수 검증 (페이지네이션 발생 감지)
+    # 총 건수 검증: 불일치 시 페이지네이션으로 인한 부분 응답으로 간주하고 중단
     i_tot = data.get("iTotCnt")
     if i_tot is not None and int(i_tot) != len(rows_raw):
-        logger.warning(
-            "[krx_sync] iTotCnt=%s이지만 수신 %d행 — 응답이 페이지네이션됐을 수 있음",
-            i_tot, len(rows_raw),
+        raise ValueError(
+            f"[krx_sync] iTotCnt={i_tot}이지만 수신 {len(rows_raw)}행 "
+            "— 응답이 페이지네이션됐을 수 있음. upsert 중단."
         )
 
     params_list = [p for item in rows_raw if (p := _row_to_params(item)) is not None]
@@ -172,8 +145,24 @@ async def sync_krx_listings(pool: asyncpg.Pool) -> int:
     if skipped:
         logger.debug("[krx_sync] %d행 건너뜀 (KONEX/미지원 시장 또는 필수 필드 누락)", skipped)
 
+    # sync_start_ts: upsert 시작 시각. 이 시각보다 오래된 행은 상장폐지된 종목으로 간주.
+    sync_start_ts = datetime.now(tz=timezone.utc)
+
     async with pool.acquire() as conn:
-        await conn.executemany(UPSERT_SQL, params_list)
+        async with conn.transaction():
+            await conn.executemany(UPSERT_SQL, params_list)
+            # 이번 sync에서 갱신되지 않은 행 = 상장폐지 종목 → 삭제
+            deleted_status = await conn.execute(
+                "DELETE FROM krx_listings WHERE updated_at < $1",
+                sync_start_ts,
+            )
+            try:
+                # asyncpg execute() returns "DELETE N"
+                deleted_count = int(str(deleted_status).split()[-1])
+            except (ValueError, IndexError):
+                deleted_count = 0
+            if deleted_count:
+                logger.info("[krx_sync] 상장폐지 종목 %d행 삭제", deleted_count)
 
     logger.info("[krx_sync] %d행 upsert 완료 (건너뜀 %d)", len(params_list), skipped)
     return len(params_list)

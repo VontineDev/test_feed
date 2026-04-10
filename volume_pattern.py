@@ -96,11 +96,8 @@ def resolve_ticker(raw: str) -> tuple[str, str, str]:
 
     # 0) DB 캐시 — KRX 전체 종목 (정적 맵보다 넓은 커버리지)
     cached_symbol = ticker_cache.resolve(raw)
-    if cached_symbol:
-        if cached_symbol.endswith(".KS"):
-            return cached_symbol, raw, "KR"
-        elif cached_symbol.endswith(".KQ"):
-            return cached_symbol, raw, "KR"
+    if cached_symbol and cached_symbol.endswith((".KS", ".KQ")):
+        return cached_symbol, raw, "KR"
         # 예상치 못한 접미사 → 정적 맵으로 폴백
 
     # 1) 한글/영문 별명 → 코스닥이면 .KQ, 코스피면 .KS

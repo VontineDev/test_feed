@@ -516,7 +516,9 @@ async def main(interval: int, enable_summary: bool) -> None:
             logger.warning("[krx_sync] 초기 동기화 실패: %s — DB에 기존 데이터로 캐시 로드", _krx_e)
         finally:
             try:
-                await _ticker_cache.load(_db_pool)
+                await asyncio.wait_for(_ticker_cache.load(_db_pool), timeout=60.0)
+            except asyncio.TimeoutError:
+                logger.warning("[ticker_cache] 캐시 로드 타임아웃 (60s) — 정적 맵으로 운영")
             except Exception as _cache_e:
                 logger.warning("[ticker_cache] 캐시 로드 실패: %s — 정적 맵으로 운영", _cache_e)
 
