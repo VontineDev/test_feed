@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.3.0] - 2026-04-10
+
+### Security
+
+- **[HIGH] Removed hardcoded default PostgreSQL password** (`db.py`): `DB_PASSWORD` now has no fallback — `get_dsn()` raises `RuntimeError` at startup if neither `DB_PASSWORD` nor `DATABASE_URL` is set. Prevents silent use of well-known credentials on misconfigured deployments.
+- **[HIGH] Fixed Telegram auth bypass** (`telegram_bot.py`): `_get_allowed_ids()` now raises `RuntimeError` when both `ALLOWED_CHAT_IDS` and `TELEGRAM_CHAT_ID` are unset, instead of returning `set()` which caused the `if allowed and ...` guard to short-circuit and allow all users.
+- **[MEDIUM] Removed default PostgreSQL password from `docker-compose.yml`**: `POSTGRES_PASSWORD: ${DB_PASSWORD:-news1234}` → `${DB_PASSWORD}` (no fallback). Container startup now fails explicitly if `DB_PASSWORD` is not in `.env`.
+- **[MEDIUM] Bound PostgreSQL port to loopback** (`docker-compose.yml`): `"5432:5432"` → `"127.0.0.1:5432:5432"` — prevents remote access to the DB port on servers without an application-layer firewall.
+- **[MEDIUM] Dockerfile runs as non-root**: Added `appuser` system account and `USER appuser` directive — container process no longer runs as root.
+
+### Added
+
+- `.env.example`: documents all required environment variables with placeholder values to prevent misconfiguration.
+
 ## [0.2.2.0] - 2026-04-10
 
 ### Added

@@ -58,12 +58,19 @@ def _get_chat_id() -> str:
     return os.environ.get("TELEGRAM_CHAT_ID", "")
 
 def _get_allowed_ids() -> set[str]:
-    """ALLOWED_CHAT_IDS (콤마 구분) → set. 미설정 시 TELEGRAM_CHAT_ID 단일 허용."""
+    """ALLOWED_CHAT_IDS (콤마 구분) → set. 미설정 시 TELEGRAM_CHAT_ID 단일 허용.
+    둘 다 미설정 시 RuntimeError — 무인증 접근을 허용하지 않기 위함.
+    """
     raw = os.environ.get("ALLOWED_CHAT_IDS", "").strip()
     if raw:
         return {cid.strip() for cid in raw.split(",") if cid.strip()}
     single = _get_chat_id()
-    return {single} if single else set()
+    if single:
+        return {single}
+    raise RuntimeError(
+        "ALLOWED_CHAT_IDS 또는 TELEGRAM_CHAT_ID 환경변수 중 하나는 반드시 설정해야 합니다. "
+        "미설정 시 봇 명령어가 모든 사용자에게 열립니다."
+    )
 
 def esc(text: str) -> str:
     """MarkdownV2 이스케이프"""

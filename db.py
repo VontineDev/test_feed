@@ -6,7 +6,7 @@ asyncpg 기반 비동기 커넥션 풀 사용.
 
 설정:
     환경변수 DATABASE_URL 또는 DB_* 개별 변수로 DSN 지정
-    예) DATABASE_URL=postgresql://news_user:news1234@localhost:5432/news_db
+    예) DATABASE_URL=postgresql://news_user:<password>@localhost:5432/news_db
 """
 
 from __future__ import annotations
@@ -36,7 +36,12 @@ def get_dsn() -> str:
     port     = os.environ.get("DB_PORT",     "5432")
     dbname   = os.environ.get("DB_NAME",     "news_db")
     user     = os.environ.get("DB_USER",     "news_user")
-    password = os.environ.get("DB_PASSWORD", "news1234")
+    password = os.environ.get("DB_PASSWORD")
+    if not password:
+        raise RuntimeError(
+            "DB_PASSWORD 환경변수가 설정되지 않았습니다. "
+            ".env 파일에 DB_PASSWORD=<password>를 추가하거나 DATABASE_URL을 사용하세요."
+        )
     return f"postgresql://{user}:{password}@{host}:{port}/{dbname}"
 
 
