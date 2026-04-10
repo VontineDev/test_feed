@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0.0] - 2026-04-11
+
+### Added
+- **KRX full listing DB** (`krx_sync.py`): fetches all KOSPI/KOSDAQ securities (2,500+ tickers) from KRX public API and upserts into `krx_listings` PostgreSQL table. Table is created automatically on first run. EUC-KR response encoding handled explicitly. KONEX and unsupported market types excluded.
+- **Ticker cache singleton** (`ticker_cache.py`): in-memory `TickerCache` loaded at startup and refreshed daily at 20:00 KST. Resolves Korean stock names (including full-length names that exceed KRX's 10-character display limit) and 6-digit short codes to yfinance symbols. Safe to call before `load()` — returns `None` and falls through to static maps.
+- **Automatic daily sync** (`run_scheduler.py`): APScheduler job at 20:00 KST (`Asia/Seoul`) syncs `krx_listings` and reloads the cache after market close. Startup sequence runs initial sync before the first article job fires, with `try/finally` so cache reloads from existing DB rows even if the KRX API is down.
+- **Regression tests** (`test_krx_sync.py`): 28 tests covering field parsing, KONEX exclusion, ISU_ABBRV vs ISU_NM name resolution, atomic cache reload, EUC-KR decoding, and empty-response error handling.
+
+### Changed
+- `market_data.py` `get_price_context()`: `ticker_cache.resolve()` queried before static `YFINANCE_MAP` fallback. Articles mentioning tickers not in the hardcoded map now receive full price context, RSI, and volume signals.
+- `volume_pattern.py` `resolve_ticker()`: `ticker_cache.resolve()` queried before `KR_KOSDAQ`/`KR_KOSPI` static dicts. Return type unchanged — still returns `(yfinance_ticker, display_name, market_code)` tuple.
+
 ## [0.2.4.0] - 2026-04-11
 
 ### Fixed

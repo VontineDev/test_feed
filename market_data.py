@@ -29,6 +29,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
+from ticker_cache import ticker_cache  # KRX DB-backed ticker lookup
+
 logger = logging.getLogger(__name__)
 
 
@@ -356,8 +358,14 @@ def get_price_context(
                 results.append(ctx)
                 continue
 
-        # 3. yfinance — 원본 key 시도 후, 공백 제거본(key_nsp)으로 재시도
-        symbol = YFINANCE_MAP.get(key) or YFINANCE_MAP.get(key_nsp)
+        # 3. yfinance — DB 캐시 우선 조회, 없으면 정적 YFINANCE_MAP 폴백
+        symbol = (
+            ticker_cache.resolve(raw)
+            or ticker_cache.resolve(key)
+            or ticker_cache.resolve(key_nsp)
+            or YFINANCE_MAP.get(key)
+            or YFINANCE_MAP.get(key_nsp)
+        )
         if symbol and YFINANCE_OK:
             ctx = _fetch_yfinance(symbol, raw)
             if ctx.success:

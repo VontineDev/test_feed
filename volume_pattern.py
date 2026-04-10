@@ -24,6 +24,8 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+from ticker_cache import ticker_cache  # KRX DB-backed ticker lookup
+
 # 한국 주식 별명 → KRX 종목코드
 # 코스피(KOSPI) 종목 별명 → KRX 종목코드
 KR_KOSPI = {
@@ -91,6 +93,15 @@ MARKET_TZ = {
 def resolve_ticker(raw: str) -> tuple[str, str, str]:
     """입력을 (yfinance 티커, 표시 이름, 시장 코드)로 변환한다."""
     raw = raw.strip()
+
+    # 0) DB 캐시 — KRX 전체 종목 (정적 맵보다 넓은 커버리지)
+    cached_symbol = ticker_cache.resolve(raw)
+    if cached_symbol:
+        if cached_symbol.endswith(".KS"):
+            return cached_symbol, raw, "KR"
+        elif cached_symbol.endswith(".KQ"):
+            return cached_symbol, raw, "KR"
+        # 예상치 못한 접미사 → 정적 맵으로 폴백
 
     # 1) 한글/영문 별명 → 코스닥이면 .KQ, 코스피면 .KS
     if raw in KR_KOSDAQ:
