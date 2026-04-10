@@ -411,7 +411,7 @@ async def summary_worker() -> None:
                         # ── 3-1. 시세 교차 분석 ───────────────
                         if signal.tickers:
                             try:
-                                cross = await asyncio.get_event_loop().run_in_executor(
+                                cross = await asyncio.get_running_loop().run_in_executor(
                                     None,
                                     cross_analyze,
                                     signal.direction,
