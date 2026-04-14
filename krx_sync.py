@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, timezone, datetime
+from datetime import date
 from typing import Any, Optional
 
 import asyncpg
@@ -145,11 +145,17 @@ async def sync_krx_listings(pool: asyncpg.Pool) -> int:
     if skipped:
         logger.debug("[krx_sync] %d행 건너뜀 (KONEX/미지원 시장 또는 필수 필드 누락)", skipped)
 
-    # sync_start_ts: upsert 시작 시각. 이 시각보다 오래된 행은 상장폐지된 종목으로 간주.
-    sync_start_ts = datetime.now(tz=timezone.utc)
+    if not params_list:
+        raise ValueError(
+            f"[krx_sync] 유효한 종목이 없음 (전체 {len(rows_raw)}행 필터링됨) "
+            "— upsert 중단"
+        )
 
     async with pool.acquire() as conn:
         async with conn.transaction():
+            # sync_start_ts를 Postgres에서 가져와 clock skew 방지.
+            # Python 시계가 Postgres보다 앞서면 방금 upsert한 행이 삭제될 수 있음.
+            sync_start_ts = await conn.fetchval("SELECT NOW()")
             await conn.executemany(UPSERT_SQL, params_list)
             # 이번 sync에서 갱신되지 않은 행 = 상장폐지 종목 → 삭제
             deleted_status = await conn.execute(

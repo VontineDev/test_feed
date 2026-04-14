@@ -203,6 +203,8 @@ CREATE INDEX IF NOT EXISTS idx_krx_listings_name_ko_abbr
     ON krx_listings (name_ko_abbr);
 CREATE INDEX IF NOT EXISTS idx_krx_listings_short_code
     ON krx_listings (short_code);
+CREATE INDEX IF NOT EXISTS idx_krx_listings_updated_at
+    ON krx_listings (updated_at);
 """
 
 

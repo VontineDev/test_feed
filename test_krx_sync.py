@@ -304,6 +304,40 @@ class TestSyncKrxListings:
                 await sync_krx_listings(mock_pool)
 
     @pytest.mark.asyncio
+    async def test_all_konex_raises_before_delete(self):
+        """If all rows are KONEX (empty params_list), raise ValueError before the DELETE runs."""
+        from krx_sync import sync_krx_listings
+
+        konex_row = {
+            "ISU_CD": "KR7000000001", "ISU_SRT_CD": "000000",
+            "ISU_NM": "KONEX종목", "ISU_ABBRV": "KONEX종목",
+            "ISU_ENG_NM": "Konex Corp", "LIST_DD": "20200101",
+            "MKT_NM": "KONEX", "SECUGRP_NM": "주권",  # KONEX → filtered
+            "SECT_TP_NM": "", "KIND_STKCERT_TP_NM": "보통주",
+            "PAR_VAL": "500", "LIST_SHRS": "1000000",
+        }
+        payload = json.dumps({"OutBlock_1": [konex_row], "iTotCnt": "1"})
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.content = payload.encode("utf-8")
+
+        mock_pool = AsyncMock()
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_http = AsyncMock()
+            mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+            mock_http.__aexit__ = AsyncMock(return_value=False)
+            mock_http.post = AsyncMock(return_value=mock_resp)
+            mock_client_cls.return_value = mock_http
+
+            with pytest.raises(ValueError, match="유효한 종목이 없음"):
+                await sync_krx_listings(mock_pool)
+
+        # Pool.acquire should NEVER have been called — no transaction opened
+        mock_pool.acquire.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_itotcnt_mismatch_raises(self):
         """iTotCnt mismatch should raise ValueError (possible pagination)."""
         from krx_sync import sync_krx_listings

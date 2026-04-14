@@ -4,60 +4,74 @@ Integration tests for ticker_cache integration in market_data.py and volume_patt
 Verifies:
 - market_data.get_price_context(): cache hit resolves symbol before YFINANCE_MAP
 - market_data.get_price_context(): cache miss falls through to YFINANCE_MAP
+- market_data.get_price_context(): three name variants (raw, key, key_nsp) are tried
 - volume_pattern.resolve_ticker(): cache hit returns correct (symbol, raw, "KR") tuple
 - volume_pattern.resolve_ticker(): cache miss falls through to static maps unchanged
 """
 from __future__ import annotations
 
-from unittest.mock import patch
+from dataclasses import fields
+from unittest.mock import patch, MagicMock
+
+import market_data
+from market_data import PriceContext
+
+
+def _make_price_context(symbol: str, ticker: str) -> PriceContext:
+    return PriceContext(
+        ticker=ticker, symbol=symbol, source="yfinance",
+        current=70000.0, change_pct=1.5, rsi=55.0,
+        volume_ratio=1.2, week52_high=80000.0, week52_low=60000.0,
+        volume_surge=False, success=True,
+    )
 
 
 # ── market_data.get_price_context() cache integration ───────────────────────
 
 class TestMarketDataCacheIntegration:
-    def test_cache_hit_returns_symbol_before_yfinance_map(self, monkeypatch):
-        """ticker_cache.resolve() hit should be used instead of YFINANCE_MAP."""
-        import market_data
-
+    def test_cache_hit_used_before_yfinance_map(self, monkeypatch):
+        """Cache hit should be returned without falling through to YFINANCE_MAP."""
         monkeypatch.setattr(market_data.ticker_cache, "resolve", lambda name: "005930.KS")
+        monkeypatch.setattr(market_data, "YFINANCE_OK", True)
 
-        # Confirm resolve() is consulted and the returned symbol is used
-        result = market_data.ticker_cache.resolve("삼성전자")
-        assert result == "005930.KS"
+        expected = _make_price_context("005930.KS", "삼성전자")
+        with patch.object(market_data, "_fetch_yfinance", return_value=expected) as mock_fetch:
+            result = market_data.get_price_context(["삼성전자"])
 
-    def test_cache_miss_allows_yfinance_map_fallback(self, monkeypatch):
-        """ticker_cache.resolve() returning None should let YFINANCE_MAP be used."""
-        import market_data
+        assert len(result) == 1
+        assert result[0].symbol == "005930.KS"
+        mock_fetch.assert_called_once_with("005930.KS", "삼성전자")
 
+    def test_cache_miss_falls_through_to_yfinance_map(self, monkeypatch):
+        """Cache miss should fall through to YFINANCE_MAP for known tickers."""
         monkeypatch.setattr(market_data.ticker_cache, "resolve", lambda name: None)
+        monkeypatch.setattr(market_data, "YFINANCE_OK", True)
 
-        # With cache returning None, the code falls through to YFINANCE_MAP
-        result = market_data.ticker_cache.resolve("삼성전자")
-        assert result is None
+        expected = _make_price_context("^KS11", "코스피")
+        with patch.object(market_data, "_fetch_yfinance", return_value=expected) as mock_fetch:
+            result = market_data.get_price_context(["코스피"])
 
-    def test_cache_resolve_called_with_raw_key_keynspsq(self, monkeypatch):
-        """All three variants (raw, key, key_nsp) are tried in order."""
-        import market_data
+        assert len(result) == 1
+        assert result[0].symbol == "^KS11"
+        # YFINANCE_MAP["코스피"] == "^KS11" — confirms fallthrough path
+        mock_fetch.assert_called_once_with("^KS11", "코스피")
 
+    def test_cache_tries_three_name_variants(self, monkeypatch):
+        """resolve() must be called with raw, key (lowercased), and key_nsp (no spaces)."""
         calls = []
         def spy_resolve(name):
             calls.append(name)
-            return None  # miss on all
+            return None
 
         monkeypatch.setattr(market_data.ticker_cache, "resolve", spy_resolve)
+        monkeypatch.setattr(market_data, "YFINANCE_OK", False)
 
-        # Directly exercise the resolve calls (simulating the lookup chain)
-        raw = "삼성 전자"
-        key = raw.strip()
-        key_nsp = key.replace(" ", "")
+        market_data.get_price_context(["SK 하이닉스"])
 
-        result = (
-            market_data.ticker_cache.resolve(raw)
-            or market_data.ticker_cache.resolve(key)
-            or market_data.ticker_cache.resolve(key_nsp)
-        )
-        assert result is None
-        assert calls == [raw, key, key_nsp]
+        # raw="SK 하이닉스", key="sk 하이닉스", key_nsp="sk하이닉스"
+        assert "SK 하이닉스" in calls
+        assert "sk 하이닉스" in calls
+        assert "sk하이닉스" in calls
 
 
 # ── volume_pattern.resolve_ticker() cache integration ───────────────────────
