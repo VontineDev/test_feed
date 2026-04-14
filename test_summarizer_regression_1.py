@@ -298,3 +298,57 @@ class TestCallOllamaNativeThinkingContent:
 
         with pytest.raises(ValueError, match="Ollama 오류 응답"):
             await _call_ollama_native(http, model="qwen3:8b", prompt="test")
+
+
+# ── ISSUE-TIMEOUT: bare TimeoutError() silently blanks the log ────────────────
+
+class TestOllamaTimeoutLogging:
+    """Regression: bare TimeoutError() has str() == '' on Python 3.11+.
+
+    httpx/anyio can raise TimeoutError() (no args) when Ollama hangs.
+    Because str(TimeoutError()) == '', the caller's warning log line
+    becomes '[요약] Ollama 실패 → LM Studio 시도: ' — completely blank.
+    Operators had no way to tell the difference between a timeout and any
+    other failure.
+
+    Fix: _call_ollama_native wraps TimeoutError | httpx.TimeoutException
+    and raises ValueError with the model name and timeout duration.
+
+    Found by /investigate on 2026-04-15
+    """
+
+    @pytest.mark.asyncio
+    async def test_bare_timeout_error_raises_descriptive_value_error(self):
+        """Bare TimeoutError() (no args, str==empty) must NOT reach the caller.
+        _call_ollama_native must convert it to ValueError with a useful message."""
+        from summarizer import _call_ollama_native
+
+        http = AsyncMock(spec=httpx.AsyncClient)
+        http.post.side_effect = TimeoutError()  # bare TimeoutError, str == ""
+
+        with pytest.raises(ValueError) as exc_info:
+            await _call_ollama_native(http, model="qwen3:8b", prompt="test", timeout=30.0)
+
+        msg = str(exc_info.value)
+        assert msg, "ValueError message must not be empty — operator needs to see what went wrong"
+        assert "시간 초과" in msg or "timeout" in msg.lower(), (
+            f"Error message should mention timeout, got: {msg!r}"
+        )
+        assert "qwen3:8b" in msg, (
+            f"Error message should include the model name so operator knows which model to check, got: {msg!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_httpx_timeout_exception_raises_descriptive_value_error(self):
+        """httpx.ReadTimeout must also be wrapped with a descriptive message."""
+        from summarizer import _call_ollama_native
+
+        http = AsyncMock(spec=httpx.AsyncClient)
+        http.post.side_effect = httpx.ReadTimeout("")  # httpx timeout, empty str too
+
+        with pytest.raises(ValueError) as exc_info:
+            await _call_ollama_native(http, model="qwen3:8b", prompt="test", timeout=30.0)
+
+        msg = str(exc_info.value)
+        assert msg, "ValueError message must not be empty"
+        assert "시간 초과" in msg or "timeout" in msg.lower()
