@@ -360,3 +360,55 @@ class TestFetchDataTimezone:
         assert "Seoul" in tz_name, (
             f"Expected Asia/Seoul timezone for KR stocks, got: {tz_name}"
         )
+
+
+# ── _load_from_db connection efficiency (ISSUE-POOL) ────────────
+
+class TestLoadFromDbNoPool:
+    """Regression: _load_from_db used db.create_pool(min_size=2) on every call.
+    Each /volume invocation opened 2 Supabase connections, ran init_db (8+ DDL
+    statements), then closed the pool — all for a single SELECT.
+
+    Fix: use asyncpg.connect() directly (single connection, no pool overhead).
+    Verified by: db.create_pool and db.init_db must NOT be called.
+
+    Found by /investigate on 2026-04-14
+    """
+
+    def _make_mock_conn(self) -> AsyncMock:
+        conn = AsyncMock()
+        conn.fetch.return_value = []
+        conn.close.return_value = None
+        return conn
+
+    def test_load_from_db_does_not_call_create_pool(self):
+        """_load_from_db must not create a connection pool.
+        Single asyncpg.connect() suffices for a read-only cache check."""
+        from volume_pattern import _load_from_db
+
+        mock_conn = self._make_mock_conn()
+
+        with patch("asyncpg.connect", new_callable=AsyncMock) as mock_connect, \
+             patch("db.get_dsn", return_value="postgresql://test"), \
+             patch("db.create_pool") as mock_create_pool:
+            mock_connect.return_value = mock_conn
+
+            result = _load_from_db("AAPL")
+
+        mock_create_pool.assert_not_called()
+        assert isinstance(result, pd.DataFrame)
+
+    def test_load_from_db_does_not_call_init_db(self):
+        """_load_from_db must not run init_db (which executes 8+ DDL statements)."""
+        from volume_pattern import _load_from_db
+
+        mock_conn = self._make_mock_conn()
+
+        with patch("asyncpg.connect", new_callable=AsyncMock) as mock_connect, \
+             patch("db.get_dsn", return_value="postgresql://test"), \
+             patch("db.init_db") as mock_init_db:
+            mock_connect.return_value = mock_conn
+
+            _load_from_db("005930.KS")
+
+        mock_init_db.assert_not_called()

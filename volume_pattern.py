@@ -124,16 +124,30 @@ def resolve_ticker(raw: str) -> tuple[str, str, str]:
 
 
 def _load_from_db(symbol: str) -> pd.DataFrame:
-    """DB에서 캐시된 5분봉 데이터를 로드한다."""
+    """DB에서 캐시된 5분봉 데이터를 로드한다.
+
+    풀 생성 없이 단일 커넥션으로 조회한다. 봇에서 호출될 때마다
+    create_pool(min_size=2)을 생성·파기하는 낭비를 방지한다.
+    """
     import db as _db
+    import asyncpg
 
     async def _query():
-        pool = await _db.create_pool()
-        await _db.init_db(pool)
+        conn = await asyncpg.connect(_db.get_dsn())
         try:
-            return await _db.fetch_intraday_volumes(pool, symbol, "5m", 2000)
+            rows = await conn.fetch(
+                """
+                SELECT ts, open, high, low, close, volume
+                FROM   intraday_volumes
+                WHERE  symbol = $1 AND interval = $2
+                ORDER  BY ts DESC
+                LIMIT  $3
+                """,
+                symbol, "5m", 2000,
+            )
+            return [dict(r) for r in rows]
         finally:
-            await pool.close()
+            await conn.close()
 
     try:
         rows = asyncio.run(_query())
