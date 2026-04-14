@@ -86,7 +86,11 @@ KR_ALIASES = {**KR_KOSPI, **KR_KOSDAQ}
 # 시장 판별용 타임존
 MARKET_TZ = {
     "KR": "Asia/Seoul",
-    "US": "America/New_York",
+    # US 주식도 한국 시간대로 변환한다.
+    # build_report의 _format_hour/_format_half_hour는
+    # 왼쪽 열을 한국시간, 괄호 안을 미국동부시간으로 표시하도록 설계되어 있다.
+    # Eastern 시간 그대로 저장하면 "09:30(20:30)" 같은 잘못된 레이블이 생성된다.
+    "US": "Asia/Seoul",
 }
 
 

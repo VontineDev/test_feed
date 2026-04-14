@@ -255,8 +255,10 @@ class TestRunBatch:
 # ── fetch_data timezone regression (ISSUE-001) ───────────────────
 
 class TestFetchDataTimezone:
-    """Regression: volume_pattern.fetch_data line 193 had inverted tz condition.
-    US market was getting Asia/Seoul instead of America/New_York."""
+    """Regression: volume_pattern.fetch_data had inverted tz condition.
+    US market data must be converted to Asia/Seoul so build_report can label
+    the left column as Korean time and parenthetical as US Eastern time.
+    See _format_hour docstring: '미국 주식이면 한국시간(미국시간) 형태'."""
 
     def _make_ny_df(self) -> pd.DataFrame:
         """5-minute DataFrame already in America/New_York timezone."""
@@ -268,8 +270,16 @@ class TestFetchDataTimezone:
             index=idx,
         )
 
-    def test_us_market_gets_new_york_timezone(self):
-        """fetch_data for US stocks must convert index to America/New_York, not Asia/Seoul."""
+    def test_us_market_gets_seoul_timezone(self):
+        """fetch_data for US stocks must convert index to Asia/Seoul.
+        build_report labels the left column as Korean time and the parenthetical
+        as US Eastern time. If data is in Eastern time, _kr_to_us_hour receives
+        an Eastern hour instead of a Korean hour, producing wrong labels like
+        '09:30(20:30)' instead of the correct '22:30(09:30)'.
+
+        Regression: ISSUE-TZ — /volume MU showed 09:30(20:30) instead of 22:30(09:30)
+        Found by /investigate on 2026-04-14
+        """
         from volume_pattern import fetch_data
 
         ny_df = self._make_ny_df()
@@ -286,8 +296,44 @@ class TestFetchDataTimezone:
 
         assert df.index.tzinfo is not None
         tz_name = str(df.index.tz)
-        assert "New_York" in tz_name or "America" in tz_name, (
-            f"Expected America/New_York timezone for US stocks, got: {tz_name}"
+        assert "Seoul" in tz_name, (
+            f"Expected Asia/Seoul timezone for US stocks (for Korean-time display), got: {tz_name}"
+        )
+
+    def test_us_report_time_label_shows_korean_time_first(self):
+        """build_report for a US stock must show Korean time on the left and
+        US Eastern time in parentheses.
+        NYSE opens at 9:30 AM ET = 22:30 KST (EDT). The report must show
+        '22:30(09:30)', not '09:30(20:30)'.
+
+        Regression: ISSUE-TZ — /volume MU showed 09:30(20:30) instead of 22:30(09:30)
+        Found by /investigate on 2026-04-14
+        """
+        from volume_pattern import fetch_data, build_report
+
+        # One trading day: only the 9:30 AM ET bar (high volume, NYSE open)
+        # In KST: 9:30 AM ET (EDT=UTC-4) = 13:30 UTC = 22:30 KST
+        ny_df = pd.DataFrame(
+            {"Open": 150.0, "High": 151.0, "Low": 149.0, "Close": 150.5, "Volume": 5_000_000},
+            index=pd.date_range("2026-04-07 09:30", periods=1, freq="5min", tz="America/New_York"),
+        )
+
+        with patch("volume_pattern.yf.Ticker") as mock_ticker, \
+             patch("volume_pattern._load_from_db", return_value=pd.DataFrame()), \
+             patch("volume_pattern._is_db_fresh", return_value=False):
+            mock_t = MagicMock()
+            mock_t.info = {}
+            mock_t.history.return_value = ny_df
+            mock_ticker.return_value = mock_t
+
+            df, full_name, source = fetch_data("MU", "US")
+
+        report = build_report(df, "MU", "MU", "Micron Technology", "US", source)
+
+        # 9:30 AM ET = 22:30 KST — report must show "22:30(09:30)", not "09:30(20:30)"
+        assert "22:30(09:30)" in report, (
+            f"Expected '22:30(09:30)' in report (Korean time first, US time in parens).\n"
+            f"Got report snippet:\n{report[:500]}"
         )
 
     def test_kr_market_gets_seoul_timezone(self):
