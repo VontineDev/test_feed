@@ -278,9 +278,13 @@ async def send_weekly_screener(
         return False
 
     def esc(text: str) -> str:
-        for ch in r"\_*[]()~>#+-=|{}.!":
+        for ch in r"\_*[]()~`>#+-=|{}.!":
             text = text.replace(ch, f"\\{ch}")
         return text
+
+    def esc_code(text: str) -> str:
+        """MarkdownV2 인라인 코드 내부 — 백틱과 백슬래시만 이스케이프."""
+        return text.replace("\\", "\\\\").replace("`", "\\`")
 
     from chart_screener import current_week_of
     week = current_week_of()
@@ -300,7 +304,7 @@ async def send_weekly_screener(
         for r in sorted_r[:20]:       # Telegram 메시지 길이 대응 — 최대 20종목
             star = " ★" if r.has_gapjum else ""
             lines.append(
-                f"• {esc(r.name)} `{esc(r.ticker)}`{esc(star)}\n"
+                f"• {esc(r.name)} `{esc_code(r.ticker)}`{esc(star)}\n"
                 f"  종가 {r.close:,.0f} \\| 20주 {r.ma_20w:,.0f} \\| 60주 {r.ma_60w:,.0f}"
             )
         if len(results) > 20:
