@@ -259,3 +259,65 @@ async def send_signal(
     finally:
         if _own_client:
             await http.aclose()
+
+
+# ── 주봉 차트 스크리닝 결과 알림 ─────────────────────────────
+async def send_weekly_screener(
+    results: list,                          # list[ScreenResult]
+    http: Optional[httpx.AsyncClient] = None,
+) -> bool:
+    """
+    주봉 차트 스크리닝 결과를 Telegram으로 전송.
+    통과 종목이 없어도 '이번 주 없음' 메시지 발송.
+    """
+    try:
+        token   = _get_token()
+        chat_id = _get_chat_id()
+    except ValueError as e:
+        logger.warning("[Telegram] 설정 오류: %s", e)
+        return False
+
+    def esc(text: str) -> str:
+        for ch in r"\_*[]()~>#+-=|{}.!":
+            text = text.replace(ch, f"\\{ch}")
+        return text
+
+    from chart_screener import current_week_of
+    week = current_week_of()
+
+    if not results:
+        message = (
+            f"📊 *주봉 차트 스크리닝 \\({esc(week)}\\)*\n\n"
+            f"이번 주 조건 통과 종목 없음"
+        )
+    else:
+        # 정배열(has_gapjum) 우선, 그 다음 종가 내림차순
+        sorted_r = sorted(results, key=lambda r: (not r.has_gapjum, -r.close))
+        lines = [
+            f"📊 *주봉 차트 스크리닝 \\({esc(week)}\\)*",
+            f"통과 종목: {len(results)}개\n",
+        ]
+        for r in sorted_r[:20]:       # Telegram 메시지 길이 대응 — 최대 20종목
+            star = " ★" if r.has_gapjum else ""
+            lines.append(
+                f"• {esc(r.name)} `{esc(r.ticker)}`{esc(star)}\n"
+                f"  종가 {r.close:,.0f} \\| 20주 {r.ma_20w:,.0f} \\| 60주 {r.ma_60w:,.0f}"
+            )
+        if len(results) > 20:
+            lines.append(f"\n\\(외 {len(results) - 20}종목\\)")
+        message = "\n".join(lines)
+
+    channel_id = _get_channel_id()
+
+    _own_client = http is None
+    if _own_client:
+        http = httpx.AsyncClient()
+    try:
+        if channel_id:
+            ok = await _post_message(http, token, channel_id, message, label="차트스크리닝(채널)")
+        else:
+            ok = await _post_message(http, token, chat_id, message, label="차트스크리닝")
+        return ok
+    finally:
+        if _own_client:
+            await http.aclose()

@@ -41,8 +41,8 @@ except ImportError:
     pass  # python-dotenv 미설치 시 환경변수 직접 설정으로 동작
 
 from summarizer import summarize, Backend
-from db import create_pool, get_dsn, init_db, save_article, save_signal, save_cross_analysis, load_seen_hashes
-from telegram_notify import send_signal as tg_send_signal
+from db import create_pool, get_dsn, init_db, save_article, save_signal, save_cross_analysis, load_seen_hashes, save_chart_signals
+from telegram_notify import send_signal as tg_send_signal, send_weekly_screener as tg_send_weekly_screener
 from signal_detector import detect_signal
 from article_fetcher import fetch_article_body
 from telegram_bot import bot_polling_loop, init_bot
@@ -594,6 +594,31 @@ async def main(interval: int, enable_summary: bool) -> None:
         _weekly_backtest_report_job,
         CronTrigger(day_of_week="sun", hour=20, minute=0, timezone="Asia/Seoul"),
         id="weekly_backtest",
+        max_instances=1,
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+
+    # ── 차트 스크리닝: 주봉 스크리닝 (일요일 20:30 KST) ──────────
+    async def _weekly_screener_job():
+        if not _db_pool:
+            logger.warning("[차트스크리너] DB 풀 없음 — 스크리닝 건너뜀")
+            return
+        try:
+            from chart_screener import run_weekly_screen
+            loop = asyncio.get_running_loop()
+            results = await loop.run_in_executor(None, run_weekly_screen)
+            saved = await save_chart_signals(_db_pool, results)
+            logger.info("[차트스크리너] 완료 — 통과:%d 저장:%d", len(results), saved)
+            async with httpx.AsyncClient() as http:
+                await tg_send_weekly_screener(results, http=http)
+        except Exception as e:
+            logger.warning("[차트스크리너] 실행 실패: %s", e)
+
+    scheduler.add_job(
+        _weekly_screener_job,
+        CronTrigger(day_of_week="sun", hour=20, minute=30, timezone="Asia/Seoul"),
+        id="weekly_chart_screener",
         max_instances=1,
         misfire_grace_time=3600,
         replace_existing=True,
