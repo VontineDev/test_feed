@@ -699,6 +699,51 @@ def _esc(s: str) -> str:
     return s
 
 
+async def _fetch_type_breakdown(pool, min_signals: int = 5) -> list[dict]:
+    """
+    기사 유형별 적중률 (1d 체크포인트, 전체 이력).
+    min_signals 이상인 유형만 반환.
+    BUY/SELL/WATCH 신호만 포함 (방향성 있는 신호 기준).
+    """
+    query = """
+        SELECT
+            ts.article_type,
+            COUNT(*) AS total,
+            SUM(CASE
+                WHEN (ts.direction = 'BUY'  AND po.return_pct > 0) OR
+                     (ts.direction = 'SELL' AND po.return_pct < 0) THEN 1
+                ELSE 0
+            END) AS hits
+        FROM trade_signals ts
+        JOIN cross_analysis_results car ON car.signal_id = ts.id
+        JOIN cross_analysis_prices cap ON cap.cross_id = car.id
+        JOIN price_outcomes po ON po.cross_price_id = cap.id
+        WHERE po.checkpoint = '1d'
+          AND po.return_pct IS NOT NULL
+          AND ts.direction IN ('BUY', 'SELL', 'WATCH')
+        GROUP BY ts.article_type
+        ORDER BY hits::float / NULLIF(COUNT(*), 0) DESC
+    """
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(query)
+    except Exception:
+        return []
+
+    result = []
+    for r in rows:
+        total = r["total"] or 0
+        hits = r["hits"] or 0
+        if total < min_signals:
+            continue
+        result.append({
+            "article_type": r["article_type"] or "other",
+            "total": total,
+            "hit_rate": round(hits / total * 100, 1) if total > 0 else 0.0,
+        })
+    return result
+
+
 async def _fetch_ticker_breakdown(pool, min_signals: int = 5) -> list[dict]:
     """
     CONFIRM 판정의 종목별 적중률 (1d 체크포인트).
@@ -851,6 +896,39 @@ async def backtest_report_telegram(pool) -> str:
             lines.append("⏱️ *체크포인트별 CONFIRM 적중률*")
             lines.append(_esc(" | ").join(cp_parts))
             lines.append("")
+
+    # 기사 유형별 적중률 (1d, 5건 이상)
+    TYPE_BADGE_BACKTEST = {
+        "earnings":   "📊",
+        "ma":         "🤝",
+        "management": "👤",
+        "analyst":    "🔍",
+        "regulatory": "⚖️",
+        "product":    "🚀",
+        "macro":      "🌐",
+        "other":      "📰",
+    }
+    TYPE_LABEL = {
+        "earnings": "실적", "ma": "M&A", "management": "임원",
+        "analyst": "애널리스트", "regulatory": "규제", "product": "제품/수주",
+        "macro": "거시경제", "other": "기타",
+    }
+    try:
+        type_rows = await _fetch_type_breakdown(pool, min_signals=5)
+    except Exception:
+        type_rows = []
+
+    if type_rows:
+        lines.append("📑 *타입별 정확도* \\(1d, 5건 이상\\)")
+        lines.append("─────────────────────────")
+        for row in type_rows:
+            t = row["article_type"]
+            badge = TYPE_BADGE_BACKTEST.get(t, "📰")
+            label = _esc(TYPE_LABEL.get(t, t))
+            hr = _esc(f"{row['hit_rate']:.1f}%")
+            cnt = _esc(str(row["total"]))
+            lines.append(f"{badge} {label}: {cnt}건 {hr}")
+        lines.append("")
 
     # 종목별 적중률 (CONFIRM, 1d, 5건 이상)
     try:
