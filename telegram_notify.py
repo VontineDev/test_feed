@@ -40,6 +40,17 @@ SOURCE_LABEL = {
     "bloomberg":   "Bloomberg",
 }
 
+TYPE_BADGE = {
+    "earnings":   "📊",
+    "ma":         "🤝",
+    "management": "👤",
+    "analyst":    "🔍",
+    "regulatory": "⚖️",
+    "product":    "🚀",
+    "macro":      "🌐",
+    "other":      "📰",   # internal reference only — never rendered in messages
+}
+
 
 def _get_token() -> str:
     token = os.environ.get("TELEGRAM_TOKEN", "")
@@ -204,12 +215,17 @@ async def send_signal(
     bar  = "⬛" * signal.strength + "⬜" * (5 - signal.strength)
 
     def esc(text: str) -> str:
-        for ch in r"\_*[]()~>#+-=|{}.!":
+        for ch in r"\_*[]()~`>#+-=|{}.!":
             text = text.replace(ch, f"\\{ch}")
         return text
 
     tickers_str = " ".join(f"`{t}`" for t in signal.tickers) if signal.tickers else "\\-"
     source  = SOURCE_LABEL.get(art["source"], art["source"].upper())
+
+    # 기사 유형 배지 (other 제외)
+    article_type = getattr(signal, "article_type", "other") or "other"
+    type_badge = TYPE_BADGE.get(article_type, "")
+    badge_prefix = f"{type_badge} " if article_type != "other" and type_badge else ""
 
     # 교차 분석 점수 표시
     score_line = ""
@@ -228,7 +244,7 @@ async def send_signal(
             )
 
     lines = [
-        f"{icon} *매매 신호 감지 \\- {esc(signal.direction)}*",
+        f"{badge_prefix}{icon} *매매 신호 감지 \\- {esc(signal.direction)}*",
         f"강도: {bar} {signal.strength}/5",
     ]
     if score_line:
