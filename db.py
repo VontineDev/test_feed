@@ -757,6 +757,34 @@ async def save_chart_signals(
     return count
 
 
+async def load_chart_signals_latest(pool: asyncpg.Pool) -> tuple[str, list]:
+    """
+    가장 최근 week_of의 차트 스크리닝 결과 전체 반환.
+    반환: (week_of, list[dict])  — 결과 없으면 ("", [])
+    """
+    try:
+        async with pool.acquire() as conn:
+            week = await conn.fetchval(
+                "SELECT week_of FROM chart_signals ORDER BY screened_at DESC LIMIT 1"
+            )
+            if not week:
+                return ("", [])
+            rows = await conn.fetch(
+                """
+                SELECT ticker, name, close, ma_20w, ma_60w, cloud_top,
+                       is_enhanced, has_gapjum, week_of, screened_at
+                FROM chart_signals
+                WHERE week_of = $1
+                ORDER BY has_gapjum DESC, close DESC
+                """,
+                week,
+            )
+        return (week, [dict(r) for r in rows])
+    except Exception as e:
+        logger.warning("[차트스크리너] 최근 결과 조회 실패: %s", e)
+        return ("", [])
+
+
 async def get_chart_signals_this_week(pool: asyncpg.Pool) -> set[str]:
     """
     이번 주 스크리닝 통과 종목의 yfinance 심볼 set 반환.

@@ -8,6 +8,7 @@
 > v0.2.0.0부터 연합뉴스·한국경제·매일경제 한국어 피드가 추가되었습니다.
 > v0.2.1.0부터 텔레그램 라우팅이 한·외신 모두 `signal.is_actionable` 기반으로 통일되었습니다.
 > v0.2.5.0부터 `article_type` 기사 유형 분류(8종)가 추가되었습니다. 신호 알림에 유형 배지, `/backtest`에 유형별 적중률이 표시됩니다.
+> v0.2.6.0부터 주봉 차트 스크리너(`chart_screener.py`)가 추가되었습니다. KOSPI/KOSDAQ 전 종목을 Ichimoku + MA 6-조건으로 스크리닝하고 매주 일요일 20:30 KST에 텔레그램으로 발송합니다. `/screener` 명령어로 온디맨드 조회 가능.
 
 ---
 
@@ -266,6 +267,22 @@ CREATE TABLE trade_signals (
     article_type    VARCHAR(20) DEFAULT 'other',-- earnings|ma|management|analyst|regulatory|product|macro|other
     detected_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- 주봉 차트 스크리닝 결과
+CREATE TABLE chart_signals (
+    id          BIGSERIAL PRIMARY KEY,
+    ticker      VARCHAR(20) NOT NULL,
+    name        TEXT,
+    close       FLOAT NOT NULL,
+    ma_20w      FLOAT NOT NULL,
+    ma_60w      FLOAT NOT NULL,
+    cloud_top   FLOAT NOT NULL,
+    is_enhanced BOOLEAN DEFAULT FALSE,
+    has_gapjum  BOOLEAN DEFAULT FALSE,
+    week_of     VARCHAR(10) NOT NULL,        -- ISO 주차 (예: "2026-W16")
+    screened_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(ticker, week_of)
+);
 ```
 
 **주요 함수**:
@@ -280,6 +297,8 @@ CREATE TABLE trade_signals (
 | `fetch_latest()` | 최신 기사 조회 (category·source 필터) |
 | `fetch_latest_signals()` | 최신 신호 조회 (direction·strength 필터) |
 | `load_seen_hashes()` | 재시작 시 중복 해시 복원 |
+| `save_chart_signals()` | 스크리닝 결과 저장 (`chart_signals` 테이블, ON CONFLICT DO UPDATE) |
+| `load_chart_signals_latest()` | 가장 최근 주차 스크리닝 결과 전체 조회 |
 
 **DSN 설정 우선순위**:
 ```
@@ -303,6 +322,7 @@ DATABASE_URL 환경변수 → DB_HOST/PORT/NAME/USER/PASSWORD 개별 변수
 | `/signals watch` | WATCH 신호만 필터링하여 조회 |
 | `/today` | 오늘 카테고리별 수집 건수 + 최신 기사 5건 한글 요약 |
 | `/backtest` | 판정별·유형별·종목별 적중률 백테스팅 리포트 (48h 데이터 신선도 경고 포함) |
+| `/screener` | 최신 주봉 차트 스크리닝 결과 — DM + 채널 동시 발송 |
 | `/help` | 명령어 목록 |
 
 **알림 예시 (`/signals`)**:
@@ -360,9 +380,50 @@ trade_signals (DB)
 
 ---
 
-### 3-8. `telegram_notify.py` — 신호 알림 전송
+### 3-8. `chart_screener.py` — 주봉 차트 스크리너
 
-**역할**: 유효 신호 감지 시 즉시 텔레그램 전송
+**역할**: KOSPI/KOSDAQ 전 종목(~2,770개)을 Ichimoku + MA 조건으로 스크리닝하여 기술적 돌파 후보를 필터링
+
+**스크리닝 조건 (6가지, A~F 모두 충족)**:
+
+| 조건 | 설명 |
+|------|------|
+| A | 종가 > 전환선 (Tenkan-sen, 9주 고가·저가 중간값) |
+| B | 종가 > 기준선 (Kijun-sen, 26주 고가·저가 중간값) |
+| C | 종가 > 선행스팬A (Senkou Span A = (전환선+기준선)/2, 26주 선행) |
+| D | 종가 > 선행스팬B (Senkou Span B = 52주 고가·저가 중간값, 26주 선행) |
+| E | 종가 > 20주 이동평균 |
+| F | 종가 > 60주 이동평균 |
+
+**추가 플래그**:
+- `has_gapjum`: 20주MA > 60주MA (정배열) — 결과 상위 정렬
+- `is_enhanced`: 향후 G/H/I 조건 확장 예약 필드
+
+**주요 타입**:
+```python
+@dataclass
+class ScreenResult:
+    ticker: str
+    name: str
+    close: float
+    ma_20w: float
+    ma_60w: float
+    cloud_top: float        # max(Span A, Span B)
+    is_enhanced: bool
+    has_gapjum: bool        # 20주MA > 60주MA
+    screened_at: str
+    week_of: str            # ISO 주차 (예: "2026-W16")
+```
+
+**성능 특이사항**: yfinance 병렬 다운로드 시 데이터 오염 발생 — `SCREENER_WORKERS=1`(직렬)이 기본값. 전 종목 스캔 소요 시간 약 14분.
+
+**자동 스케줄**: 매주 일요일 20:30 KST (`CronTrigger(day_of_week="sun", hour=20, minute=30)`)
+
+---
+
+### 3-9. `telegram_notify.py` — 신호 알림 전송
+
+**역할**: 유효 신호 감지 시 즉시 텔레그램 전송. 주봉 스크리닝 결과는 DM + 채널 동시 발송.
 
 **알림 메시지 형식**:
 ```
@@ -392,7 +453,8 @@ test_feed/
 ├── market_data.py                 # yfinance 시세 조회 + 교차분석
 ├── backtest.py                    # 판정 정확도 추적 + 백테스팅 리포트
 ├── db.py                          # PostgreSQL 연동 (asyncpg)
-├── telegram_bot.py                # 봇 명령어 처리 (/status /signals /today /backtest /help)
+├── chart_screener.py              # 주봉 Ichimoku+MA 스크리너 (KOSPI/KOSDAQ 전종목)
+├── telegram_bot.py                # 봇 명령어 처리 (/status /signals /today /backtest /screener /help)
 ├── telegram_notify.py             # 신호 알림 전송
 ├── volume_pattern.py              # 거래량 패턴 분석
 │
@@ -539,4 +601,4 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 
 ---
 
-*현재 코드베이스 v0.2.5.0 (2026-04-16) 기준*
+*현재 코드베이스 v0.2.6.0 (2026-04-16) 기준*

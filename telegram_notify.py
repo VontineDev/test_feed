@@ -333,10 +333,9 @@ async def send_weekly_screener(
     if _own_client:
         http = httpx.AsyncClient()
     try:
+        ok = await _post_message(http, token, chat_id, message, label="차트스크리닝(DM)")
         if channel_id:
-            ok = await _post_message(http, token, channel_id, message, label="차트스크리닝(채널)")
-        else:
-            ok = await _post_message(http, token, chat_id, message, label="차트스크리닝")
+            await _post_message(http, token, channel_id, message, label="차트스크리닝(채널)")
         return ok
     finally:
         if _own_client:

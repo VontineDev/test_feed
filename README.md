@@ -23,7 +23,7 @@ cp env.example .env
 
 # 로컬 LLM 실행 (Ollama 기준)
 ollama serve
-ollama pull qwen2.5:7b
+ollama pull qwen3.5:9b
 
 # 실행
 python run_scheduler.py
@@ -40,6 +40,7 @@ python run_scheduler.py
 | `/signals watch` | WATCH 신호만 조회 |
 | `/today` | 오늘 카테고리별 수집 건수 + 최신 기사 5건 |
 | `/backtest` | 판정별·유형별·종목별 적중률 백테스팅 리포트 |
+| `/screener` | 최신 주봉 차트 스크리닝 결과 (DM + 채널) |
 | `/help` | 명령어 목록 |
 
 ## 데이터 흐름
@@ -62,6 +63,7 @@ summarizer.py         # 로컬 LLM 한글 요약
 signal_detector.py    # LLM 매매 신호 감지
 market_data.py        # yfinance 시세 조회 + 교차분석
 backtest.py           # 판정 정확도 추적 + 백테스팅 리포트
+chart_screener.py     # 주봉 차트 스크리너 (Ichimoku + MA, KOSPI/KOSDAQ 전종목)
 db.py                 # PostgreSQL 연동 (asyncpg)
 telegram_bot.py       # 봇 명령어 처리
 telegram_notify.py    # 신호 알림 전송
@@ -114,4 +116,4 @@ pytest test_summarizer_regression_1.py -v     # LLM 헬스체크·Qwen3 thinking
 
 ## 버전
 
-현재 버전: `0.2.5.0` — [CHANGELOG](CHANGELOG.md) 참고
+현재 버전: `0.2.6.0` — [CHANGELOG](CHANGELOG.md) 참고
