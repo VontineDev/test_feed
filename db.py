@@ -85,6 +85,8 @@ CREATE INDEX IF NOT EXISTS idx_sig_strength  ON trade_signals (strength DESC);
 -- Idempotent migration: add macro columns to existing deployments
 ALTER TABLE trade_signals ADD COLUMN IF NOT EXISTS macro_usd_krw   FLOAT;
 ALTER TABLE trade_signals ADD COLUMN IF NOT EXISTS macro_base_rate FLOAT;
+-- Idempotent migration: add article_type classification
+ALTER TABLE trade_signals ADD COLUMN IF NOT EXISTS article_type VARCHAR(20) DEFAULT 'other';
 
 -- ── 백테스팅: 교차분석 결과 ──────────────────────────────────
 CREATE TABLE IF NOT EXISTS cross_analysis_results (
@@ -308,11 +310,13 @@ async def save_signal(
     llm_backend: str,
     macro_usd_krw: Optional[float] = None,
     macro_base_rate: Optional[float] = None,
+    article_type: str = "other",
 ) -> Optional[int]:
     """
     매매 신호를 trade_signals 테이블에 저장.
     저장된 신호의 id 반환, 실패 시 None.
     macro_usd_krw / macro_base_rate: nullable — 매크로 컨텍스트 스냅샷 (백테스팅용)
+    article_type: 기사 유형 분류 (earnings|ma|management|analyst|regulatory|product|macro|other)
     """
     try:
         async with pool.acquire() as conn:
@@ -320,8 +324,8 @@ async def save_signal(
                 """
                 INSERT INTO trade_signals
                     (article_id, direction, strength, reason, tickers, llm_backend,
-                     macro_usd_krw, macro_base_rate)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                     macro_usd_krw, macro_base_rate, article_type)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 RETURNING id
                 """,
                 article_id,
@@ -332,6 +336,7 @@ async def save_signal(
                 llm_backend,
                 macro_usd_krw,
                 macro_base_rate,
+                article_type,
             )
         return row["id"] if row else None
     except Exception as e:
@@ -372,7 +377,7 @@ async def fetch_latest_signals(
     if direction:
         query = """
             SELECT s.id, s.direction, s.strength, s.reason, s.tickers,
-                   s.detected_at, a.title_en, a.summary_ko, a.url,
+                   s.detected_at, s.article_type, a.title_en, a.summary_ko, a.url,
                    a.source, a.category
             FROM   trade_signals s
             JOIN   news_articles a ON a.id = s.article_id
@@ -383,7 +388,7 @@ async def fetch_latest_signals(
     else:
         query = """
             SELECT s.id, s.direction, s.strength, s.reason, s.tickers,
-                   s.detected_at, a.title_en, a.summary_ko, a.url,
+                   s.detected_at, s.article_type, a.title_en, a.summary_ko, a.url,
                    a.source, a.category
             FROM   trade_signals s
             JOIN   news_articles a ON a.id = s.article_id

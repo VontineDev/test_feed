@@ -446,6 +446,7 @@ async def summary_worker() -> None:
                                 llm_backend     = signal.backend.value,
                                 macro_usd_krw   = macro.usd_krw if macro else None,
                                 macro_base_rate = macro.korea_base_rate if macro else None,
+                                article_type    = signal.article_type,
                             )
                             if signal_id and cross:
                                 try:
