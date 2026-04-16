@@ -52,6 +52,7 @@ class TradeSignal:
     ticker_symbols: dict[str, str]  # 표시명 → yfinance 심볼 (예: {"삼성전자": "005930.KS"})
     backend: Backend
     success: bool                # LLM 판단 성공 여부
+    article_type: str = "other"  # 기사 유형: earnings|ma|management|analyst|regulatory|product|macro|other
 
     @property
     def is_actionable(self) -> bool:
@@ -62,6 +63,7 @@ class TradeSignal:
 NONE_SIGNAL = TradeSignal(
     direction="NONE", strength=0, reason="", tickers=[],
     ticker_symbols={}, backend=Backend.FAILED, success=False,
+    article_type="other",
 )
 
 
@@ -80,7 +82,8 @@ Respond ONLY with a JSON object in this exact format (no markdown, no explanatio
   "reason": "<one sentence in Korean explaining why>",
   "tickers": [
     {{"name": "<display name in Korean or English>", "symbol": "<yfinance ticker symbol>"}}
-  ]
+  ],
+  "article_type": "earnings" or "ma" or "management" or "analyst" or "regulatory" or "product" or "macro" or "other"
 }}
 
 yfinance ticker symbol format:
@@ -101,6 +104,10 @@ Guidelines:
 - strength 4-5: strong/direct signal
 - If no specific ticker, use empty list []
 - reason: Write in Korean only. Do not mix Chinese characters or Chinese language.
+- article_type: classify the article into exactly one of these types:
+  earnings (실적/가이던스), ma (인수합병/지분취득), management (임원변경),
+  analyst (투자의견/목표주가), regulatory (규제/행정처분), product (신제품/수주),
+  macro (금리/환율/정책), other (그 외)
 {macro_section}
 Output ONLY the JSON object. Do not repeat any context. No preamble, no explanation."""
 
@@ -124,6 +131,12 @@ def _build_macro_section(macro: Optional[MacroContext]) -> str:
         "Rising base rate suppresses construction, real estate, and high-debt companies."
     )
     return "\n".join([header] + parts + [note]) + "\n"
+
+
+VALID_ARTICLE_TYPES = {
+    "earnings", "ma", "management", "analyst",
+    "regulatory", "product", "macro", "other",
+}
 
 
 # ── JSON 파싱 ─────────────────────────────────────────────────
@@ -184,6 +197,10 @@ def _parse_signal_json(raw: str, backend: Backend) -> TradeSignal:
         if ticker_symbols:
             logger.debug("[신호감지] LLM 심볼 %d개 수신: %s", len(ticker_symbols), ticker_symbols)
 
+        article_type = str(data.get("article_type", "other")).lower()
+        if article_type not in VALID_ARTICLE_TYPES:
+            article_type = "other"
+
         return TradeSignal(
             direction=direction,
             strength=strength,
@@ -192,6 +209,7 @@ def _parse_signal_json(raw: str, backend: Backend) -> TradeSignal:
             ticker_symbols=ticker_symbols,
             backend=backend,
             success=True,
+            article_type=article_type,
         )
     except Exception as e:
         logger.warning("[신호감지] JSON 파싱 실패: %s | raw: %s", e, raw[:100])
