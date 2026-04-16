@@ -9,6 +9,7 @@
 > v0.2.1.0부터 텔레그램 라우팅이 한·외신 모두 `signal.is_actionable` 기반으로 통일되었습니다.
 > v0.2.5.0부터 `article_type` 기사 유형 분류(8종)가 추가되었습니다. 신호 알림에 유형 배지, `/backtest`에 유형별 적중률이 표시됩니다.
 > v0.2.6.0부터 주봉 차트 스크리너(`chart_screener.py`)가 추가되었습니다. KOSPI/KOSDAQ 전 종목을 Ichimoku + MA 6-조건으로 스크리닝하고 매주 일요일 20:30 KST에 텔레그램으로 발송합니다. `/screener` 명령어로 온디맨드 조회 가능.
+> v0.2.7.0부터 스크리너 v2: 120주선 조건 G 추가, KIND 섹터 데이터 연동, 섹터별 그룹 포맷 Telegram 출력.
 
 ---
 
@@ -281,6 +282,8 @@ CREATE TABLE chart_signals (
     has_gapjum  BOOLEAN DEFAULT FALSE,
     week_of     VARCHAR(10) NOT NULL,        -- ISO 주차 (예: "2026-W16")
     screened_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    sector      VARCHAR(80) DEFAULT '',      -- KIND 업종명 (v0.2.7.0~)
+    ma_120w     FLOAT,                       -- 120주선 값, NULL = 데이터 부족 (v0.2.7.0~)
     UNIQUE(ticker, week_of)
 );
 ```
@@ -297,8 +300,8 @@ CREATE TABLE chart_signals (
 | `fetch_latest()` | 최신 기사 조회 (category·source 필터) |
 | `fetch_latest_signals()` | 최신 신호 조회 (direction·strength 필터) |
 | `load_seen_hashes()` | 재시작 시 중복 해시 복원 |
-| `save_chart_signals()` | 스크리닝 결과 저장 (`chart_signals` 테이블, ON CONFLICT DO UPDATE) |
-| `load_chart_signals_latest()` | 가장 최근 주차 스크리닝 결과 전체 조회 |
+| `save_chart_signals()` | 스크리닝 결과 저장 (`chart_signals`, sector/ma_120w 포함, ON CONFLICT DO UPDATE) |
+| `load_chart_signals_latest()` | 가장 최근 주차 스크리닝 결과 전체 조회 (sector/ma_120w 포함) |
 
 **DSN 설정 우선순위**:
 ```
@@ -384,20 +387,25 @@ trade_signals (DB)
 
 **역할**: KOSPI/KOSDAQ 전 종목(~2,770개)을 Ichimoku + MA 조건으로 스크리닝하여 기술적 돌파 후보를 필터링
 
-**스크리닝 조건 (6가지, A~F 모두 충족)**:
+**스크리닝 조건 (7가지, A~G 모두 충족)**:
 
 | 조건 | 설명 |
 |------|------|
-| A | 종가 > 전환선 (Tenkan-sen, 9주 고가·저가 중간값) |
-| B | 종가 > 기준선 (Kijun-sen, 26주 고가·저가 중간값) |
-| C | 종가 > 선행스팬A (Senkou Span A = (전환선+기준선)/2, 26주 선행) |
-| D | 종가 > 선행스팬B (Senkou Span B = 52주 고가·저가 중간값, 26주 선행) |
-| E | 종가 > 20주 이동평균 |
-| F | 종가 > 60주 이동평균 |
+| A | 이번 주 종가 > max(선행스팬A, 선행스팬B) — 구름 상향 돌파 |
+| B | 직전 주 종가 ≤ 직전 주 구름 상단 — 이전 주 구름 내/하부 |
+| C | 종가 > 20주 이동평균 |
+| D | 종가 > 60주 이동평균 |
+| E | 20주 이동평균 > 직전 주 20주 이동평균 (우상향) |
+| F | 60주 이동평균 > 직전 주 60주 이동평균 (우상향) |
+| G | 종가 > 120주 이동평균 (데이터 < 100봉 시 NaN-pass) |
+
+**OHLCV 수집**: `period="3y"` (주봉 ~156봉, 진정한 120주선 계산을 위해 3년 필요)
+
+**섹터 데이터**: `fetch_kind_sector_map()`이 KIND(한국거래소 기업공시시스템)에서 KOSPI/KOSDAQ 전 종목 업종(업종명)을 수집. EUC-KR HTML 파싱. 조회 실패 시 빈 dict 반환 — 스크리너는 계속 실행.
 
 **추가 플래그**:
 - `has_gapjum`: 20주MA > 60주MA (정배열) — 결과 상위 정렬
-- `is_enhanced`: 향후 G/H/I 조건 확장 예약 필드
+- `is_enhanced`: 향후 H/I 조건 확장 예약 필드
 
 **주요 타입**:
 ```python
@@ -413,6 +421,8 @@ class ScreenResult:
     has_gapjum: bool        # 20주MA > 60주MA
     screened_at: str
     week_of: str            # ISO 주차 (예: "2026-W16")
+    sector: str = ""                  # KIND 업종명 (조회 실패 시 빈 문자열)
+    ma_120w: Optional[float] = None  # 120주선 (데이터 부족 시 None)
 ```
 
 **성능 특이사항**: yfinance 병렬 다운로드 시 데이터 오염 발생 — `SCREENER_WORKERS=1`(직렬)이 기본값. 전 종목 스캔 소요 시간 약 14분.
@@ -423,7 +433,7 @@ class ScreenResult:
 
 ### 3-9. `telegram_notify.py` — 신호 알림 전송
 
-**역할**: 유효 신호 감지 시 즉시 텔레그램 전송. 주봉 스크리닝 결과는 DM + 채널 동시 발송.
+**역할**: 유효 신호 감지 시 즉시 텔레그램 전송. 주봉 스크리닝 결과는 DM + 채널 동시 발송 (v0.2.7.0~: 섹터별 그룹 포맷 — 상위 5개 섹터 × 섹터당 상위 3종목).
 
 **알림 메시지 형식**:
 ```
@@ -466,7 +476,8 @@ test_feed/
 ├── test_db_dsn.py                 # pytest — DB DSN 설정 (7개)
 ├── test_signal_prompt.py          # pytest — 신호 감지 프롬프트 회귀
 ├── test_macro_signal.py           # pytest — 매크로 컨텍스트 신호 감지
-├── test_screener_telegram_regression_1.py # pytest — 스크리너 텔레그램 포맷 회귀
+├── test_chart_screener.py         # pytest — 스크리너 조건 A~G + KIND 섹터 (26개)
+├── test_screener_telegram_regression_1.py # pytest — 스크리너 텔레그램 포맷 회귀 (12개)
 │
 ├── VERSION                        # 현재 버전 (SemVer 4자리)
 ├── CHANGELOG.md                   # 변경 이력
@@ -601,4 +612,4 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 
 ---
 
-*현재 코드베이스 v0.2.6.0 (2026-04-16) 기준*
+*현재 코드베이스 v0.2.7.0 (2026-04-17) 기준*

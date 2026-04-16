@@ -74,6 +74,8 @@ test_backtest.py                   # pytest — 백테스팅 로직 (23개)
 test_telegram_routing.py           # pytest — 텔레그램 신호 라우팅 회귀 (4개)
 test_summarizer_regression_1.py    # pytest — LLM 헬스체크·Qwen3 thinking 회귀
 test_db_dsn.py                     # pytest — DB DSN 설정 회귀
+test_chart_screener.py             # pytest — 주봉 스크리너 조건 + KIND 섹터 (26개)
+test_screener_telegram_regression_1.py  # pytest — 스크리너 텔레그램 포맷 회귀 (12개)
 ```
 
 ## 환경변수
@@ -107,6 +109,8 @@ pytest test_backtest.py -v                    # 백테스팅 로직 (23개)
 pytest test_article_type.py -v               # 기사 유형 분류 (17개)
 pytest test_telegram_routing.py -v            # 텔레그램 라우팅 신호 게이팅 (4개)
 pytest test_summarizer_regression_1.py -v     # LLM 헬스체크·Qwen3 thinking (회귀)
+pytest test_chart_screener.py -v              # 주봉 스크리너 + KIND 섹터 (26개)
+pytest test_screener_telegram_regression_1.py -v  # 스크리너 텔레그램 포맷 회귀 (12개)
 ```
 
 ## 문서
