@@ -39,7 +39,7 @@ python run_scheduler.py
 | `/signals sell` | SELL 신호만 조회 |
 | `/signals watch` | WATCH 신호만 조회 |
 | `/today` | 오늘 카테고리별 수집 건수 + 최신 기사 5건 |
-| `/backtest` | 판정별·종목별 적중률 백테스팅 리포트 |
+| `/backtest` | 판정별·유형별·종목별 적중률 백테스팅 리포트 |
 | `/help` | 명령어 목록 |
 
 ## 데이터 흐름
@@ -67,9 +67,11 @@ telegram_bot.py       # 봇 명령어 처리
 telegram_notify.py    # 신호 알림 전송
 volume_pattern.py     # 거래량 패턴 분석
 batch_run.py          # 배치 OHLCV 내보내기 + 분석 스크립트
-test_backtest.py                   # pytest — 백테스팅 로직 (12개)
+test_article_type.py               # pytest — 기사 유형 분류 (17개)
+test_backtest.py                   # pytest — 백테스팅 로직 (23개)
 test_telegram_routing.py           # pytest — 텔레그램 신호 라우팅 회귀 (4개)
 test_summarizer_regression_1.py    # pytest — LLM 헬스체크·Qwen3 thinking 회귀
+test_db_dsn.py                     # pytest — DB DSN 설정 회귀
 ```
 
 ## 환경변수
@@ -99,7 +101,8 @@ ALLOWED_CHAT_IDS=123456789,987654321
 pytest -v
 
 # 개별 파일
-pytest test_backtest.py -v                    # 백테스팅 로직 (12개)
+pytest test_backtest.py -v                    # 백테스팅 로직 (23개)
+pytest test_article_type.py -v               # 기사 유형 분류 (17개)
 pytest test_telegram_routing.py -v            # 텔레그램 라우팅 신호 게이팅 (4개)
 pytest test_summarizer_regression_1.py -v     # LLM 헬스체크·Qwen3 thinking (회귀)
 ```
@@ -111,4 +114,4 @@ pytest test_summarizer_regression_1.py -v     # LLM 헬스체크·Qwen3 thinking
 
 ## 버전
 
-현재 버전: `0.2.1.0` — [CHANGELOG](CHANGELOG.md) 참고
+현재 버전: `0.2.5.0` — [CHANGELOG](CHANGELOG.md) 참고

@@ -14,6 +14,8 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - **`send_signal()` esc() missing backtick** (`telegram_notify.py`): local `esc()` in `send_signal` was missing `` ` `` from the escape list, inconsistent with `send_weekly_screener`. Fixes potential MarkdownV2 rendering breakage for tickers or reasons containing backticks.
+- **WATCH signals inflated article type hit rates** (`backtest.py`): `_fetch_type_breakdown` included WATCH signals in `COUNT(*)` but WATCH has no directional hit definition. This deflated hit rates for all article types. Filtered to `BUY/SELL` only, matching the existing `_fetch_ticker_breakdown` pattern.
+- **`start_crawler.bat` hardcoded user path** (`start_crawler.bat`): paths were hardcoded to `C:\Users\Jin\test_feed` — won't work on any other machine. Replaced with `%~dp0` (relative to the .bat file location).
 
 ## [0.2.4.0] - 2026-04-11
 

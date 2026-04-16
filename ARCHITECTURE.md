@@ -7,6 +7,7 @@
 > v3.0은 현재 코드베이스를 기준으로 전면 재작성한 문서입니다.
 > v0.2.0.0부터 연합뉴스·한국경제·매일경제 한국어 피드가 추가되었습니다.
 > v0.2.1.0부터 텔레그램 라우팅이 한·외신 모두 `signal.is_actionable` 기반으로 통일되었습니다.
+> v0.2.5.0부터 `article_type` 기사 유형 분류(8종)가 추가되었습니다. 신호 알림에 유형 배지, `/backtest`에 유형별 적중률이 표시됩니다.
 
 ---
 
@@ -153,6 +154,7 @@ class TradeSignal:
     ticker_symbols: dict    # name → yfinance 심볼 (예: {"삼성전자": "005930.KS"})
     backend: Backend
     success: bool
+    article_type: str = "other"  # earnings|ma|management|analyst|regulatory|product|macro|other
 
     @property
     def is_actionable(self) -> bool:
@@ -179,7 +181,8 @@ class TradeSignal:
   "tickers": [
     {"name": "S&P500", "symbol": "^GSPC"},
     {"name": "삼성전자", "symbol": "005930.KS"}
-  ]
+  ],
+  "article_type": "macro"
 }
 ```
 
@@ -251,14 +254,17 @@ CREATE TABLE news_articles (
 
 -- 매매 신호
 CREATE TABLE trade_signals (
-    id           BIGSERIAL PRIMARY KEY,
-    article_id   BIGINT REFERENCES news_articles(id) ON DELETE CASCADE,
-    direction    VARCHAR(8) NOT NULL,        -- BUY | SELL | WATCH
-    strength     SMALLINT NOT NULL,          -- 1~5
-    reason       TEXT,
-    tickers      TEXT[],
-    llm_backend  VARCHAR(16),
-    detected_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    id              BIGSERIAL PRIMARY KEY,
+    article_id      BIGINT REFERENCES news_articles(id) ON DELETE CASCADE,
+    direction       VARCHAR(8) NOT NULL,        -- BUY | SELL | WATCH
+    strength        SMALLINT NOT NULL,          -- 1~5
+    reason          TEXT,
+    tickers         TEXT[],
+    llm_backend     VARCHAR(16),
+    macro_usd_krw   FLOAT,                      -- 신호 시점 USD/KRW (백테스팅용)
+    macro_base_rate FLOAT,                      -- 신호 시점 한국 기준금리 (백테스팅용)
+    article_type    VARCHAR(20) DEFAULT 'other',-- earnings|ma|management|analyst|regulatory|product|macro|other
+    detected_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
 
@@ -296,7 +302,7 @@ DATABASE_URL 환경변수 → DB_HOST/PORT/NAME/USER/PASSWORD 개별 변수
 | `/signals sell` | SELL 신호만 필터링하여 조회 |
 | `/signals watch` | WATCH 신호만 필터링하여 조회 |
 | `/today` | 오늘 카테고리별 수집 건수 + 최신 기사 5건 한글 요약 |
-| `/backtest` | 판정별·종목별 적중률 백테스팅 리포트 (48h 데이터 신선도 경고 포함) |
+| `/backtest` | 판정별·유형별·종목별 적중률 백테스팅 리포트 (48h 데이터 신선도 경고 포함) |
 | `/help` | 명령어 목록 |
 
 **알림 예시 (`/signals`)**:
@@ -347,6 +353,7 @@ trade_signals (DB)
 | `backfill_historical()` | 과거 신호에 대한 yfinance 가격 소급 채움 |
 | `calculate_metrics()` | 판정별·checkpoint별 적중률 딕셔너리 반환 |
 | `backtest_report_telegram()` | `/backtest` 명령어·주간 자동 발송용 MarkdownV2 텍스트 |
+| `_fetch_type_breakdown()` | 기사 유형별(article_type) 1d 적중률 집계 (BUY/SELL만, WATCH 제외) |
 | `_esc(s)` | MarkdownV2 특수문자 이스케이프 (`&` 포함) |
 
 **자동 스케줄**: 매주 일요일 20:00 KST (`CronTrigger(day_of_week="sun", hour=20, minute=0)`)
@@ -390,9 +397,14 @@ test_feed/
 ├── volume_pattern.py              # 거래량 패턴 분석
 │
 ├── batch_run.py                   # 배치 OHLCV 내보내기 + 분석 스크립트
-├── test_backtest.py               # pytest — 백테스팅 로직 (12개)
+├── test_article_type.py           # pytest — 기사 유형 분류 (17개)
+├── test_backtest.py               # pytest — 백테스팅 로직 (23개)
 ├── test_telegram_routing.py       # pytest — 텔레그램 신호 라우팅 회귀 (4개)
 ├── test_summarizer_regression_1.py# pytest — LLM 헬스체크·Qwen3 thinking 회귀
+├── test_db_dsn.py                 # pytest — DB DSN 설정 (7개)
+├── test_signal_prompt.py          # pytest — 신호 감지 프롬프트 회귀
+├── test_macro_signal.py           # pytest — 매크로 컨텍스트 신호 감지
+├── test_screener_telegram_regression_1.py # pytest — 스크리너 텔레그램 포맷 회귀
 │
 ├── VERSION                        # 현재 버전 (SemVer 4자리)
 ├── CHANGELOG.md                   # 변경 이력
@@ -519,12 +531,12 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 | ~~화이트리스트 인증~~ | ✅ v0.1.0.0 — `ALLOWED_CHAT_IDS` 환경변수로 구현 완료 |
 | ~~신호 이력 조회~~ | ✅ v0.1.0.0 — `/signals buy\|sell\|watch` 방향 필터 구현 완료 |
 | 교차분석 강화 | 거래량 급증, 52주 고/저가 근접 조건 추가 |
-| 백테스트 기준선 | 판정 없는 방향별 시장 기준 적중률 추가 (TODOS.md P3 참고) |
-| APScheduler 영속성 | Postgres 기반 JobStore — 재시작 후 누락 실행 방지 (TODOS.md P3 참고) |
+| ~~백테스트 기준선~~ | ✅ v0.2.2.0 — `backtest_report_telegram()`에 랜덤 기준선 추가 완료 |
+| ~~APScheduler 영속성~~ | ✅ v0.2.2.0 — `SQLAlchemyJobStore` Postgres 기반 영속성 구현 완료 |
 | 알림 재시도 | 텔레그램 전송 실패 시 지수 백오프 재시도 |
 | Docker 배포 | `docker-compose.yml` 기반 컨테이너화 |
 | 모델 교체 용이성 | `OLLAMA_MODEL`·`LM_STUDIO_MODEL` 환경변수화 |
 
 ---
 
-*현재 코드베이스 v0.2.1.0 (2026-04-06) 기준*
+*현재 코드베이스 v0.2.5.0 (2026-04-16) 기준*
