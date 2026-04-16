@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.5.0] - 2026-04-16
+
+### Added
+
+- **Article type classification** (`signal_detector.py`): every LLM signal inference call now extracts `article_type` as part of the same JSON response — zero additional API calls. Eight types supported: `earnings`, `ma`, `management`, `analyst`, `regulatory`, `product`, `macro`, `other`.
+- **Telegram type badges** (`telegram_notify.py`): actionable signal alerts now show a type emoji badge (📊 earnings, 🤝 M&A, 🔍 analyst, ⚖️ regulatory, 🚀 product, 🌐 macro, 👤 management). Badge is suppressed for `other` to avoid noise.
+- **Backtest type breakdown** (`backtest.py`): `/backtest` Telegram report now shows per-article-type hit rates at the 1d checkpoint. Types with fewer than 5 signals are suppressed until enough data accumulates.
+- **DB migration** (`db.py`): `ALTER TABLE trade_signals ADD COLUMN IF NOT EXISTS article_type VARCHAR(20) DEFAULT 'other'` — idempotent, safe on existing deployments.
+
+### Fixed
+
+- **`send_signal()` esc() missing backtick** (`telegram_notify.py`): local `esc()` in `send_signal` was missing `` ` `` from the escape list, inconsistent with `send_weekly_screener`. Fixes potential MarkdownV2 rendering breakage for tickers or reasons containing backticks.
+
 ## [0.2.4.0] - 2026-04-11
 
 ### Fixed
