@@ -410,3 +410,32 @@ async def test_fetch_type_breakdown_hit_rate_calculation():
     assert results[0]["article_type"] == "ma"
     assert results[0]["total"] == 10
     assert results[0]["hit_rate"] == pytest.approx(70.0, abs=0.1)
+
+
+@pytest.mark.asyncio
+async def test_fetch_type_breakdown_excludes_watch_from_sql():
+    """
+    Regression: ISSUE-001 — WATCH signals must not appear in type breakdown denominator.
+    WATCH has no directional definition of 'hit', so including it in COUNT(*) would
+    deflate hit rates. Verify the SQL filters to BUY/SELL only.
+
+    Found by /qa on 2026-04-16
+    Report: .gstack/qa-reports/qa-report-feat-article-type-2026-04-16.md
+    """
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=[])
+    pool = MagicMock()
+    pool.acquire = MagicMock(return_value=AsyncMock(
+        __aenter__=AsyncMock(return_value=conn),
+        __aexit__=AsyncMock(return_value=False),
+    ))
+
+    await _fetch_type_breakdown(pool, min_signals=5)
+
+    call_args = conn.fetch.call_args
+    sql = call_args[0][0]
+    assert "WATCH" not in sql, (
+        "WATCH must be excluded from _fetch_type_breakdown SQL — "
+        "it has no directional hit condition and inflates the denominator"
+    )
+    assert "'BUY'" in sql and "'SELL'" in sql, "BUY and SELL must be present in SQL filter"
