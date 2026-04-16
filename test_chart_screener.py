@@ -267,3 +267,85 @@ class TestEdgeCases:
         ichi.loc[ichi.index[-1], "cloud_top"] = np.nan
         with _mock_ticker(raw, ichi):
             assert screen_ticker("005930.KS", "삼성전자") is None
+
+
+# ── 조건 G: 120주선 위 (데이터 부족 시 NaN-pass) ─────────────
+
+class TestConditionG:
+    def test_G_passes_when_close_above_120wma(self):
+        """110봉 우상향: close > ma_120w → G 통과, ScreenResult 반환."""
+        raw  = _uptrend_df(n=110)
+        ichi = _ichi_stub(raw, a_pass=True, b_pass=True)
+        with _mock_ticker(raw, ichi):
+            result = screen_ticker("005930.KS", "삼성전자")
+        assert result is not None
+        # ma_120w should be populated (110 >= 100 min_periods)
+        assert result.ma_120w is not None
+
+    def test_G_fails_when_close_below_120wma(self):
+        """close를 ma_120w 아래로 강제 설정 → G 실패 → None 반환."""
+        raw  = _uptrend_df(n=110)
+        # rolling(120, min_periods=100) on 110 bars = mean of all 110 closes
+        ma_120w_approx = float(raw["Close"].mean())
+        # Force last close well below the 120w average
+        raw.iloc[-1, raw.columns.get_loc("Close")] = ma_120w_approx - 5_000.0
+        ichi = _ichi_stub(raw, a_pass=True, b_pass=True)
+        with _mock_ticker(raw, ichi):
+            assert screen_ticker("005930.KS", "삼성전자") is None
+
+    def test_G_nanpass_when_insufficient_data(self):
+        """80봉 (< 100 min_periods): ma_120w = NaN → G 자동 통과."""
+        raw  = _uptrend_df(n=80)   # 80 < 100 min_periods → ma_120w is NaN
+        ichi = _ichi_stub(raw, a_pass=True, b_pass=True)
+        with _mock_ticker(raw, ichi):
+            result = screen_ticker("005930.KS", "삼성전자")
+        assert result is not None         # G는 NaN-pass → 통과
+        assert result.ma_120w is None     # 데이터 부족 시 None
+
+
+# ── KIND 섹터 매핑 ─────────────────────────────────────────────
+
+class TestFetchKindSectorMap:
+    def test_happy_path_builds_dict(self):
+        """유효한 EUC-KR HTML 반환 시 종목코드 → 업종 dict 반환."""
+        from unittest.mock import MagicMock
+        from chart_screener import fetch_kind_sector_map
+
+        # 미니멀 EUC-KR HTML: 종목코드/업종 컬럼 포함
+        html = """<html><body><table>
+        <tr><th>종목코드</th><th>회사명</th><th>업종</th></tr>
+        <tr><td>005930</td><td>삼성전자</td><td>전자부품</td></tr>
+        <tr><td>035720</td><td>카카오</td><td>소프트웨어</td></tr>
+        </table></body></html>""".encode("euc-kr")
+
+        mock_resp = MagicMock()
+        mock_resp.content = html
+
+        with patch("httpx.get", return_value=mock_resp):
+            result = fetch_kind_sector_map()
+
+        assert "005930" in result
+        assert result["005930"] == "전자부품"
+        assert "035720" in result
+
+    def test_kind_down_returns_empty_dict(self):
+        """httpx.get 예외 발생 시 빈 dict 반환 (서비스 중단 대응)."""
+        from chart_screener import fetch_kind_sector_map
+
+        with patch("httpx.get", side_effect=Exception("connection refused")):
+            result = fetch_kind_sector_map()
+
+        assert result == {}
+
+    def test_empty_html_returns_empty_dict(self):
+        """tr 없는 HTML 반환 시 빈 dict 반환 (파싱 실패 대응)."""
+        from unittest.mock import MagicMock
+        from chart_screener import fetch_kind_sector_map
+
+        mock_resp = MagicMock()
+        mock_resp.content = b"<html></html>"
+
+        with patch("httpx.get", return_value=mock_resp):
+            result = fetch_kind_sector_map()
+
+        assert result == {}

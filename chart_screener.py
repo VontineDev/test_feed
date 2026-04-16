@@ -10,7 +10,8 @@ chart_screener.py  —  주봉 차트 스크리닝 모듈
     D = 이번 주 종가 > 60주선
     E = 20주선 > 직전 주 20주선                    (우상향)
     F = 60주선 > 직전 주 60주선                    (우상향)
-    최종 = A and B and C and D and E and F
+    G = 이번 주 종가 > 120주선 (데이터 부족 시 통과)
+    최종 = A and B and C and D and E and F and G
 
 환경변수:
     SCREENER_WORKERS : 병렬 워커 수 (기본값 8)
@@ -58,14 +59,56 @@ class ScreenResult:
     has_gapjum: bool       # ma_20w > ma_60w (정배열 가점)
     screened_at: str       # ISO 8601 UTC 문자열
     week_of: str           # 예: '2026-W16'
+    sector: str = ""                  # KIND 업종명 (조회 실패 시 빈 문자열)
+    ma_120w: Optional[float] = None  # 120주선 (데이터 부족 시 None)
+
+
+# ── KIND 섹터 매핑 ────────────────────────────────────────────
+def fetch_kind_sector_map() -> dict[str, str]:
+    """
+    KIND(한국거래소 기업공시시스템)에서 KOSPI + KOSDAQ 전 종목 업종 매핑 조회.
+    반환: {종목코드(6자리): 업종명} — 조회 실패 시 빈 dict 반환.
+    """
+    import httpx
+    from bs4 import BeautifulSoup
+
+    result: dict[str, str] = {}
+    for market_type in ("stockMkt", "kosdaqMkt"):
+        try:
+            r = httpx.get(
+                "https://kind.krx.co.kr/corpgeneral/corpList.do",
+                params={"method": "download", "searchType": "13", "marketType": market_type},
+                headers={"User-Agent": "Mozilla/5.0"},
+                follow_redirects=True,
+                timeout=20,
+            )
+            text = r.content.decode("euc-kr", errors="ignore")
+            soup = BeautifulSoup(text, "html.parser")
+            rows = soup.find_all("tr")
+            if not rows:
+                logger.warning("[스크리너] KIND %s — HTML에 tr 없음", market_type)
+                continue
+            headers = [td.get_text(strip=True) for td in rows[0].find_all(["th", "td"])]
+            for row in rows[1:]:
+                cols = [td.get_text(strip=True) for td in row.find_all(["th", "td"])]
+                if len(cols) >= len(headers):
+                    d = dict(zip(headers, cols))
+                    code = d.get("종목코드", "").strip()
+                    sector = d.get("업종", "").strip()
+                    if code:
+                        result[code] = sector
+        except Exception as e:
+            logger.warning("[스크리너] KIND 섹터 데이터 조회 실패 (%s): %s", market_type, e)
+    logger.info("[스크리너] 섹터 매핑 %d건 로드", len(result))
+    return result
 
 
 # ── 티커 목록 ──────────────────────────────────────────────────
-def get_all_tickers() -> list[tuple[str, str]]:
+def get_all_tickers(sector_map: dict[str, str] | None = None) -> list[tuple[str, str, str]]:
     """
     FinanceDataReader에서 KOSPI + KOSDAQ 전 종목 티커 조회.
-    반환: [(yfinance_symbol, name), ...]
-    예: [('005930.KS', '삼성전자'), ('035720.KQ', '카카오'), ...]
+    반환: [(yfinance_symbol, name, sector), ...]
+    예: [('005930.KS', '삼성전자', '전자부품'), ('035720.KQ', '카카오', '소프트웨어'), ...]
     """
     try:
         import FinanceDataReader as fdr
@@ -73,7 +116,7 @@ def get_all_tickers() -> list[tuple[str, str]]:
         logger.error("[스크리너] finance-datareader 미설치 — pip install finance-datareader")
         return []
 
-    results: list[tuple[str, str]] = []
+    results: list[tuple[str, str, str]] = []
 
     for market, suffix in [("KOSPI", ".KS"), ("KOSDAQ", ".KQ")]:
         try:
@@ -82,7 +125,8 @@ def get_all_tickers() -> list[tuple[str, str]]:
                 code = str(row.get("Code", "")).zfill(6).strip()
                 name = str(row.get("Name", code)).strip()
                 if code:
-                    results.append((f"{code}{suffix}", name))
+                    sector = (sector_map or {}).get(code, "")
+                    results.append((f"{code}{suffix}", name, sector))
         except Exception as e:
             logger.warning("[스크리너] %s 티커 목록 조회 실패: %s", market, e)
 
@@ -99,7 +143,7 @@ def fetch_weekly_ohlcv(ticker: str) -> Optional[pd.DataFrame]:
     try:
         df = yf.download(
             ticker,
-            period="2y",
+            period="3y",
             interval="1wk",
             progress=False,
             auto_adjust=True,
@@ -142,9 +186,9 @@ def calc_ichimoku(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ── 단일 종목 스크리닝 ─────────────────────────────────────────
-def screen_ticker(ticker: str, name: str) -> Optional[ScreenResult]:
+def screen_ticker(ticker: str, name: str, sector: str = "") -> Optional[ScreenResult]:
     """
-    단일 종목에 6-조건 스크리닝 실행.
+    단일 종목에 7-조건 스크리닝 실행.
     조건 통과 시 ScreenResult 반환, 미통과/오류 시 None.
     """
     df = fetch_weekly_ohlcv(ticker)
@@ -162,8 +206,9 @@ def screen_ticker(ticker: str, name: str) -> Optional[ScreenResult]:
     df = calc_ichimoku(df)
 
     # ── 이동평균선 ──────────────────────────────────────────────
-    df["ma_20w"] = df["Close"].rolling(20, min_periods=20).mean()
-    df["ma_60w"] = df["Close"].rolling(60, min_periods=60).mean()
+    df["ma_20w"]  = df["Close"].rolling(20,  min_periods=20).mean()
+    df["ma_60w"]  = df["Close"].rolling(60,  min_periods=60).mean()
+    df["ma_120w"] = df["Close"].rolling(120, min_periods=100).mean()
 
     if len(df) < 2:
         return None
@@ -189,15 +234,21 @@ def screen_ticker(ticker: str, name: str) -> Optional[ScreenResult]:
     prev_ma_20w    = float(prev["ma_20w"])
     prev_ma_60w    = float(prev["ma_60w"])
 
-    # ── 6개 조건 ────────────────────────────────────────────────
+    # 조건 G: 120주선 — 데이터 부족 시 NaN-pass
+    ma_120w_raw   = cur.get("ma_120w", float("nan"))
+    ma_120w_valid = not pd.isna(ma_120w_raw)
+    ma_120w       = float(ma_120w_raw) if ma_120w_valid else None
+
+    # ── 7개 조건 ────────────────────────────────────────────────
     A = close > cloud_top             # 이번 주 구름 상향 돌파
     B = prev_close <= prev_cloud_top  # 직전 주 구름 내/하부
     C = close > ma_20w                # 20주선 위
     D = close > ma_60w                # 60주선 위
     E = ma_20w > prev_ma_20w          # 20주선 우상향
     F = ma_60w > prev_ma_60w          # 60주선 우상향
+    G = (not ma_120w_valid) or (close > ma_120w)  # 120주선 위 (데이터 부족 시 통과)
 
-    if not (A and B and C and D and E and F):
+    if not (A and B and C and D and E and F and G):
         return None
 
     return ScreenResult(
@@ -211,6 +262,8 @@ def screen_ticker(ticker: str, name: str) -> Optional[ScreenResult]:
         has_gapjum=(ma_20w > ma_60w),
         screened_at=datetime.now(timezone.utc).isoformat(),
         week_of=current_week_of(),
+        sector=sector,
+        ma_120w=ma_120w,
     )
 
 
@@ -221,7 +274,8 @@ def run_weekly_screen() -> list[ScreenResult]:
     ThreadPoolExecutor로 병렬 실행 (yfinance는 동기 라이브러리).
     반환: 조건 통과 종목 list[ScreenResult]
     """
-    tickers = get_all_tickers()
+    sector_map = fetch_kind_sector_map()
+    tickers = get_all_tickers(sector_map)
     if not tickers:
         logger.warning("[스크리너] 종목 목록 비어있음")
         return []
@@ -232,7 +286,7 @@ def run_weekly_screen() -> list[ScreenResult]:
     processed = 0
 
     with ThreadPoolExecutor(max_workers=SCREENER_WORKERS) as pool:
-        futures = {pool.submit(screen_ticker, t, n): (t, n) for t, n in tickers}
+        futures = {pool.submit(screen_ticker, t, n, s): (t, n, s) for t, n, s in tickers}
         for future in as_completed(futures):
             processed += 1
             try:

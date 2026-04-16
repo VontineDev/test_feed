@@ -162,6 +162,8 @@ CREATE TABLE IF NOT EXISTS chart_signals (
     has_gapjum  BOOLEAN      DEFAULT FALSE,
     week_of     VARCHAR(10)  NOT NULL,
     screened_at TIMESTAMPTZ  DEFAULT NOW(),
+    sector      VARCHAR(80)  DEFAULT '',
+    ma_120w     FLOAT,
     UNIQUE(ticker, week_of)
 );
 CREATE INDEX IF NOT EXISTS idx_chart_signals_week_ticker ON chart_signals(week_of, ticker);
@@ -202,6 +204,12 @@ async def create_pool(dsn: Optional[str] = None) -> asyncpg.Pool:
 async def init_db(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
         await conn.execute(_CREATE_TABLE)
+        await conn.execute(
+            "ALTER TABLE chart_signals ADD COLUMN IF NOT EXISTS sector VARCHAR(80) DEFAULT ''"
+        )
+        await conn.execute(
+            "ALTER TABLE chart_signals ADD COLUMN IF NOT EXISTS ma_120w FLOAT"
+        )
     logger.info("DB 테이블 준비 완료 (news_articles)")
 
 
@@ -728,8 +736,9 @@ async def save_chart_signals(
                     """
                     INSERT INTO chart_signals
                         (ticker, name, close, ma_20w, ma_60w, cloud_top,
-                         is_enhanced, has_gapjum, week_of, screened_at)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                         is_enhanced, has_gapjum, week_of, screened_at,
+                         sector, ma_120w)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
                     ON CONFLICT (ticker, week_of) DO UPDATE SET
                         close       = EXCLUDED.close,
                         ma_20w      = EXCLUDED.ma_20w,
@@ -737,7 +746,9 @@ async def save_chart_signals(
                         cloud_top   = EXCLUDED.cloud_top,
                         is_enhanced = EXCLUDED.is_enhanced,
                         has_gapjum  = EXCLUDED.has_gapjum,
-                        screened_at = EXCLUDED.screened_at
+                        screened_at = EXCLUDED.screened_at,
+                        sector      = EXCLUDED.sector,
+                        ma_120w     = EXCLUDED.ma_120w
                     """,
                     r.ticker,
                     r.name,
@@ -749,6 +760,8 @@ async def save_chart_signals(
                     r.has_gapjum,
                     r.week_of,
                     datetime.fromisoformat(r.screened_at),
+                    r.sector,
+                    r.ma_120w,
                 )
                 count += 1
         logger.info("[차트스크리너] chart_signals %d건 저장/갱신", count)
@@ -772,7 +785,8 @@ async def load_chart_signals_latest(pool: asyncpg.Pool) -> tuple[str, list]:
             rows = await conn.fetch(
                 """
                 SELECT ticker, name, close, ma_20w, ma_60w, cloud_top,
-                       is_enhanced, has_gapjum, week_of, screened_at
+                       is_enhanced, has_gapjum, week_of, screened_at,
+                       sector, ma_120w
                 FROM chart_signals
                 WHERE week_of = $1
                 ORDER BY has_gapjum DESC, close DESC

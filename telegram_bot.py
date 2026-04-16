@@ -334,6 +334,8 @@ async def _handle_screener(http: httpx.AsyncClient, chat_id: str, pool) -> None:
             has_gapjum=r["has_gapjum"],
             screened_at=r["screened_at"].isoformat() if r["screened_at"] else "",
             week_of=r["week_of"],
+            sector=r.get("sector") or "",
+            ma_120w=r.get("ma_120w"),
         )
         for r in rows
     ]

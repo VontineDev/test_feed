@@ -116,4 +116,4 @@ pytest test_summarizer_regression_1.py -v     # LLM 헬스체크·Qwen3 thinking
 
 ## 버전
 
-현재 버전: `0.2.6.0` — [CHANGELOG](CHANGELOG.md) 참고
+현재 버전: `0.2.7.0` — [CHANGELOG](CHANGELOG.md) 참고

@@ -311,20 +311,39 @@ async def send_weekly_screener(
             f"이번 주 조건 통과 종목 없음"
         )
     else:
+        from collections import defaultdict
         # 정배열(has_gapjum) 우선, 그 다음 종가 내림차순
         sorted_r = sorted(results, key=lambda r: (not r.has_gapjum, -r.close))
+
+        # 섹터별 그룹핑
+        by_sector: dict[str, list] = defaultdict(list)
+        for r in sorted_r:
+            short_sector = (r.sector.split(",")[0][:20].strip()) or "기타"
+            by_sector[short_sector].append(r)
+
+        # 종목 수 기준 상위 5개 섹터
+        top_sectors = sorted(by_sector.items(), key=lambda x: -len(x[1]))[:5]
+
         lines = [
             f"📊 *주봉 차트 스크리닝 \\({esc(week)}\\)*",
-            f"통과 종목: {len(results)}개\n",
+            f"통과: {len(results)}개 \\(섹터 상위 5\\)\n",
         ]
-        for r in sorted_r[:20]:       # Telegram 메시지 길이 대응 — 최대 20종목
-            star = " ★" if r.has_gapjum else ""
-            lines.append(
-                f"• {esc(r.name)} `{esc_code(r.ticker)}`{esc(star)}\n"
-                f"  종가 {r.close:,.0f} \\| 20주 {r.ma_20w:,.0f} \\| 60주 {r.ma_60w:,.0f}"
-            )
-        if len(results) > 20:
-            lines.append(f"\n\\(외 {len(results) - 20}종목\\)")
+
+        # KIND 데이터 없음 경고
+        if results and not any(r.sector for r in results):
+            lines.insert(1, "⚠️ *KIND 섹터 데이터 없음 \\— 전체 기타 그룹*")
+
+        for sector_name, sector_stocks in top_sectors:
+            # 섹터 내 정배열 우선, 종가 내림차순 top-3
+            top3 = sorted(sector_stocks, key=lambda r: (not r.has_gapjum, -r.close))[:3]
+            lines.append(f"*{esc(sector_name)}* \\({len(sector_stocks)}종목\\)")
+            for r in top3:
+                star = " ★" if r.has_gapjum else ""
+                lines.append(
+                    f"• {esc(r.name)}{esc(star)} `{esc_code(r.ticker.split('.')[0])}`  {r.close:,.0f}"
+                )
+            lines.append("")
+
         message = "\n".join(lines)
 
     channel_id = _get_channel_id()

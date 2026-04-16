@@ -5,6 +5,35 @@ Items deferred from code review and planning sessions.
 ---
 
 
+## P3: Screener v2 — Condition G NaN Calibration (after first W17 run)
+
+**What:** After the first Sunday run with v2 (2026-W17 or later), check what fraction of passed stocks have `ma_120w IS NULL` (i.e., passed via the NaN-safe fallback, not a real 120wMA comparison):
+
+```sql
+SELECT
+    COUNT(*) FILTER (WHERE ma_120w IS NULL) AS null_count,
+    COUNT(*) AS total,
+    ROUND(100.0 * COUNT(*) FILTER (WHERE ma_120w IS NULL) / COUNT(*), 1) AS null_pct
+FROM chart_signals
+WHERE week_of = '2026-W17';
+```
+
+**Decision rule:**
+- If `null_pct > 20%`: tighten condition G — NaN → G **fails** (require full data). Change `G = (not ma_120w_valid) or (close > ma_120w)` to `G = ma_120w_valid and (close > ma_120w)` in `screen_ticker()`.
+- If `null_pct ≤ 20%`: current NaN-pass behavior is acceptable. No change.
+
+**Why:** Stocks with < 100 weeks of data (recently listed, data gaps) pass condition G automatically. If these dominate the results, the 120wMA filter has no real effect on them. The 20% threshold ensures the filter is doing real work on at least 80% of passed stocks.
+
+**How to apply:** Run the SQL after the first v2 screener run. Update `screen_ticker()` in `chart_screener.py` if threshold is breached. Re-run screener manually to confirm count change.
+
+**Pros:** Closes the product hypothesis loop for condition G calibration.
+**Cons:** Requires one full run of data before the decision can be made.
+**Effort:** XS (human: ~10 min / CC: ~5 min)
+**Priority:** P3
+**Blocked by:** First successful v2 screener run.
+
+---
+
 ## P4: Index on price_outcomes(checkpoint) for Backtest Query Performance
 
 **What:** Add `CREATE INDEX IF NOT EXISTS idx_price_outcomes_checkpoint ON price_outcomes(checkpoint, return_pct)` to `init_db()` in `db.py`.

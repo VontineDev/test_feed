@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.7.0] - 2026-04-16
+
+### Added
+
+- **Screener v2: condition G — 120-week MA filter** (`chart_screener.py`): added condition G (`close > 120wMA`) to the weekly breakout screen. `fetch_weekly_ohlcv` now fetches 3 years of data (`period="3y"`) to ensure enough bars for a true 120wMA. NaN-safe: tickers with < 100 weeks of data pass automatically (`min_periods=100`). `ScreenResult` gains `ma_120w: Optional[float]` field (`None` when insufficient data).
+- **Screener v2: KIND sector data** (`chart_screener.py`): `fetch_kind_sector_map()` fetches KOSPI + KOSDAQ sector (업종) mappings from KIND (한국거래소 기업공시시스템). Returns `{종목코드: 업종}` dict. Graceful on failure — returns `{}` so the screener continues without sector data. `ScreenResult` gains `sector: str` field (empty on KIND failure).
+- **Screener v2: sector-grouped Telegram output** (`telegram_notify.py`): `send_weekly_screener()` now groups results by sector (top-5 sectors by count × top-3 stocks each). Sector name truncated at 20 chars. Stocks with no sector assigned fall into "기타". Shows KIND failure warning when all results have empty sector.
+- **DB migration — `sector` and `ma_120w` columns** (`db.py`): `chart_signals` table gains `sector VARCHAR(80)` and `ma_120w FLOAT` columns. `init_db()` runs idempotent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` on startup. `save_chart_signals()` and `load_chart_signals_latest()` updated accordingly.
+- **Tests: `TestFetchKindSectorMap`** (`test_chart_screener.py`): 3 tests covering happy-path HTML parsing, exception handling (KIND down), and empty HTML.
+- **Tests: `TestConditionG`** (`test_chart_screener.py`): 3 tests covering G pass (close > 120wMA), G fail (close < 120wMA), and NaN-pass (< 100 bars of data).
+- **Tests: `TestKINDFailureWarning`** (`test_screener_telegram_regression_1.py`): 2 tests verifying KIND warning appears when all sectors are empty, and absent when sectors are populated.
+- **Tests: `TestSectorGroupedFormat`** (`test_screener_telegram_regression_1.py`): 4 tests verifying sector grouping order, 기타 fallback, 20-char truncation, and top-3-per-sector limit.
+
 ## [0.2.6.0] - 2026-04-16
 
 ### Added
