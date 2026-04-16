@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 # ── backtest 모듈 import ──────────────────────────────────────
-from backtest import _esc, calculate_metrics, backtest_report_telegram, cross_analyze_historical
+from backtest import _esc, calculate_metrics, backtest_report_telegram, cross_analyze_historical, _fetch_type_breakdown
 
 
 # ═════════════════════════════════════════════════════════════
@@ -363,3 +363,50 @@ class TestBuildPriceContextCache:
                 as_of_date=week2, _ctx_cache=cache,
             )
             assert mock_build.call_count == 2  # different week → two fetches
+
+
+# ═════════════════════════════════════════════════════════════
+# _fetch_type_breakdown() — 기사 유형별 적중률
+# ═════════════════════════════════════════════════════════════
+
+def _make_type_pool(rows: list[dict]):
+    """asyncpg pool mock for _fetch_type_breakdown — returns rows from conn.fetch()."""
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=rows)
+    pool = MagicMock()
+    pool.acquire = MagicMock(return_value=AsyncMock(
+        __aenter__=AsyncMock(return_value=conn),
+        __aexit__=AsyncMock(return_value=False),
+    ))
+    return pool
+
+
+@pytest.mark.asyncio
+async def test_fetch_type_breakdown_suppresses_below_min():
+    """Types with fewer than min_signals entries are excluded from results."""
+    # 4 earnings rows (< 5 min), 6 analyst rows (>= 5 min)
+    db_rows = [
+        {"article_type": "earnings", "total": 4, "hits": 3},
+        {"article_type": "analyst",  "total": 6, "hits": 4},
+    ]
+    pool = _make_type_pool(db_rows)
+    results = await _fetch_type_breakdown(pool, min_signals=5)
+
+    types = [r["article_type"] for r in results]
+    assert "earnings" not in types, "earnings (4 signals) should be suppressed"
+    assert "analyst" in types, "analyst (6 signals) should appear"
+
+
+@pytest.mark.asyncio
+async def test_fetch_type_breakdown_hit_rate_calculation():
+    """hit_rate is correctly computed as hits/total * 100."""
+    db_rows = [
+        {"article_type": "ma", "total": 10, "hits": 7},
+    ]
+    pool = _make_type_pool(db_rows)
+    results = await _fetch_type_breakdown(pool, min_signals=5)
+
+    assert len(results) == 1
+    assert results[0]["article_type"] == "ma"
+    assert results[0]["total"] == 10
+    assert results[0]["hit_rate"] == pytest.approx(70.0, abs=0.1)
