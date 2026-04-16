@@ -703,7 +703,7 @@ async def _fetch_type_breakdown(pool, min_signals: int = 5) -> list[dict]:
     """
     기사 유형별 적중률 (1d 체크포인트, 전체 이력).
     min_signals 이상인 유형만 반환.
-    BUY/SELL/WATCH 신호만 포함 (방향성 있는 신호 기준).
+    BUY/SELL 신호만 포함. WATCH는 방향성 없어 적중률 계산 제외.
     """
     query = """
         SELECT
@@ -720,7 +720,7 @@ async def _fetch_type_breakdown(pool, min_signals: int = 5) -> list[dict]:
         JOIN price_outcomes po ON po.cross_price_id = cap.id
         WHERE po.checkpoint = '1d'
           AND po.return_pct IS NOT NULL
-          AND ts.direction IN ('BUY', 'SELL', 'WATCH')
+          AND ts.direction IN ('BUY', 'SELL')
         GROUP BY ts.article_type
         ORDER BY hits::float / NULLIF(COUNT(*), 0) DESC
     """
