@@ -56,8 +56,12 @@ class TradeSignal:
 
     @property
     def is_actionable(self) -> bool:
-        """BUY/SELL/WATCH 이고 strength 2 이상이면 유효 신호"""
-        return self.direction in ("BUY", "SELL", "WATCH") and self.strength >= 2
+        """BUY/SELL strength≥2, WATCH strength≥3 (노이즈 감소)"""
+        if self.direction in ("BUY", "SELL"):
+            return self.strength >= 2
+        if self.direction == "WATCH":
+            return self.strength >= 3
+        return False
 
 
 NONE_SIGNAL = TradeSignal(
