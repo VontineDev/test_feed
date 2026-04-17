@@ -92,7 +92,9 @@ class TestGetDsnUrlEncoding:
         """DB_PASSWORD 미설정 시 RuntimeError."""
         env = {"DB_HOST": "localhost", "DB_PORT": "5432",
                "DB_NAME": "news_db", "DB_USER": "news_user"}
-        with patch.dict(os.environ, env, clear=False):
+        # patch load_dotenv to a no-op so .env doesn't restore DB_PASSWORD during reload
+        with patch.dict(os.environ, env, clear=False), \
+             patch("dotenv.load_dotenv", return_value=None):
             os.environ.pop("DB_PASSWORD", None)
             os.environ.pop("DATABASE_URL", None)
             from importlib import reload
