@@ -72,7 +72,7 @@
     → tickers: [{name, yfinance_symbol}]
 ▼
 📊  시세 교차분석 (market_data.py)
-    yfinance로 관련 종목 시세 조회
+    yfinance로 관련 종목 시세 조회 + Naver Finance 펀더멘털 조회 (PER/PBR/EPS)
     → CrossAnalysis: CONFIRM / CAUTION / FILTER / NEUTRAL
 ▼
 💾  DB 저장 (db.py)
@@ -228,7 +228,7 @@ class TradeSignal:
 
 **펀더멘털 레이어 (v0.2.9.0~)**:
 
-`cross_analyze()`는 각 종목에 대해 Naver Finance 모바일 API(`https://m.stock.naver.com/api/stock/{code}/basic`)로 PER/PBR/EPS를 조회합니다. 인증 불필요. `PriceContext`에 `per`, `pbr`, `eps` 필드 추가.
+`cross_analyze()`는 각 종목에 대해 Naver Finance 모바일 API(`https://m.stock.naver.com/api/stock/{code}/integration`)로 PER/PBR/EPS를 조회합니다. 인증 불필요. `PriceContext`에 `per`, `pbr`, `eps` 필드 추가.
 
 펀더멘털 스코어 델타 (종목별):
 
@@ -505,7 +505,7 @@ test_feed/
 ├── test_signal_prompt.py          # pytest — 신호 감지 프롬프트 회귀
 ├── test_macro_signal.py           # pytest — 매크로 컨텍스트 신호 감지
 ├── test_chart_screener.py         # pytest — 스크리너 조건 A~G + KIND 섹터 (26개)
-├── test_screener_telegram_regression_1.py # pytest — 스크리너 텔레그램 포맷 회귀 (12개)
+├── test_screener_telegram_regression_1.py # pytest — 스크리너 텔레그램 포맷 회귀 (14개)
 ├── test_fundamental.py            # pytest — PER/PBR/EPS 펀더멘털 레이어 (41개)
 │
 ├── VERSION                        # 현재 버전 (SemVer 4자리)
