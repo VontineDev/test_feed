@@ -239,8 +239,19 @@ async def send_signal(
         for ctx in cross.price_contexts[:3]:
             sign = "▲" if ctx.change_pct >= 0 else "▼"
             rsi_str = f" RSI\\:{esc(str(ctx.rsi))}" if ctx.rsi else ""
+            macd_str = ""
+            if ctx.macd_cross == "bullish_cross":
+                macd_str = " MACD\\:▲▲"
+            elif ctx.macd_cross == "bearish_cross":
+                macd_str = " MACD\\:▼▼"
+            elif ctx.macd_hist is not None:
+                macd_str = " MACD\\:▲" if ctx.macd_hist > 0 else " MACD\\:▼"
+            bb_str = f" BB\\:{ctx.bb_pct:.0f}%" if ctx.bb_pct is not None else ""
+            ma_str = ""
+            if ctx.above_ma20 is not None and ctx.above_ma50 is not None:
+                ma_str = f" {'↑' if ctx.above_ma20 else '↓'}MA20 {'↑' if ctx.above_ma50 else '↓'}MA50"
             price_lines.append(
-                f"  {sign} {esc(ctx.ticker)} {esc(str(abs(ctx.change_pct)))}%{rsi_str}"
+                f"  {sign} {esc(ctx.ticker)} {esc(str(abs(ctx.change_pct)))}%{rsi_str}{macd_str}{bb_str}{ma_str}"
             )
 
     lines = [
