@@ -13,6 +13,7 @@
 > v0.2.8.0부터 교차분석에 MACD·볼린저밴드·MA20/50 레이어가 추가되었습니다. `PriceContext`에 5개 Optional 필드, 텔레그램 시세 라인에 기술적 지표 토큰 표시.
 > v0.2.7.0부터 스크리너 v2: 120주선 조건 G 추가, KIND 섹터 데이터 연동, 섹터별 그룹 포맷 Telegram 출력.
 > v0.2.9.0부터 펀더멘털 레이어가 추가되었습니다. Naver Finance 모바일 API에서 PER/PBR/EPS를 조회(인증 불필요)하여 `cross_analyze()` 스코어에 −3~+2 델타를 적용. 텔레그램 시세 라인에 PER/PBR 토큰 표시(주목할 만한 경우에만). 시작 시 `prewarm_fundamentals()`로 캐시 사전 적재. pykrx 불필요.
+> v0.4.0.0부터 기사 유형 분류(8종), 주봉 차트 스크리너 v2(120주선 + KIND 섹터 그룹), 교차분석 v2(MACD·볼린저밴드·MA20/50), 펀더멘털 레이어를 통합하여 출시. 이전 v0.2.5.0~v0.2.9.0 브랜치 기능 전체가 이 버전으로 병합됨.
 
 ---
 
@@ -515,6 +516,7 @@ test_feed/
 ├── backtest.py                    # 판정 정확도 추적 + 백테스팅 리포트
 ├── db.py                          # PostgreSQL 연동 (asyncpg)
 ├── chart_screener.py              # 주봉 Ichimoku+MA 스크리너 (KOSPI/KOSDAQ 전종목)
+├── generate_report.py             # 차트 스크리닝 결과를 UTF-8 파일로 저장 (CLI 스크립트)
 ├── telegram_bot.py                # 봇 명령어 처리 (/status /signals /today /backtest /screener /help)
 ├── telegram_notify.py             # 신호 알림 전송
 ├── volume_pattern.py              # 거래량 패턴 분석
@@ -522,18 +524,15 @@ test_feed/
 ├── ticker_cache.py                # 종목명→yfinance 심볼 인메모리 캐시 (startup 로드, 20:00 KST 갱신)
 │
 ├── batch_run.py                   # 배치 OHLCV 내보내기 + 분석 스크립트
-├── test_backtest.py               # pytest — 백테스팅 로직 (20개)
+├── test_backtest.py               # pytest — 백테스팅 로직 (23개)
 ├── test_telegram_routing.py       # pytest — 텔레그램 신호 라우팅 회귀 (4개)
 ├── test_summarizer_regression_1.py# pytest — LLM 헬스체크·Qwen3 thinking 회귀
 ├── test_krx_sync.py               # pytest — KRX 동기화 + 티커 캐시 (31개)
 ├── test_ticker_cache_integration.py # pytest — market_data·volume_pattern 캐시 통합 (7개)
 ├── test_article_type.py           # pytest — 기사 유형 분류 (17개)
-├── test_backtest.py               # pytest — 백테스팅 로직 (23개)
-├── test_telegram_routing.py       # pytest — 텔레그램 신호 라우팅 회귀 (4개)
-├── test_summarizer_regression_1.py# pytest — LLM 헬스체크·Qwen3 thinking 회귀
 ├── test_db_dsn.py                 # pytest — DB DSN 설정 (7개)
-├── test_signal_prompt.py          # pytest — 신호 감지 프롬프트 회귀
-├── test_macro_signal.py           # pytest — 매크로 컨텍스트 신호 감지
+├── test_macro_signal.py           # pytest — MACD/BB/MA 교차분석 스코어링 (29개)
+├── test_signal_prompt.py          # pytest — 신호 감지 프롬프트 · WATCH 임계값 회귀 (10개)
 ├── test_chart_screener.py         # pytest — 스크리너 조건 A~G + KIND 섹터 (26개)
 ├── test_screener_telegram_regression_1.py # pytest — 스크리너 텔레그램 포맷 회귀 (14개)
 ├── test_fundamental.py            # pytest — PER/PBR/EPS 펀더멘털 레이어 (41개)
@@ -664,14 +663,12 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 | ~~신호 이력 조회~~ | ✅ v0.1.0.0 — `/signals buy\|sell\|watch` 방향 필터 구현 완료 |
 | 교차분석 강화 | 거래량 급증, 52주 고/저가 근접 조건 추가 |
 | 백테스트 기준선 | 판정 없는 방향별 시장 기준 적중률 추가 (TODOS.md P3 참고) |
-| ~~APScheduler 영속성~~ | ✅ v0.2.2.0 — SQLAlchemyJobStore로 Postgres 기반 영속성 구현 완료 |
-| ~~백테스트 기준선~~ | ✅ v0.2.2.0 — `backtest_report_telegram()`에 랜덤 기준선 추가 완료 |
 | ~~APScheduler 영속성~~ | ✅ v0.2.2.0 — `SQLAlchemyJobStore` Postgres 기반 영속성 구현 완료 |
+| ~~백테스트 기준선~~ | ✅ v0.2.2.0 — `backtest_report_telegram()`에 랜덤 기준선 추가 완료 |
 | 알림 재시도 | 텔레그램 전송 실패 시 지수 백오프 재시도 |
 | Docker 배포 | `docker-compose.yml` 기반 컨테이너화 |
 | 모델 교체 용이성 | `OLLAMA_MODEL`·`LM_STUDIO_MODEL` 환경변수화 |
 
 ---
 
-*현재 코드베이스 v0.3.0.0 (2026-04-14) 기준*
-*현재 코드베이스 v0.2.9.0 (2026-04-18) 기준*
+*현재 코드베이스 v0.4.0.0 (2026-04-18) 기준*
