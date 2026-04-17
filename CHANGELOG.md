@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.8.0] - 2026-04-17
+
+### Added
+
+- **Signal Cross-Analysis v2: MACD + Bollinger Bands + MA trend layer** (`market_data.py`): `cross_analyze()` now factors in five new technical indicators per ticker — MACD histogram direction, MACD cross (bullish/bearish), Bollinger %B position, and price vs MA20/MA50 alignment. Zero extra API calls: all indicators computed from the same 1-year daily Close series already fetched for RSI. `PriceContext` gains five new Optional fields (`macd_hist`, `macd_cross`, `bb_pct`, `above_ma20`, `above_ma50`) with `None` defaults for full backward compatibility.
+- **Richer Telegram signal messages** (`telegram_notify.py`): each price line in a signal alert now shows up to five data points — price change, RSI, MACD direction (▲/▼/▲▲/▼▼ for crosses), Bollinger %B, and MA20/MA50 position (↑↓). All indicators are skipped gracefully if data is unavailable (illiquid tickers, short history).
+- **WATCH noise reduction** (`signal_detector.py`): `is_actionable` now requires strength ≥ 3 for WATCH signals (previously ≥ 2), reducing false positives from ambiguous news.
+
+### For contributors
+
+- `TestCrossAnalyzeMACDBBMA` (Group 8, `test_macro_signal.py`): 8 unit tests covering BUY + bullish_cross, BUY + overbought BB (regression guard), BUY + below both MAs, BUY + oversold BB, SELL + bearish_cross, SELL + above both MAs, all-None fields (no scoring change), Telegram price line format.
+- `TestFetchYfinanceTAComputation` (Group 9, `test_macro_signal.py`): 2 integration tests — sufficient data (60 bars) produces valid float indicators; insufficient data (10 bars) returns `bb_pct=None` from NaN guard.
+- `TestIsActionableThreshold` (`test_signal_prompt.py`): 7 tests for the WATCH ≥ 3 threshold.
+
 ## [0.2.7.0] - 2026-04-17
 
 ### Added
