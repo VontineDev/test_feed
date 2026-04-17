@@ -90,4 +90,5 @@ async def main():
         logger.error("✗ DM 전송 실패 — 토큰/Chat ID 확인 필요")
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
