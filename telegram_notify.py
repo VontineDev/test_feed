@@ -40,6 +40,17 @@ SOURCE_LABEL = {
     "bloomberg":   "Bloomberg",
 }
 
+TYPE_BADGE = {
+    "earnings":   "📊",
+    "ma":         "🤝",
+    "management": "👤",
+    "analyst":    "🔍",
+    "regulatory": "⚖️",
+    "product":    "🚀",
+    "macro":      "🌐",
+    "other":      "📰",   # internal reference only — never rendered in messages
+}
+
 
 def _get_token() -> str:
     token = os.environ.get("TELEGRAM_TOKEN", "")
@@ -204,12 +215,17 @@ async def send_signal(
     bar  = "⬛" * signal.strength + "⬜" * (5 - signal.strength)
 
     def esc(text: str) -> str:
-        for ch in r"\_*[]()~>#+-=|{}.!":
+        for ch in r"\_*[]()~`>#+-=|{}.!":
             text = text.replace(ch, f"\\{ch}")
         return text
 
     tickers_str = " ".join(f"`{t}`" for t in signal.tickers) if signal.tickers else "\\-"
     source  = SOURCE_LABEL.get(art["source"], art["source"].upper())
+
+    # 기사 유형 배지 (other 제외)
+    article_type = getattr(signal, "article_type", "other") or "other"
+    type_badge = TYPE_BADGE.get(article_type, "")
+    badge_prefix = f"{type_badge} " if article_type != "other" and type_badge else ""
 
     # 교차 분석 점수 표시
     score_line = ""
@@ -223,12 +239,36 @@ async def send_signal(
         for ctx in cross.price_contexts[:3]:
             sign = "▲" if ctx.change_pct >= 0 else "▼"
             rsi_str = f" RSI\\:{esc(str(ctx.rsi))}" if ctx.rsi else ""
+            macd_str = ""
+            if ctx.macd_cross == "bullish_cross":
+                macd_str = " MACD\\:▲▲"
+            elif ctx.macd_cross == "bearish_cross":
+                macd_str = " MACD\\:▼▼"
+            elif ctx.macd_hist is not None:
+                macd_str = " MACD\\:▲" if ctx.macd_hist > 0 else " MACD\\:▼"
+            bb_str = f" BB\\:{ctx.bb_pct:.0f}%" if ctx.bb_pct is not None else ""
+            ma_str = ""
+            if ctx.above_ma20 is not None and ctx.above_ma50 is not None:
+                ma_str = f" {'↑' if ctx.above_ma20 else '↓'}MA20 {'↑' if ctx.above_ma50 else '↓'}MA50"
+            per_str = ""
+            pbr_str = ""
+            if getattr(ctx, "eps", None) is not None and ctx.eps < 0:
+                per_str = " 적자"
+            elif getattr(ctx, "per", None) is not None:
+                arrow = "↓" if ctx.per < 15 else ("↑" if ctx.per > 50 else "")
+                if arrow:
+                    per_str = f" PER\\:{ctx.per:.0f}{arrow}"
+            if getattr(ctx, "pbr", None) is not None:
+                if ctx.pbr > 5:
+                    pbr_str = f" PBR\\:{ctx.pbr:.1f}↑"
+                elif ctx.pbr < 1:
+                    pbr_str = f" PBR\\:{ctx.pbr:.1f}↓"
             price_lines.append(
-                f"  {sign} {esc(ctx.ticker)} {esc(str(abs(ctx.change_pct)))}%{rsi_str}"
+                f"  {sign} {esc(ctx.ticker)} {esc(str(abs(ctx.change_pct)))}%{rsi_str}{macd_str}{bb_str}{ma_str}{per_str}{pbr_str}"
             )
 
     lines = [
-        f"{icon} *매매 신호 감지 \\- {esc(signal.direction)}*",
+        f"{badge_prefix}{icon} *매매 신호 감지 \\- {esc(signal.direction)}*",
         f"강도: {bar} {signal.strength}/5",
     ]
     if score_line:
@@ -295,20 +335,39 @@ async def send_weekly_screener(
             f"이번 주 조건 통과 종목 없음"
         )
     else:
+        from collections import defaultdict
         # 정배열(has_gapjum) 우선, 그 다음 종가 내림차순
         sorted_r = sorted(results, key=lambda r: (not r.has_gapjum, -r.close))
+
+        # 섹터별 그룹핑
+        by_sector: dict[str, list] = defaultdict(list)
+        for r in sorted_r:
+            short_sector = (r.sector.split(",")[0][:20].strip()) or "기타"
+            by_sector[short_sector].append(r)
+
+        # 종목 수 기준 상위 5개 섹터
+        top_sectors = sorted(by_sector.items(), key=lambda x: -len(x[1]))[:5]
+
         lines = [
             f"📊 *주봉 차트 스크리닝 \\({esc(week)}\\)*",
-            f"통과 종목: {len(results)}개\n",
+            f"통과: {len(results)}개 \\(섹터 상위 5\\)\n",
         ]
-        for r in sorted_r[:20]:       # Telegram 메시지 길이 대응 — 최대 20종목
-            star = " ★" if r.has_gapjum else ""
-            lines.append(
-                f"• {esc(r.name)} `{esc_code(r.ticker)}`{esc(star)}\n"
-                f"  종가 {r.close:,.0f} \\| 20주 {r.ma_20w:,.0f} \\| 60주 {r.ma_60w:,.0f}"
-            )
-        if len(results) > 20:
-            lines.append(f"\n\\(외 {len(results) - 20}종목\\)")
+
+        # KIND 데이터 없음 경고
+        if results and not any(r.sector for r in results):
+            lines.insert(1, "⚠️ *KIND 섹터 데이터 없음 \\— 전체 기타 그룹*")
+
+        for sector_name, sector_stocks in top_sectors:
+            # 섹터 내 정배열 우선, 종가 내림차순 top-3
+            top3 = sorted(sector_stocks, key=lambda r: (not r.has_gapjum, -r.close))[:3]
+            lines.append(f"*{esc(sector_name)}* \\({len(sector_stocks)}종목\\)")
+            for r in top3:
+                star = " ★" if r.has_gapjum else ""
+                lines.append(
+                    f"• {esc(r.name)}{esc(star)} `{esc_code(r.ticker.split('.')[0])}`  {r.close:,.0f}"
+                )
+            lines.append("")
+
         message = "\n".join(lines)
 
     channel_id = _get_channel_id()
@@ -317,10 +376,9 @@ async def send_weekly_screener(
     if _own_client:
         http = httpx.AsyncClient()
     try:
+        ok = await _post_message(http, token, chat_id, message, label="차트스크리닝(DM)")
         if channel_id:
-            ok = await _post_message(http, token, channel_id, message, label="차트스크리닝(채널)")
-        else:
-            ok = await _post_message(http, token, chat_id, message, label="차트스크리닝")
+            await _post_message(http, token, channel_id, message, label="차트스크리닝(채널)")
         return ok
     finally:
         if _own_client:

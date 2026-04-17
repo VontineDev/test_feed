@@ -73,3 +73,39 @@ class TestSignalPromptEndsWithOutputInstruction:
         )
         assert "Macro context" not in prompt
         assert "USD/KRW" not in prompt
+
+
+class TestIsActionableThreshold:
+    """is_actionable must require strength>=3 for WATCH to reduce notification noise."""
+
+    def _make_signal(self, direction, strength):
+        from signal_detector import TradeSignal, Backend
+        return TradeSignal(
+            direction=direction, strength=strength, reason="테스트",
+            tickers=[], ticker_symbols={}, backend=Backend.OLLAMA,
+            success=True, article_type="other",
+        )
+
+    # WATCH: threshold is 3, not 2
+    def test_watch_strength2_not_actionable(self):
+        assert not self._make_signal("WATCH", 2).is_actionable
+
+    def test_watch_strength3_actionable(self):
+        assert self._make_signal("WATCH", 3).is_actionable
+
+    def test_watch_strength4_actionable(self):
+        assert self._make_signal("WATCH", 4).is_actionable
+
+    # BUY/SELL: threshold stays at 2
+    def test_buy_strength2_actionable(self):
+        assert self._make_signal("BUY", 2).is_actionable
+
+    def test_sell_strength2_actionable(self):
+        assert self._make_signal("SELL", 2).is_actionable
+
+    def test_buy_strength1_not_actionable(self):
+        assert not self._make_signal("BUY", 1).is_actionable
+
+    # NONE: never actionable
+    def test_none_not_actionable(self):
+        assert not self._make_signal("NONE", 5).is_actionable

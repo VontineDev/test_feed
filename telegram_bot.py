@@ -7,8 +7,9 @@ Long polling 방식으로 명령어를 수신하고 DB 조회 결과를 응답.
     /status   — 크롤러 현재 상태 (수집 건수, 마지막 수집 시각 등)
     /signals  — 최근 매매 신호 10건 (BUY/SELL/WATCH)
     /today    — 오늘 수집된 기사 요약 (카테고리별 건수 + 최신 5건)
-    /backtest — 교차분석 백테스팅 리포트 (판정별/종목별 적중률)
-    /help     — 명령어 목록
+    /backtest  — 교차분석 백테스팅 리포트 (판정별/종목별 적중률)
+    /screener  — 최신 주봉 차트 스크리닝 결과 (DM + 채널 동시 발송)
+    /help      — 명령어 목록
 """
 
 from __future__ import annotations
@@ -306,6 +307,43 @@ async def _handle_volume(http: httpx.AsyncClient, chat_id: str, args: list[str])
         await _send_plain(http, chat_id, f"오류가 발생했습니다: {e}")
 
 
+async def _handle_screener(http: httpx.AsyncClient, chat_id: str, pool) -> None:
+    """/screener — 최신 주봉 차트 스크리닝 결과 (DB 조회 후 DM + 채널 동시 발송)"""
+    if not pool:
+        await _send(http, chat_id, "DB 미연결 상태입니다\\.")
+        return
+
+    from db import load_chart_signals_latest
+    from chart_screener import ScreenResult
+
+    week, rows = await load_chart_signals_latest(pool)
+    if not rows:
+        await _send(http, chat_id,
+            "스크리닝 결과가 없습니다\\.\n매주 일요일 20:30에 업데이트됩니다\\.")
+        return
+
+    results = [
+        ScreenResult(
+            ticker=r["ticker"],
+            name=r["name"] or r["ticker"],
+            close=r["close"],
+            ma_20w=r["ma_20w"],
+            ma_60w=r["ma_60w"],
+            cloud_top=r["cloud_top"],
+            is_enhanced=r["is_enhanced"],
+            has_gapjum=r["has_gapjum"],
+            screened_at=r["screened_at"].isoformat() if r["screened_at"] else "",
+            week_of=r["week_of"],
+            sector=r.get("sector") or "",
+            ma_120w=r.get("ma_120w"),
+        )
+        for r in rows
+    ]
+
+    from telegram_notify import send_weekly_screener
+    await send_weekly_screener(results, http=http)
+
+
 async def _handle_help(http: httpx.AsyncClient, chat_id: str) -> None:
     """/help — 명령어 목록"""
     lines = [
@@ -318,7 +356,8 @@ async def _handle_help(http: httpx.AsyncClient, chat_id: str) -> None:
         "/signals watch — WATCH 신호만 조회",
         "/today — 오늘 수집 현황 \\+ 최신 기사",
         "/backtest — 교차분석 백테스팅 리포트",
-        "/volume <종목명\\|티커> — 시간대별 거래량 패턴 분석",
+        "/volume \\<종목명\\|티커\\> — 시간대별 거래량 패턴 분석",
+        "/screener — 최신 주봉 차트 스크리닝 결과 \\(DM \\+ 채널\\)",
         "/help — 이 도움말",
     ]
     await _send(http, chat_id, "\n".join(lines))
@@ -373,6 +412,8 @@ async def _process_update(http: httpx.AsyncClient, update: dict, pool) -> None:
         await _handle_backtest(http, chat_id, pool)
     elif cmd == "/volume":
         await _handle_volume(http, chat_id, args)
+    elif cmd == "/screener":
+        await _handle_screener(http, chat_id, pool)
     elif cmd in ("/help", "/start"):
         await _handle_help(http, chat_id)
     else:
@@ -391,6 +432,7 @@ async def _register_commands(http: httpx.AsyncClient) -> None:
         {"command": "today",    "description": "오늘 수집 현황 + 최신 기사"},
         {"command": "backtest", "description": "교차분석 백테스팅 리포트"},
         {"command": "volume",   "description": "시간대별 거래량 패턴 분석"},
+        {"command": "screener", "description": "최신 주봉 차트 스크리닝 결과 (DM + 채널)"},
         {"command": "help",     "description": "명령어 목록"},
     ]
     try:

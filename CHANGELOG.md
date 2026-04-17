@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0.0] - 2026-04-18
+
+### Added
+- **Article type classification** (`signal_detector.py`, `db.py`, `telegram_notify.py`): `TradeSignal` now carries an `article_type` field (EARNINGS / MACRO / TECHNICAL / GUIDANCE / SECTOR / OTHER). `SIGNAL_PROMPT` instructs the LLM to classify each article. Type is persisted in `trade_signals.article_type` (DB column added idempotently). Signals include a `TYPE_BADGE` emoji in Telegram messages (🔴 earnings, 🌐 macro, 📊 technical, etc.).
+- **Per-article-type hit rate breakdown** (`backtest.py`, `generate_report.py`): backtest report now includes a breakdown of signal accuracy by article type. Identifies which categories produce the highest-conviction signals.
+- **Weekly chart screener** (`chart_screener.py`): scans all KOSPI/KOSDAQ stocks (~2,770) every Sunday at 20:30 KST using Ichimoku + 20/60-week MA conditions (6-condition filter). Results stored in `chart_signals` DB table and delivered to Telegram DM + channel simultaneously.
+- **`/screener` Telegram command** (`telegram_bot.py`): on-demand access to the latest weekly screening results from DB — no re-scan required.
+- **Screener v2: 120-week MA filter** (`chart_screener.py`): `close > 120wMA` required (condition G). Stocks with < 100 weeks of data pass automatically. `ScreenResult` gains `ma_120w` field.
+- **Screener v2: KIND sector grouping** (`chart_screener.py`, `telegram_notify.py`): each screened ticker carries its KRX sector from KIND. Sunday messages show top 5 sectors with top 3 stocks per sector.
+- **DB migrations** (`db.py`): `chart_signals.sector` (VARCHAR 80), `chart_signals.ma_120w` (FLOAT), `trade_signals.article_type` (VARCHAR 40) — all added idempotently via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
+- **Signal Cross-Analysis v2: MACD + Bollinger Bands + MA trend layer** (`market_data.py`): `cross_analyze()` now factors in MACD histogram direction, MACD cross (bullish/bearish), Bollinger %B position, and price vs MA20/MA50 alignment. Zero extra API calls — all indicators computed from the existing 1-year daily Close series.
+- **Richer Telegram signal messages** (`telegram_notify.py`): each price line now shows price change, RSI, MACD direction (▲▲/▼▼ for crosses), Bollinger %B, and MA20/MA50 position.
+- **Fundamental layer: PER/PBR/EPS enrichment** (`market_data.py`): `cross_analyze()` factors in valuation fundamentals sourced from Naver Finance mobile API (no credentials required). `PriceContext` gains `per`, `pbr`, `eps` fields. Fundamental score adjusts signal score by −3 to +2. Startup pre-warms all Korean tickers via 5-worker thread pool.
+- **Fundamental display in Telegram** (`telegram_notify.py`): price lines show PER/PBR tokens when noteworthy (`PER:12↓`, `PER:80↑`, `적자`, `PBR:0.6↓`). Neutral companies show no tokens.
+
+### Fixed
+- **WATCH signal noise** (`signal_detector.py`): `is_actionable` now requires strength ≥ 3 for WATCH signals (was ≥ 2), reducing false positives from ambiguous news.
+- **`_fetch_type_breakdown` SQL** (`backtest.py`): WATCH signals excluded from article type breakdown query — WATCH is a hold signal, not a trading action, and inflated breakdown counts.
+- **Ollama model name mismatch** (`summarizer.py`): default `OLLAMA_MODEL` changed from `Qwen3.5-9B:latest` to `qwen3.5:9b` — previous value caused 404 on all `/api/chat` calls.
+- **`/help` MarkdownV2 parse error** (`telegram_bot.py`): `<` and `>` in `/volume <종목명|티커>` escaped to `\<` and `\>`.
+
+### Tests (242 total)
+- `test_article_type.py`: 19 tests — 17 unit tests for type classification logic, 2 backtest integration tests.
+- `test_chart_screener.py`: 31 tests — KIND sector fetch, condition G (120wMA), screener pipeline.
+- `test_fundamental.py`: 41 tests — `_parse_naver_value`, `_fundamental_score`, `_fetch_fundamental`, `cross_analyze` average delta, Telegram display.
+- `test_macro_signal.py`: 10 new tests — MACD/BB/MA scoring (Group 8), yfinance TA computation (Group 9).
+- `test_signal_prompt.py`: 7 tests — WATCH ≥ 3 threshold.
+- `test_screener_telegram_regression_1.py`: 6 regression tests — KIND failure warning, sector-grouped format.
+- `test_screener_cmd.py`: 4 tests — `/screener` command handler.
+- `test_backtest.py`: updated with article type breakdown tests.
+
 ## [0.3.0.0] - 2026-04-14
 
 ### Added
@@ -18,6 +49,77 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - `market_data.py` `get_price_context()`: `ticker_cache.resolve()` queried before static `YFINANCE_MAP` fallback. Articles mentioning tickers not in the hardcoded map now receive full price context, RSI, and volume signals.
 - `volume_pattern.py` `resolve_ticker()`: `ticker_cache.resolve()` queried before `KR_KOSDAQ`/`KR_KOSPI` static dicts. Return type unchanged — still returns `(yfinance_ticker, display_name, market_code)` tuple.
+## [0.2.9.0] - 2026-04-18
+
+### Added
+
+- **Fundamental layer: PER/PBR/EPS enrichment** (`market_data.py`): `cross_analyze()` now factors in valuation fundamentals. Data sourced from Naver Finance mobile API (no credentials required; replaces pykrx which requires KRX login under Python 3.14). `PriceContext` gains `per`, `pbr`, `eps` fields. Fundamental score adjusts the signal score by −3 to +2: loss-making tickers (EPS < 0) penalized −2, high PER (>50) or high PBR (>5) penalized −1 each, cheap tickers (PER < 15 or PBR < 1) rewarded +1 each. Multi-ticker score uses average delta (not sum) to prevent one bad ticker from dominating.
+- **Fundamental display in Telegram** (`telegram_notify.py`): price lines now show PER/PBR tokens when noteworthy — `PER:12↓` for cheap, `PER:80↑` for expensive, `적자` for loss-making, `PBR:0.6↓` or `PBR:7.0↑` at extremes. Neutral companies show no fundamental tokens, keeping the price line clean for normal cases.
+- **Startup pre-warm** (`run_scheduler.py`): all Korean tickers in `YFINANCE_MAP` are pre-warmed via `prewarm_fundamentals()` at startup using a 5-worker thread pool. Avoids 150ms cold-miss latency on first signal of the day.
+- **Daily cache** (`market_data.py`): fundamental results cached by date key (`_fund_cache`), reset on process restart. Cache hits cost ~0ms; misses cost ~150ms (Naver API). Thread-safe via `dict.setdefault()`.
+
+### For contributors
+
+- `test_fundamental.py` (41 tests): `_parse_naver_value` (10 edge cases including Korean unit suffixes), `_to_krx_code` (4 cases), `_fundamental_score` (11 cases including boundary values per==15/50, pbr==1/5, eps==0), `_fetch_fundamental` (6 cases with mocked httpx: cache hit, HTTPX_OK=False, success, loss-maker, PER>200 cap, API exception), `cross_analyze` average delta (3 cases), Telegram per_str/pbr_str display (7 cases).
+
+## [0.2.8.0] - 2026-04-17
+
+### Added
+
+- **Signal Cross-Analysis v2: MACD + Bollinger Bands + MA trend layer** (`market_data.py`): `cross_analyze()` now factors in five new technical indicators per ticker — MACD histogram direction, MACD cross (bullish/bearish), Bollinger %B position, and price vs MA20/MA50 alignment. Zero extra API calls: all indicators computed from the same 1-year daily Close series already fetched for RSI. `PriceContext` gains five new Optional fields (`macd_hist`, `macd_cross`, `bb_pct`, `above_ma20`, `above_ma50`) with `None` defaults for full backward compatibility.
+- **Richer Telegram signal messages** (`telegram_notify.py`): each price line in a signal alert now shows up to five data points — price change, RSI, MACD direction (▲/▼/▲▲/▼▼ for crosses), Bollinger %B, and MA20/MA50 position (↑↓). All indicators are skipped gracefully if data is unavailable (illiquid tickers, short history).
+- **WATCH noise reduction** (`signal_detector.py`): `is_actionable` now requires strength ≥ 3 for WATCH signals (previously ≥ 2), reducing false positives from ambiguous news.
+
+### For contributors
+
+- `TestCrossAnalyzeMACDBBMA` (Group 8, `test_macro_signal.py`): 8 unit tests covering BUY + bullish_cross, BUY + overbought BB (regression guard), BUY + below both MAs, BUY + oversold BB, SELL + bearish_cross, SELL + above both MAs, all-None fields (no scoring change), Telegram price line format.
+- `TestFetchYfinanceTAComputation` (Group 9, `test_macro_signal.py`): 2 integration tests — sufficient data (60 bars) produces valid float indicators; insufficient data (10 bars) returns `bb_pct=None` from NaN guard.
+- `TestIsActionableThreshold` (`test_signal_prompt.py`): 7 tests for the WATCH ≥ 3 threshold.
+
+## [0.2.7.0] - 2026-04-17
+
+### Added
+
+- **Screener v2: 120-week MA filter (condition G)** (`chart_screener.py`): the weekly breakout screen now requires close price above the 120-week moving average. Stocks with less than 100 weeks of data pass automatically so recently-listed tickers aren't excluded. `ScreenResult` gains a `ma_120w` field showing the computed average (or `None` when data is insufficient). OHLCV fetch extended to 3 years (`period="3y"`) to supply enough bars.
+- **Screener v2: KIND sector data** (`chart_screener.py`): each screened ticker now carries its exchange sector (업종) from KIND (한국거래소 기업공시시스템). Fetched at scan time, gracefully skipped on network failure — the screener still runs, just without sector labels.
+- **Screener v2: sector-grouped Telegram output** (`telegram_notify.py`): Sunday screener messages now show the top 5 sectors by candidate count, with the top 3 stocks per sector. Previously a flat list of 20 stocks. Sector names longer than 20 characters are truncated. Shows a warning when KIND data was unavailable.
+- **DB migration — `sector` and `ma_120w`** (`db.py`): `chart_signals` table gains two columns. `init_db()` adds them idempotently on startup so existing deployments upgrade automatically.
+
+### For contributors
+
+- `TestFetchKindSectorMap` (`test_chart_screener.py`): 3 tests — happy-path HTML parse, KIND down (exception), empty HTML (no `<tr>`).
+- `TestConditionG` (`test_chart_screener.py`): 3 tests — G passes (close > 120wMA), G fails (close < 120wMA), NaN-pass (< 100 bars).
+- `TestKINDFailureWarning` (`test_screener_telegram_regression_1.py`): 2 tests — warning shown when all sectors empty, absent when sectors populated.
+- `TestSectorGroupedFormat` (`test_screener_telegram_regression_1.py`): 4 tests — sector order, 기타 fallback, 20-char truncation, top-3 limit.
+
+## [0.2.6.0] - 2026-04-16
+
+### Added
+
+- **Weekly chart screener** (`chart_screener.py`): scans all KOSPI/KOSDAQ stocks (~2,770) every Sunday at 20:30 KST using Ichimoku + 20/60-week MA conditions (6-condition filter). Results sent to Telegram DM and channel simultaneously. `has_gapjum` flag (20wMA > 60wMA) marks highest-conviction candidates.
+- **`/screener` Telegram command** (`telegram_bot.py`): on-demand access to the latest weekly screening results — loads from DB, no re-scan needed. Sends to both DM and channel.
+- **`chart_signals` DB table** (`db.py`): stores screener output per ticker per ISO week. `save_chart_signals()` upserts results; `load_chart_signals_latest()` fetches the most recent week's full result set.
+- **DM + channel simultaneous screener delivery** (`telegram_notify.py`): `send_weekly_screener()` now always sends to personal DM, and also to the channel when `TELEGRAM_CHANNEL_ID` is set. Previously it was either/or.
+
+### Fixed
+
+- **Ollama model name mismatch** (`summarizer.py`): default `OLLAMA_MODEL` was `Qwen3.5-9B:latest` (uppercase, hyphen) but Ollama's actual model tag is `qwen3.5:9b`. All `/api/chat` calls returned 404. Changed default to `qwen3.5:9b`.
+- **`/help` MarkdownV2 parse error** (`telegram_bot.py`): `<` and `>` in `/volume <종목명|티커>` were unescaped, causing Telegram to reject the message with "Character '>' is reserved". Escaped to `\<` and `\>`.
+
+## [0.2.5.0] - 2026-04-16
+
+### Added
+
+- **Article type classification** (`signal_detector.py`): every LLM signal inference call now extracts `article_type` as part of the same JSON response — zero additional API calls. Eight types supported: `earnings`, `ma`, `management`, `analyst`, `regulatory`, `product`, `macro`, `other`.
+- **Telegram type badges** (`telegram_notify.py`): actionable signal alerts now show a type emoji badge (📊 earnings, 🤝 M&A, 🔍 analyst, ⚖️ regulatory, 🚀 product, 🌐 macro, 👤 management). Badge is suppressed for `other` to avoid noise.
+- **Backtest type breakdown** (`backtest.py`): `/backtest` Telegram report now shows per-article-type hit rates at the 1d checkpoint. Types with fewer than 5 signals are suppressed until enough data accumulates.
+- **DB migration** (`db.py`): `ALTER TABLE trade_signals ADD COLUMN IF NOT EXISTS article_type VARCHAR(20) DEFAULT 'other'` — idempotent, safe on existing deployments.
+
+### Fixed
+
+- **`send_signal()` esc() missing backtick** (`telegram_notify.py`): local `esc()` in `send_signal` was missing `` ` `` from the escape list, inconsistent with `send_weekly_screener`. Fixes potential MarkdownV2 rendering breakage for tickers or reasons containing backticks.
+- **WATCH signals inflated article type hit rates** (`backtest.py`): `_fetch_type_breakdown` included WATCH signals in `COUNT(*)` but WATCH has no directional hit definition. This deflated hit rates for all article types. Filtered to `BUY/SELL` only, matching the existing `_fetch_ticker_breakdown` pattern.
+- **`start_crawler.bat` hardcoded user path** (`start_crawler.bat`): paths were hardcoded to `C:\Users\Jin\test_feed` — won't work on any other machine. Replaced with `%~dp0` (relative to the .bat file location).
 
 ## [0.2.4.0] - 2026-04-11
 

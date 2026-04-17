@@ -85,6 +85,8 @@ CREATE INDEX IF NOT EXISTS idx_sig_strength  ON trade_signals (strength DESC);
 -- Idempotent migration: add macro columns to existing deployments
 ALTER TABLE trade_signals ADD COLUMN IF NOT EXISTS macro_usd_krw   FLOAT;
 ALTER TABLE trade_signals ADD COLUMN IF NOT EXISTS macro_base_rate FLOAT;
+-- Idempotent migration: add article_type classification
+ALTER TABLE trade_signals ADD COLUMN IF NOT EXISTS article_type VARCHAR(20) DEFAULT 'other';
 
 -- ── 백테스팅: 교차분석 결과 ──────────────────────────────────
 CREATE TABLE IF NOT EXISTS cross_analysis_results (
@@ -160,6 +162,8 @@ CREATE TABLE IF NOT EXISTS chart_signals (
     has_gapjum  BOOLEAN      DEFAULT FALSE,
     week_of     VARCHAR(10)  NOT NULL,
     screened_at TIMESTAMPTZ  DEFAULT NOW(),
+    sector      VARCHAR(80)  DEFAULT '',
+    ma_120w     FLOAT,
     UNIQUE(ticker, week_of)
 );
 CREATE INDEX IF NOT EXISTS idx_chart_signals_week_ticker ON chart_signals(week_of, ticker);
@@ -229,6 +233,12 @@ async def init_db(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
         await conn.execute(_CREATE_TABLE)
         await conn.execute(_CREATE_KRX_TABLE)
+        await conn.execute(
+            "ALTER TABLE chart_signals ADD COLUMN IF NOT EXISTS sector VARCHAR(80) DEFAULT ''"
+        )
+        await conn.execute(
+            "ALTER TABLE chart_signals ADD COLUMN IF NOT EXISTS ma_120w FLOAT"
+        )
     logger.info("DB 테이블 준비 완료 (news_articles, krx_listings)")
 
 
@@ -337,11 +347,13 @@ async def save_signal(
     llm_backend: str,
     macro_usd_krw: Optional[float] = None,
     macro_base_rate: Optional[float] = None,
+    article_type: str = "other",
 ) -> Optional[int]:
     """
     매매 신호를 trade_signals 테이블에 저장.
     저장된 신호의 id 반환, 실패 시 None.
     macro_usd_krw / macro_base_rate: nullable — 매크로 컨텍스트 스냅샷 (백테스팅용)
+    article_type: 기사 유형 분류 (earnings|ma|management|analyst|regulatory|product|macro|other)
     """
     try:
         async with pool.acquire() as conn:
@@ -349,8 +361,8 @@ async def save_signal(
                 """
                 INSERT INTO trade_signals
                     (article_id, direction, strength, reason, tickers, llm_backend,
-                     macro_usd_krw, macro_base_rate)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                     macro_usd_krw, macro_base_rate, article_type)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 RETURNING id
                 """,
                 article_id,
@@ -361,6 +373,7 @@ async def save_signal(
                 llm_backend,
                 macro_usd_krw,
                 macro_base_rate,
+                article_type,
             )
         return row["id"] if row else None
     except Exception as e:
@@ -401,7 +414,7 @@ async def fetch_latest_signals(
     if direction:
         query = """
             SELECT s.id, s.direction, s.strength, s.reason, s.tickers,
-                   s.detected_at, a.title_en, a.summary_ko, a.url,
+                   s.detected_at, s.article_type, a.title_en, a.summary_ko, a.url,
                    a.source, a.category
             FROM   trade_signals s
             JOIN   news_articles a ON a.id = s.article_id
@@ -412,7 +425,7 @@ async def fetch_latest_signals(
     else:
         query = """
             SELECT s.id, s.direction, s.strength, s.reason, s.tickers,
-                   s.detected_at, a.title_en, a.summary_ko, a.url,
+                   s.detected_at, s.article_type, a.title_en, a.summary_ko, a.url,
                    a.source, a.category
             FROM   trade_signals s
             JOIN   news_articles a ON a.id = s.article_id
@@ -752,8 +765,9 @@ async def save_chart_signals(
                     """
                     INSERT INTO chart_signals
                         (ticker, name, close, ma_20w, ma_60w, cloud_top,
-                         is_enhanced, has_gapjum, week_of, screened_at)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                         is_enhanced, has_gapjum, week_of, screened_at,
+                         sector, ma_120w)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
                     ON CONFLICT (ticker, week_of) DO UPDATE SET
                         close       = EXCLUDED.close,
                         ma_20w      = EXCLUDED.ma_20w,
@@ -761,7 +775,9 @@ async def save_chart_signals(
                         cloud_top   = EXCLUDED.cloud_top,
                         is_enhanced = EXCLUDED.is_enhanced,
                         has_gapjum  = EXCLUDED.has_gapjum,
-                        screened_at = EXCLUDED.screened_at
+                        screened_at = EXCLUDED.screened_at,
+                        sector      = EXCLUDED.sector,
+                        ma_120w     = EXCLUDED.ma_120w
                     """,
                     r.ticker,
                     r.name,
@@ -773,12 +789,43 @@ async def save_chart_signals(
                     r.has_gapjum,
                     r.week_of,
                     datetime.fromisoformat(r.screened_at),
+                    r.sector,
+                    r.ma_120w,
                 )
                 count += 1
         logger.info("[차트스크리너] chart_signals %d건 저장/갱신", count)
     except Exception as e:
         logger.error("[차트스크리너] 저장 실패: %s", e)
     return count
+
+
+async def load_chart_signals_latest(pool: asyncpg.Pool) -> tuple[str, list]:
+    """
+    가장 최근 week_of의 차트 스크리닝 결과 전체 반환.
+    반환: (week_of, list[dict])  — 결과 없으면 ("", [])
+    """
+    try:
+        async with pool.acquire() as conn:
+            week = await conn.fetchval(
+                "SELECT week_of FROM chart_signals ORDER BY screened_at DESC LIMIT 1"
+            )
+            if not week:
+                return ("", [])
+            rows = await conn.fetch(
+                """
+                SELECT ticker, name, close, ma_20w, ma_60w, cloud_top,
+                       is_enhanced, has_gapjum, week_of, screened_at,
+                       sector, ma_120w
+                FROM chart_signals
+                WHERE week_of = $1
+                ORDER BY has_gapjum DESC, close DESC
+                """,
+                week,
+            )
+        return (week, [dict(r) for r in rows])
+    except Exception as e:
+        logger.warning("[차트스크리너] 최근 결과 조회 실패: %s", e)
+        return ("", [])
 
 
 async def get_chart_signals_this_week(pool: asyncpg.Pool) -> set[str]:

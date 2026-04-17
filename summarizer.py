@@ -49,7 +49,7 @@ LM_STUDIO_BASE = os.environ.get("LM_STUDIO_BASE", "http://localhost:1234")
 # LM Studio는 OpenAI 호환 엔드포인트 사용
 # Ollama도 /api/chat (네이티브) 와 /v1/chat/completions (OpenAI 호환) 둘 다 지원
 
-OLLAMA_MODEL    = os.environ.get("OLLAMA_MODEL",    "Qwen3.5-9B:latest")
+OLLAMA_MODEL    = os.environ.get("OLLAMA_MODEL",    "qwen3.5:9b")
 LM_STUDIO_MODEL = os.environ.get("LM_STUDIO_MODEL", "eeve-korean-instruct-10.8b-v1.0")
 
 SYSTEM_PROMPT_SUMMARY = (

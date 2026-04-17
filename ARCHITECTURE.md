@@ -8,6 +8,11 @@
 > v0.2.0.0부터 연합뉴스·한국경제·매일경제 한국어 피드가 추가되었습니다.
 > v0.2.1.0부터 텔레그램 라우팅이 한·외신 모두 `signal.is_actionable` 기반으로 통일되었습니다.
 > v0.3.0.0부터 KRX 전체 종목 DB(`krx_listings`)와 인메모리 티커 캐시(`TickerCache`)가 추가되어 ~2500개 종목 자동 해석을 지원합니다.
+> v0.2.5.0부터 `article_type` 기사 유형 분류(8종)가 추가되었습니다. 신호 알림에 유형 배지, `/backtest`에 유형별 적중률이 표시됩니다.
+> v0.2.6.0부터 주봉 차트 스크리너(`chart_screener.py`)가 추가되었습니다. KOSPI/KOSDAQ 전 종목을 Ichimoku + MA 6-조건으로 스크리닝하고 매주 일요일 20:30 KST에 텔레그램으로 발송합니다. `/screener` 명령어로 온디맨드 조회 가능.
+> v0.2.8.0부터 교차분석에 MACD·볼린저밴드·MA20/50 레이어가 추가되었습니다. `PriceContext`에 5개 Optional 필드, 텔레그램 시세 라인에 기술적 지표 토큰 표시.
+> v0.2.7.0부터 스크리너 v2: 120주선 조건 G 추가, KIND 섹터 데이터 연동, 섹터별 그룹 포맷 Telegram 출력.
+> v0.2.9.0부터 펀더멘털 레이어가 추가되었습니다. Naver Finance 모바일 API에서 PER/PBR/EPS를 조회(인증 불필요)하여 `cross_analyze()` 스코어에 −3~+2 델타를 적용. 텔레그램 시세 라인에 PER/PBR 토큰 표시(주목할 만한 경우에만). 시작 시 `prewarm_fundamentals()`로 캐시 사전 적재. pykrx 불필요.
 
 ---
 
@@ -68,7 +73,7 @@
     → tickers: [{name, yfinance_symbol}]
 ▼
 📊  시세 교차분석 (market_data.py)
-    yfinance로 관련 종목 시세 조회
+    yfinance로 관련 종목 시세 조회 + Naver Finance 펀더멘털 조회 (PER/PBR/EPS)
     → CrossAnalysis: CONFIRM / CAUTION / FILTER / NEUTRAL
 ▼
 💾  DB 저장 (db.py)
@@ -154,6 +159,7 @@ class TradeSignal:
     ticker_symbols: dict    # name → yfinance 심볼 (예: {"삼성전자": "005930.KS"})
     backend: Backend
     success: bool
+    article_type: str = "other"  # earnings|ma|management|analyst|regulatory|product|macro|other
 
     @property
     def is_actionable(self) -> bool:
@@ -180,7 +186,8 @@ class TradeSignal:
   "tickers": [
     {"name": "S&P500", "symbol": "^GSPC"},
     {"name": "삼성전자", "symbol": "005930.KS"}
-  ]
+  ],
+  "article_type": "macro"
 }
 ```
 
@@ -218,6 +225,32 @@ class TradeSignal:
 - `change_pct >= 0.5%` → confirm +1
 - `change_pct <= -2%` → conflict +1
 - `RSI <= 30` (과매도) → confirm +1 (반등 기대)
+- `macd_cross == "bullish_cross"` → confirm +2
+- `macd_hist > 0` → confirm +1 / `macd_hist < 0` → conflict +1
+- `bb_pct < 20` (과매도) → confirm +1 / `bb_pct > 80` (과매수) → conflict +1
+- 두 MA 모두 위 → confirm +1 / 두 MA 모두 아래 → conflict +2
+
+**펀더멘털 레이어 (v0.2.9.0~)**:
+
+`cross_analyze()`는 각 종목에 대해 Naver Finance 모바일 API(`https://m.stock.naver.com/api/stock/{code}/integration`)로 PER/PBR/EPS를 조회합니다. 인증 불필요. `PriceContext`에 `per`, `pbr`, `eps` 필드 추가.
+
+펀더멘털 스코어 델타 (종목별):
+
+| 조건 | 델타 |
+|------|------|
+| EPS < 0 (적자) | −2 |
+| PER > 50 (고평가) | −1 |
+| PBR > 5 (고평가) | −1 |
+| PER < 15 (저평가) | +1 |
+| PBR < 1 (저평가) | +1 |
+
+멀티 티커 신호는 개별 델타의 평균을 최종 스코어에 합산 (합산이 아닌 평균 — 한 종목이 전체를 지배하지 않도록).
+
+캐시: `_fund_cache` (날짜 키) — 프로세스 재시작 시 초기화. 캐시 히트 ~0ms, 미스 ~150ms. `dict.setdefault()`로 스레드 안전.
+
+시작 시 `prewarm_fundamentals()`가 `YFINANCE_MAP`의 한국 티커 전체를 5-worker 스레드 풀로 사전 적재.
+
+텔레그램 표시: 주목할 만한 PER/PBR만 시세 라인에 토큰으로 표시 (`PER:12↓`, `PER:80↑`, `적자`, `PBR:0.6↓`, `PBR:7.0↑`). 평범한 종목은 토큰 없음.
 
 **반환값**:
 ```python
@@ -255,14 +288,35 @@ CREATE TABLE news_articles (
 
 -- 매매 신호
 CREATE TABLE trade_signals (
-    id           BIGSERIAL PRIMARY KEY,
-    article_id   BIGINT REFERENCES news_articles(id) ON DELETE CASCADE,
-    direction    VARCHAR(8) NOT NULL,        -- BUY | SELL | WATCH
-    strength     SMALLINT NOT NULL,          -- 1~5
-    reason       TEXT,
-    tickers      TEXT[],
-    llm_backend  VARCHAR(16),
-    detected_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    id              BIGSERIAL PRIMARY KEY,
+    article_id      BIGINT REFERENCES news_articles(id) ON DELETE CASCADE,
+    direction       VARCHAR(8) NOT NULL,        -- BUY | SELL | WATCH
+    strength        SMALLINT NOT NULL,          -- 1~5
+    reason          TEXT,
+    tickers         TEXT[],
+    llm_backend     VARCHAR(16),
+    macro_usd_krw   FLOAT,                      -- 신호 시점 USD/KRW (백테스팅용)
+    macro_base_rate FLOAT,                      -- 신호 시점 한국 기준금리 (백테스팅용)
+    article_type    VARCHAR(20) DEFAULT 'other',-- earnings|ma|management|analyst|regulatory|product|macro|other
+    detected_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 주봉 차트 스크리닝 결과
+CREATE TABLE chart_signals (
+    id          BIGSERIAL PRIMARY KEY,
+    ticker      VARCHAR(20) NOT NULL,
+    name        TEXT,
+    close       FLOAT NOT NULL,
+    ma_20w      FLOAT NOT NULL,
+    ma_60w      FLOAT NOT NULL,
+    cloud_top   FLOAT NOT NULL,
+    is_enhanced BOOLEAN DEFAULT FALSE,
+    has_gapjum  BOOLEAN DEFAULT FALSE,
+    week_of     VARCHAR(10) NOT NULL,        -- ISO 주차 (예: "2026-W16")
+    screened_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    sector      VARCHAR(80) DEFAULT '',      -- KIND 업종명 (v0.2.7.0~)
+    ma_120w     FLOAT,                       -- 120주선 값, NULL = 데이터 부족 (v0.2.7.0~)
+    UNIQUE(ticker, week_of)
 );
 
 -- KRX 전체 종목 디렉토리 (v0.3.0.0~)
@@ -297,6 +351,8 @@ CREATE TABLE krx_listings (
 | `fetch_latest()` | 최신 기사 조회 (category·source 필터) |
 | `fetch_latest_signals()` | 최신 신호 조회 (direction·strength 필터) |
 | `load_seen_hashes()` | 재시작 시 중복 해시 복원 |
+| `save_chart_signals()` | 스크리닝 결과 저장 (`chart_signals`, sector/ma_120w 포함, ON CONFLICT DO UPDATE) |
+| `load_chart_signals_latest()` | 가장 최근 주차 스크리닝 결과 전체 조회 (sector/ma_120w 포함) |
 
 **DSN 설정 우선순위**:
 ```
@@ -319,7 +375,8 @@ DATABASE_URL 환경변수 → DB_HOST/PORT/NAME/USER/PASSWORD 개별 변수
 | `/signals sell` | SELL 신호만 필터링하여 조회 |
 | `/signals watch` | WATCH 신호만 필터링하여 조회 |
 | `/today` | 오늘 카테고리별 수집 건수 + 최신 기사 5건 한글 요약 |
-| `/backtest` | 판정별·종목별 적중률 백테스팅 리포트 (48h 데이터 신선도 경고 포함) |
+| `/backtest` | 판정별·유형별·종목별 적중률 백테스팅 리포트 (48h 데이터 신선도 경고 포함) |
+| `/screener` | 최신 주봉 차트 스크리닝 결과 — DM + 채널 동시 발송 |
 | `/help` | 명령어 목록 |
 
 **알림 예시 (`/signals`)**:
@@ -370,15 +427,64 @@ trade_signals (DB)
 | `backfill_historical()` | 과거 신호에 대한 yfinance 가격 소급 채움 |
 | `calculate_metrics()` | 판정별·checkpoint별 적중률 딕셔너리 반환 |
 | `backtest_report_telegram()` | `/backtest` 명령어·주간 자동 발송용 MarkdownV2 텍스트 |
+| `_fetch_type_breakdown()` | 기사 유형별(article_type) 1d 적중률 집계 (BUY/SELL만, WATCH 제외) |
 | `_esc(s)` | MarkdownV2 특수문자 이스케이프 (`&` 포함) |
 
 **자동 스케줄**: 매주 일요일 20:00 KST (`CronTrigger(day_of_week="sun", hour=20, minute=0)`)
 
 ---
 
-### 3-8. `telegram_notify.py` — 신호 알림 전송
+### 3-8. `chart_screener.py` — 주봉 차트 스크리너
 
-**역할**: 유효 신호 감지 시 즉시 텔레그램 전송
+**역할**: KOSPI/KOSDAQ 전 종목(~2,770개)을 Ichimoku + MA 조건으로 스크리닝하여 기술적 돌파 후보를 필터링
+
+**스크리닝 조건 (7가지, A~G 모두 충족)**:
+
+| 조건 | 설명 |
+|------|------|
+| A | 이번 주 종가 > max(선행스팬A, 선행스팬B) — 구름 상향 돌파 |
+| B | 직전 주 종가 ≤ 직전 주 구름 상단 — 이전 주 구름 내/하부 |
+| C | 종가 > 20주 이동평균 |
+| D | 종가 > 60주 이동평균 |
+| E | 20주 이동평균 > 직전 주 20주 이동평균 (우상향) |
+| F | 60주 이동평균 > 직전 주 60주 이동평균 (우상향) |
+| G | 종가 > 120주 이동평균 (데이터 < 100봉 시 NaN-pass) |
+
+**OHLCV 수집**: `period="3y"` (주봉 ~156봉, 진정한 120주선 계산을 위해 3년 필요)
+
+**섹터 데이터**: `fetch_kind_sector_map()`이 KIND(한국거래소 기업공시시스템)에서 KOSPI/KOSDAQ 전 종목 업종(업종명)을 수집. EUC-KR HTML 파싱. 조회 실패 시 빈 dict 반환 — 스크리너는 계속 실행.
+
+**추가 플래그**:
+- `has_gapjum`: 20주MA > 60주MA (정배열) — 결과 상위 정렬
+- `is_enhanced`: 향후 H/I 조건 확장 예약 필드
+
+**주요 타입**:
+```python
+@dataclass
+class ScreenResult:
+    ticker: str
+    name: str
+    close: float
+    ma_20w: float
+    ma_60w: float
+    cloud_top: float        # max(Span A, Span B)
+    is_enhanced: bool
+    has_gapjum: bool        # 20주MA > 60주MA
+    screened_at: str
+    week_of: str            # ISO 주차 (예: "2026-W16")
+    sector: str = ""                  # KIND 업종명 (조회 실패 시 빈 문자열)
+    ma_120w: Optional[float] = None  # 120주선 (데이터 부족 시 None)
+```
+
+**성능 특이사항**: yfinance 병렬 다운로드 시 데이터 오염 발생 — `SCREENER_WORKERS=1`(직렬)이 기본값. 전 종목 스캔 소요 시간 약 14분.
+
+**자동 스케줄**: 매주 일요일 20:30 KST (`CronTrigger(day_of_week="sun", hour=20, minute=30)`)
+
+---
+
+### 3-9. `telegram_notify.py` — 신호 알림 전송
+
+**역할**: 유효 신호 감지 시 즉시 텔레그램 전송. 주봉 스크리닝 결과는 DM + 채널 동시 발송 (v0.2.7.0~: 섹터별 그룹 포맷 — 상위 5개 섹터 × 섹터당 상위 3종목).
 
 **알림 메시지 형식**:
 ```
@@ -408,7 +514,8 @@ test_feed/
 ├── market_data.py                 # yfinance 시세 조회 + 교차분석
 ├── backtest.py                    # 판정 정확도 추적 + 백테스팅 리포트
 ├── db.py                          # PostgreSQL 연동 (asyncpg)
-├── telegram_bot.py                # 봇 명령어 처리 (/status /signals /today /backtest /help)
+├── chart_screener.py              # 주봉 Ichimoku+MA 스크리너 (KOSPI/KOSDAQ 전종목)
+├── telegram_bot.py                # 봇 명령어 처리 (/status /signals /today /backtest /screener /help)
 ├── telegram_notify.py             # 신호 알림 전송
 ├── volume_pattern.py              # 거래량 패턴 분석
 ├── krx_sync.py                    # KRX 전체 종목 DB 동기화 (KOSPI+KOSDAQ ~2500종목)
@@ -420,6 +527,16 @@ test_feed/
 ├── test_summarizer_regression_1.py# pytest — LLM 헬스체크·Qwen3 thinking 회귀
 ├── test_krx_sync.py               # pytest — KRX 동기화 + 티커 캐시 (31개)
 ├── test_ticker_cache_integration.py # pytest — market_data·volume_pattern 캐시 통합 (7개)
+├── test_article_type.py           # pytest — 기사 유형 분류 (17개)
+├── test_backtest.py               # pytest — 백테스팅 로직 (23개)
+├── test_telegram_routing.py       # pytest — 텔레그램 신호 라우팅 회귀 (4개)
+├── test_summarizer_regression_1.py# pytest — LLM 헬스체크·Qwen3 thinking 회귀
+├── test_db_dsn.py                 # pytest — DB DSN 설정 (7개)
+├── test_signal_prompt.py          # pytest — 신호 감지 프롬프트 회귀
+├── test_macro_signal.py           # pytest — 매크로 컨텍스트 신호 감지
+├── test_chart_screener.py         # pytest — 스크리너 조건 A~G + KIND 섹터 (26개)
+├── test_screener_telegram_regression_1.py # pytest — 스크리너 텔레그램 포맷 회귀 (14개)
+├── test_fundamental.py            # pytest — PER/PBR/EPS 펀더멘털 레이어 (41개)
 │
 ├── VERSION                        # 현재 버전 (SemVer 4자리)
 ├── CHANGELOG.md                   # 변경 이력
@@ -542,12 +659,14 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 
 | 항목 | 설명 |
 |------|------|
-| 뉴스 소스 확장 | Naver Finance 등 추가 한국어 소스 |
+| ~~뉴스 소스 확장~~ | ✅ v0.2.9.0 — Naver Finance 모바일 API로 PER/PBR/EPS 펀더멘털 조회 구현 |
 | ~~화이트리스트 인증~~ | ✅ v0.1.0.0 — `ALLOWED_CHAT_IDS` 환경변수로 구현 완료 |
 | ~~신호 이력 조회~~ | ✅ v0.1.0.0 — `/signals buy\|sell\|watch` 방향 필터 구현 완료 |
 | 교차분석 강화 | 거래량 급증, 52주 고/저가 근접 조건 추가 |
 | 백테스트 기준선 | 판정 없는 방향별 시장 기준 적중률 추가 (TODOS.md P3 참고) |
 | ~~APScheduler 영속성~~ | ✅ v0.2.2.0 — SQLAlchemyJobStore로 Postgres 기반 영속성 구현 완료 |
+| ~~백테스트 기준선~~ | ✅ v0.2.2.0 — `backtest_report_telegram()`에 랜덤 기준선 추가 완료 |
+| ~~APScheduler 영속성~~ | ✅ v0.2.2.0 — `SQLAlchemyJobStore` Postgres 기반 영속성 구현 완료 |
 | 알림 재시도 | 텔레그램 전송 실패 시 지수 백오프 재시도 |
 | Docker 배포 | `docker-compose.yml` 기반 컨테이너화 |
 | 모델 교체 용이성 | `OLLAMA_MODEL`·`LM_STUDIO_MODEL` 환경변수화 |
@@ -555,3 +674,4 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 ---
 
 *현재 코드베이스 v0.3.0.0 (2026-04-14) 기준*
+*현재 코드베이스 v0.2.9.0 (2026-04-18) 기준*
