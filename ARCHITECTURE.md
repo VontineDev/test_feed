@@ -7,6 +7,7 @@
 > v3.0은 현재 코드베이스를 기준으로 전면 재작성한 문서입니다.
 > v0.2.0.0부터 연합뉴스·한국경제·매일경제 한국어 피드가 추가되었습니다.
 > v0.2.1.0부터 텔레그램 라우팅이 한·외신 모두 `signal.is_actionable` 기반으로 통일되었습니다.
+> v0.3.0.0부터 KRX 전체 종목 DB(`krx_listings`)와 인메모리 티커 캐시(`TickerCache`)가 추가되어 ~2500개 종목 자동 해석을 지원합니다.
 > v0.2.5.0부터 `article_type` 기사 유형 분류(8종)가 추가되었습니다. 신호 알림에 유형 배지, `/backtest`에 유형별 적중률이 표시됩니다.
 > v0.2.6.0부터 주봉 차트 스크리너(`chart_screener.py`)가 추가되었습니다. KOSPI/KOSDAQ 전 종목을 Ichimoku + MA 6-조건으로 스크리닝하고 매주 일요일 20:30 KST에 텔레그램으로 발송합니다. `/screener` 명령어로 온디맨드 조회 가능.
 > v0.2.8.0부터 교차분석에 MACD·볼린저밴드·MA20/50 레이어가 추가되었습니다. `PriceContext`에 5개 Optional 필드, 텔레그램 시세 라인에 기술적 지표 토큰 표시.
@@ -203,10 +204,13 @@ class TradeSignal:
 
 **역할**: 뉴스 신호 + 실시간 시세 → 교차분석 판정
 
-**시세 조회 우선순위**:
+**시세 조회 우선순위** (`get_price_context()` 5단계 캐스케이드):
 1. LLM이 제공한 yfinance 심볼 직접 사용
-2. 내장 매핑 테이블 (`YFINANCE_MAP`) — 한국·미국 주식/지수/원자재 약 80개 매핑
-3. 대문자 5자 이하 문자열이면 yfinance 직접 시도
+2. pykrx 지수 매핑 (`PYKRX_INDEX_MAP`) — pykrx 사용 가능 시
+3. `ticker_cache.resolve()` — KRX DB 전체 종목 캐시 (KOSPI+KOSDAQ ~2500종목, v0.3.0.0~)
+   - 3가지 이름 변형 시도: raw → 소문자 strip → 공백 제거본
+4. 내장 매핑 테이블 (`YFINANCE_MAP`) — 한국·미국 주식/지수/원자재 약 80개 매핑
+5. 대문자 5자 이하 문자열이면 yfinance 직접 시도
 
 **교차분석 판정**:
 
@@ -314,6 +318,25 @@ CREATE TABLE chart_signals (
     ma_120w     FLOAT,                       -- 120주선 값, NULL = 데이터 부족 (v0.2.7.0~)
     UNIQUE(ticker, week_of)
 );
+
+-- KRX 전체 종목 디렉토리 (v0.3.0.0~)
+CREATE TABLE krx_listings (
+    isin_code       TEXT PRIMARY KEY,
+    short_code      TEXT NOT NULL,           -- 6자리 종목코드
+    name_ko         TEXT NOT NULL,           -- 정식 종목명 (예: 삼성전자)
+    name_ko_abbr    TEXT,                    -- 단축명 (예: 삼성전자)
+    name_en         TEXT,
+    listed_at       DATE,
+    market          TEXT,                    -- KOSPI | KOSDAQ
+    security_type   TEXT,
+    sector          TEXT,
+    stock_type      TEXT,
+    par_value       TEXT,
+    listed_shares   BIGINT,
+    yfinance_symbol TEXT NOT NULL,           -- 예: 005930.KS, 086520.KQ
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+-- 인덱스: name_ko, name_ko_abbr, short_code, updated_at
 ```
 
 **주요 함수**:
@@ -495,8 +518,15 @@ test_feed/
 ├── telegram_bot.py                # 봇 명령어 처리 (/status /signals /today /backtest /screener /help)
 ├── telegram_notify.py             # 신호 알림 전송
 ├── volume_pattern.py              # 거래량 패턴 분석
+├── krx_sync.py                    # KRX 전체 종목 DB 동기화 (KOSPI+KOSDAQ ~2500종목)
+├── ticker_cache.py                # 종목명→yfinance 심볼 인메모리 캐시 (startup 로드, 20:00 KST 갱신)
 │
 ├── batch_run.py                   # 배치 OHLCV 내보내기 + 분석 스크립트
+├── test_backtest.py               # pytest — 백테스팅 로직 (20개)
+├── test_telegram_routing.py       # pytest — 텔레그램 신호 라우팅 회귀 (4개)
+├── test_summarizer_regression_1.py# pytest — LLM 헬스체크·Qwen3 thinking 회귀
+├── test_krx_sync.py               # pytest — KRX 동기화 + 티커 캐시 (31개)
+├── test_ticker_cache_integration.py # pytest — market_data·volume_pattern 캐시 통합 (7개)
 ├── test_article_type.py           # pytest — 기사 유형 분류 (17개)
 ├── test_backtest.py               # pytest — 백테스팅 로직 (23개)
 ├── test_telegram_routing.py       # pytest — 텔레그램 신호 라우팅 회귀 (4개)
@@ -633,6 +663,8 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 | ~~화이트리스트 인증~~ | ✅ v0.1.0.0 — `ALLOWED_CHAT_IDS` 환경변수로 구현 완료 |
 | ~~신호 이력 조회~~ | ✅ v0.1.0.0 — `/signals buy\|sell\|watch` 방향 필터 구현 완료 |
 | 교차분석 강화 | 거래량 급증, 52주 고/저가 근접 조건 추가 |
+| 백테스트 기준선 | 판정 없는 방향별 시장 기준 적중률 추가 (TODOS.md P3 참고) |
+| ~~APScheduler 영속성~~ | ✅ v0.2.2.0 — SQLAlchemyJobStore로 Postgres 기반 영속성 구현 완료 |
 | ~~백테스트 기준선~~ | ✅ v0.2.2.0 — `backtest_report_telegram()`에 랜덤 기준선 추가 완료 |
 | ~~APScheduler 영속성~~ | ✅ v0.2.2.0 — `SQLAlchemyJobStore` Postgres 기반 영속성 구현 완료 |
 | 알림 재시도 | 텔레그램 전송 실패 시 지수 백오프 재시도 |
@@ -641,4 +673,5 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 
 ---
 
+*현재 코드베이스 v0.3.0.0 (2026-04-14) 기준*
 *현재 코드베이스 v0.2.9.0 (2026-04-18) 기준*

@@ -24,6 +24,8 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+from ticker_cache import ticker_cache  # KRX DB-backed ticker lookup
+
 # 한국 주식 별명 → KRX 종목코드
 # 코스피(KOSPI) 종목 별명 → KRX 종목코드
 KR_KOSPI = {
@@ -84,13 +86,22 @@ KR_ALIASES = {**KR_KOSPI, **KR_KOSDAQ}
 # 시장 판별용 타임존
 MARKET_TZ = {
     "KR": "Asia/Seoul",
-    "US": "America/New_York",
+    # US 주식도 한국 시간대로 변환한다.
+    # build_report의 _format_hour/_format_half_hour는
+    # 왼쪽 열을 한국시간, 괄호 안을 미국동부시간으로 표시하도록 설계되어 있다.
+    # Eastern 시간 그대로 저장하면 "09:30(20:30)" 같은 잘못된 레이블이 생성된다.
+    "US": "Asia/Seoul",
 }
 
 
 def resolve_ticker(raw: str) -> tuple[str, str, str]:
     """입력을 (yfinance 티커, 표시 이름, 시장 코드)로 변환한다."""
     raw = raw.strip()
+
+    # 0) DB 캐시 — KRX 전체 종목 (정적 맵보다 넓은 커버리지)
+    cached_symbol = ticker_cache.resolve(raw)
+    if cached_symbol and cached_symbol.endswith((".KS", ".KQ")):
+        return cached_symbol, raw, "KR"
 
     # 1) 한글/영문 별명 → 코스닥이면 .KQ, 코스피면 .KS
     if raw in KR_KOSDAQ:
@@ -113,16 +124,30 @@ def resolve_ticker(raw: str) -> tuple[str, str, str]:
 
 
 def _load_from_db(symbol: str) -> pd.DataFrame:
-    """DB에서 캐시된 5분봉 데이터를 로드한다."""
+    """DB에서 캐시된 5분봉 데이터를 로드한다.
+
+    풀 생성 없이 단일 커넥션으로 조회한다. 봇에서 호출될 때마다
+    create_pool(min_size=2)을 생성·파기하는 낭비를 방지한다.
+    """
     import db as _db
+    import asyncpg
 
     async def _query():
-        pool = await _db.create_pool()
-        await _db.init_db(pool)
+        conn = await asyncpg.connect(_db.get_dsn())
         try:
-            return await _db.fetch_intraday_volumes(pool, symbol, "5m", 2000)
+            rows = await conn.fetch(
+                """
+                SELECT ts, open, high, low, close, volume
+                FROM   intraday_volumes
+                WHERE  symbol = $1 AND interval = $2
+                ORDER  BY ts DESC
+                LIMIT  $3
+                """,
+                symbol, "5m", 2000,
+            )
+            return [dict(r) for r in rows]
         finally:
-            await pool.close()
+            await conn.close()
 
     try:
         rows = asyncio.run(_query())

@@ -181,27 +181,36 @@ async def _call_ollama_native(
     user_content = f"/no_think\n\n{prompt}" if not enable_thinking else prompt
     messages.append({"role": "user", "content": user_content})
 
-    resp = await http.post(
-        f"{OLLAMA_BASE}/api/chat",
-        json={
-            "model": model,
-            "messages": messages,
-            "stream": False,
-            "options": {
-                "num_predict": max_tokens,
-                "temperature": 0.3,
-                # repeat_penalty > 1.0 penalises tokens that have already
-                # appeared in the *generated output*.  Multi-key JSON requires
-                # { " : to repeat many times; a penalty above 1.0 compounds
-                # on each occurrence and eventually makes those tokens
-                # impossible, producing empty or truncated JSON.  Keep at 1.0
-                # (disabled) regardless of how the prompt looks.
-                "repeat_penalty": 1.0,
+    try:
+        resp = await http.post(
+            f"{OLLAMA_BASE}/api/chat",
+            json={
+                "model": model,
+                "messages": messages,
+                "stream": False,
+                "options": {
+                    "num_predict": max_tokens,
+                    "temperature": 0.3,
+                    # repeat_penalty > 1.0 penalises tokens that have already
+                    # appeared in the *generated output*.  Multi-key JSON requires
+                    # { " : to repeat many times; a penalty above 1.0 compounds
+                    # on each occurrence and eventually makes those tokens
+                    # impossible, producing empty or truncated JSON.  Keep at 1.0
+                    # (disabled) regardless of how the prompt looks.
+                    "repeat_penalty": 1.0,
+                },
+                "think": enable_thinking,
             },
-            "think": enable_thinking,
-        },
-        timeout=timeout,
-    )
+            timeout=timeout,
+        )
+    except (httpx.TimeoutException, TimeoutError) as exc:
+        # anyio/httpx can raise bare TimeoutError() with no message on Python 3.11+.
+        # str(TimeoutError()) == "" — the caller logs str(e), so this would produce
+        # a completely blank warning line, hiding that a timeout even occurred.
+        raise ValueError(
+            f"Ollama 응답 시간 초과 ({timeout}초) — 모델이 설치·로드됐는지 확인: "
+            f"`ollama list` 및 OLLAMA_MODEL={model!r}"
+        ) from exc
     resp.raise_for_status()
     data = resp.json()
     # Some Ollama versions return HTTP 200 with {"error": "..."} instead of 4xx.

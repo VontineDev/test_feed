@@ -68,7 +68,14 @@ db.py                 # PostgreSQL 연동 (asyncpg)
 telegram_bot.py       # 봇 명령어 처리
 telegram_notify.py    # 신호 알림 전송
 volume_pattern.py     # 거래량 패턴 분석
+krx_sync.py           # KRX 전체 종목 DB 동기화 (KOSPI+KOSDAQ ~2500종목)
+ticker_cache.py       # 종목명→yfinance 심볼 인메모리 캐시 (startup 로드, 20:00 KST 갱신)
 batch_run.py          # 배치 OHLCV 내보내기 + 분석 스크립트
+test_backtest.py                   # pytest — 백테스팅 로직 (20개)
+test_telegram_routing.py           # pytest — 텔레그램 신호 라우팅 회귀 (4개)
+test_summarizer_regression_1.py    # pytest — LLM 헬스체크·Qwen3 thinking 회귀
+test_krx_sync.py                   # pytest — KRX 동기화 + 티커 캐시 (31개)
+test_ticker_cache_integration.py   # pytest — market_data·volume_pattern 캐시 통합 (7개)
 test_article_type.py               # pytest — 기사 유형 분류 (17개)
 test_backtest.py                   # pytest — 백테스팅 로직 (23개)
 test_telegram_routing.py           # pytest — 텔레그램 신호 라우팅 회귀 (4개)
@@ -108,6 +115,11 @@ ALLOWED_CHAT_IDS=123456789,987654321
 pytest -v
 
 # 개별 파일
+pytest test_backtest.py -v                    # 백테스팅 로직 (20개)
+pytest test_telegram_routing.py -v            # 텔레그램 라우팅 신호 게이팅 (4개)
+pytest test_summarizer_regression_1.py -v     # LLM 헬스체크·Qwen3 thinking (회귀)
+pytest test_krx_sync.py -v                    # KRX 동기화 + 티커 캐시 (31개)
+pytest test_ticker_cache_integration.py -v    # market_data·volume_pattern 캐시 통합 (7개)
 pytest test_backtest.py -v                    # 백테스팅 로직 (23개)
 pytest test_article_type.py -v               # 기사 유형 분류 (17개)
 pytest test_telegram_routing.py -v            # 텔레그램 라우팅 신호 게이팅 (4개)
@@ -126,4 +138,5 @@ pytest test_fundamental.py -v                     # PER/PBR/EPS 펀더멘털 레
 
 ## 버전
 
+현재 버전: `0.3.0.0` — [CHANGELOG](CHANGELOG.md) 참고
 현재 버전: `0.2.9.0` — [CHANGELOG](CHANGELOG.md) 참고
