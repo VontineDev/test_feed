@@ -250,8 +250,21 @@ async def send_signal(
             ma_str = ""
             if ctx.above_ma20 is not None and ctx.above_ma50 is not None:
                 ma_str = f" {'↑' if ctx.above_ma20 else '↓'}MA20 {'↑' if ctx.above_ma50 else '↓'}MA50"
+            per_str = ""
+            pbr_str = ""
+            if getattr(ctx, "eps", None) is not None and ctx.eps < 0:
+                per_str = " 적자"
+            elif getattr(ctx, "per", None) is not None:
+                arrow = "↓" if ctx.per < 15 else ("↑" if ctx.per > 50 else "")
+                if arrow:
+                    per_str = f" PER\\:{ctx.per:.0f}{arrow}"
+            if getattr(ctx, "pbr", None) is not None:
+                if ctx.pbr > 5:
+                    pbr_str = f" PBR\\:{ctx.pbr:.1f}↑"
+                elif ctx.pbr < 1:
+                    pbr_str = f" PBR\\:{ctx.pbr:.1f}↓"
             price_lines.append(
-                f"  {sign} {esc(ctx.ticker)} {esc(str(abs(ctx.change_pct)))}%{rsi_str}{macd_str}{bb_str}{ma_str}"
+                f"  {sign} {esc(ctx.ticker)} {esc(str(abs(ctx.change_pct)))}%{rsi_str}{macd_str}{bb_str}{ma_str}{per_str}{pbr_str}"
             )
 
     lines = [

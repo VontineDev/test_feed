@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -88,6 +89,13 @@ except ImportError:
     TA_OK = False
 
 PYKRX_OK = False  # Python 3.14 미지원 — yfinance로 대체
+
+try:
+    import httpx as _httpx
+    HTTPX_OK = True
+except ImportError:
+    HTTPX_OK = False
+    logger.warning("httpx 미설치 — pip install httpx")
 
 
 # ── 티커 매핑 테이블 ─────────────────────────────────────────
@@ -158,6 +166,9 @@ YFINANCE_MAP: dict[str, str] = {
 PYKRX_MAP: dict[str, str] = {}
 PYKRX_INDEX_MAP: dict[str, str] = {}
 
+# ── 펀더멘털 캐시 (당일 기준, 프로세스 재시작 시 초기화) ─────────
+_fund_cache: dict[str, dict] = {}  # {"20260417": {"005930": {"per": 32.91, ...}, ...}}
+
 
 # ── 시세 데이터 클래스 ────────────────────────────────────────
 
@@ -179,6 +190,9 @@ class PriceContext:
     bb_pct:     Optional[float] = None  # Bollinger %B, 0-100 (NOT 0-1)
     above_ma20: Optional[bool]  = None  # price >= 20-day MA
     above_ma50: Optional[bool]  = None  # price >= 50-day MA
+    per:        Optional[float] = None  # Price/Earnings Ratio (KRX trailing). None if loss-making.
+    pbr:        Optional[float] = None  # Price/Book Ratio
+    eps:        Optional[float] = None  # Earnings Per Share (KRW) — negative means loss-making
 
     @property
     def near_52w_high(self) -> bool:
@@ -274,7 +288,7 @@ def _fetch_yfinance(symbol: str, ticker_name: str) -> PriceContext:
         else:
             macd_hist = macd_cross = bb_pct = above_ma20 = above_ma50 = None
 
-        return PriceContext(
+        ctx = PriceContext(
             ticker=ticker_name, symbol=symbol, source="yfinance",
             current=round(current, 2), change_pct=change_pct,
             rsi=rsi, volume_ratio=vol_ratio,
@@ -283,6 +297,13 @@ def _fetch_yfinance(symbol: str, ticker_name: str) -> PriceContext:
             macd_hist=macd_hist, macd_cross=macd_cross,
             bb_pct=bb_pct, above_ma20=above_ma20, above_ma50=above_ma50,
         )
+        krx_code = _to_krx_code(symbol)
+        if krx_code:
+            fund = _fetch_fundamental(krx_code)
+            ctx.per = fund.get("per")
+            ctx.pbr = fund.get("pbr")
+            ctx.eps = fund.get("eps")
+        return ctx
     except Exception as e:
         logger.debug("[시세] yfinance 실패 (%s): %s", symbol, e)
         return PriceContext(ticker=ticker_name, symbol=symbol, source="yfinance",
@@ -351,6 +372,115 @@ def _fetch_pykrx_index(code: str, ticker_name: str) -> PriceContext:
         return PriceContext(ticker=ticker_name, symbol=code, source="pykrx",
                             current=0, change_pct=0, rsi=None, volume_ratio=None,
                             week52_high=None, week52_low=None, volume_surge=False, success=False)
+
+
+# ── 펀더멘털 데이터 (Naver Finance) ──────────────────────────────
+
+def _to_krx_code(symbol: str) -> Optional[str]:
+    """'005930.KS' → '005930', '035720.KQ' → '035720', 'NVDA' → None"""
+    if symbol.endswith((".KS", ".KQ")):
+        return symbol.split(".")[0]
+    return None
+
+
+def _parse_naver_value(s: str) -> Optional[float]:
+    """'32.91배' → 32.91, '-2,177원' → -2177.0, 'N/A' → None"""
+    if not s or s in ("-", "N/A", "해당없음"):
+        return None
+    num = re.sub(r"[^0-9.\-]", "", s.replace(",", ""))
+    try:
+        return float(num) if num else None
+    except ValueError:
+        return None
+
+
+def _fetch_fundamental(krx_code: str) -> dict:
+    """Fetch PER/PBR/EPS from Naver Finance mobile API for a single KRX ticker.
+
+    Returns empty dict on any failure — caller treats missing fundamentals as neutral.
+    Cache hit: ~0ms. Cache miss: ~150ms (Naver API).
+    """
+    if not HTTPX_OK:
+        return {}
+
+    today = datetime.now().strftime("%Y%m%d")
+    if today in _fund_cache and krx_code in _fund_cache[today]:
+        return _fund_cache[today][krx_code]
+
+    result: dict = {}
+    try:
+        r = _httpx.get(
+            f"https://m.stock.naver.com/api/stock/{krx_code}/integration",
+            timeout=5,
+        )
+        r.raise_for_status()
+        ti = {
+            item["code"]: item["value"]
+            for item in r.json().get("totalInfos", [])
+            if "code" in item
+        }
+        per_raw = _parse_naver_value(ti.get("per", ""))
+        eps_raw = _parse_naver_value(ti.get("eps", ""))
+        pbr_raw = _parse_naver_value(ti.get("pbr", ""))
+
+        result = {
+            "per": per_raw if per_raw is not None and 0 < per_raw <= 200 else None,
+            "pbr": pbr_raw if pbr_raw is not None and pbr_raw > 0 else None,
+            "eps": eps_raw,
+        }
+        # EPS < 0 means loss-making — PER is meaningless
+        if eps_raw is not None and eps_raw < 0:
+            result["per"] = None
+    except Exception as e:
+        logger.warning("[펀더멘털] Naver API 실패 (%s): %s", krx_code, e)
+
+    _fund_cache.setdefault(today, {})[krx_code] = result
+    return result
+
+
+def _fundamental_score(ctx: "PriceContext") -> tuple[int, list[str]]:
+    """Returns (delta_score, flags). delta_score range: -3 to +2."""
+    score = 0
+    flags: list[str] = []
+
+    if ctx.eps is not None and ctx.eps < 0:
+        score -= 2
+        flags.append("적자")
+    elif ctx.per is not None:
+        if ctx.per > 50:
+            score -= 1
+        elif ctx.per < 15:
+            score += 1
+
+    if ctx.pbr is not None:
+        if ctx.pbr > 5:
+            score -= 1
+        elif ctx.pbr < 1:
+            score += 1
+
+    return score, flags
+
+
+def prewarm_fundamentals(yf_symbols: list[str]) -> None:
+    """Pre-warm fundamental cache for a list of yfinance symbols at startup.
+
+    Call once before the scheduler starts to avoid first-signal latency.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    krx_codes = [c for sym in yf_symbols if (c := _to_krx_code(sym)) is not None]
+    if not krx_codes:
+        return
+
+    def _warm(code: str) -> None:
+        try:
+            _fetch_fundamental(code)
+        except Exception as e:
+            logger.warning("[펀더멘털] 예열 실패 (%s): %s", code, e)
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        list(pool.map(_warm, krx_codes))
+    logger.info("[펀더멘털] 예열 완료 — %d종목", len(krx_codes))
 
 
 # ── 종목명 → PriceContext 매핑 ────────────────────────────────
@@ -618,6 +748,14 @@ def cross_analyze(
             "[교차분석] → NEUTRAL  confirm==conflict score=%d",
             score,
         )
+
+    # Fundamental score: average delta across all price contexts
+    fund_deltas = [_fundamental_score(ctx)[0] for ctx in contexts]
+    fund_flags  = [f for ctx in contexts for f in _fundamental_score(ctx)[1]]
+    avg_delta   = sum(fund_deltas) / len(fund_deltas)
+    score = min(10, max(0, score + round(avg_delta)))
+    if fund_flags:
+        logger.debug("[교차분석] 펀더멘털 조정 avg_delta=%.2f flags=%s → score=%d", avg_delta, fund_flags, score)
 
     logger.info(
         "[교차분석] 최종 — %s %s 점수:%d/10 | confirm:%d conflict:%d | %s",

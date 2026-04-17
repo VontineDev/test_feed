@@ -512,6 +512,13 @@ async def main(interval: int, enable_summary: bool) -> None:
     bot_task = asyncio.create_task(bot_polling_loop(_db_pool))
     logger.info("Telegram 봇 시작 — /status /signals /today /help")
 
+    # ── 펀더멘털 캐시 예열 ─────────────────────────────────────
+    from market_data import prewarm_fundamentals, YFINANCE_MAP
+    _ks_symbols = [v for v in YFINANCE_MAP.values() if v.endswith((".KS", ".KQ"))]
+    if _ks_symbols:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, prewarm_fundamentals, _ks_symbols)
+
     # 요약 워커 초기화
     worker_task = None
     if enable_summary:
