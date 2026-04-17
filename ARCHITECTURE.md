@@ -11,6 +11,7 @@
 > v0.2.6.0부터 주봉 차트 스크리너(`chart_screener.py`)가 추가되었습니다. KOSPI/KOSDAQ 전 종목을 Ichimoku + MA 6-조건으로 스크리닝하고 매주 일요일 20:30 KST에 텔레그램으로 발송합니다. `/screener` 명령어로 온디맨드 조회 가능.
 > v0.2.8.0부터 교차분석에 MACD·볼린저밴드·MA20/50 레이어가 추가되었습니다. `PriceContext`에 5개 Optional 필드, 텔레그램 시세 라인에 기술적 지표 토큰 표시.
 > v0.2.7.0부터 스크리너 v2: 120주선 조건 G 추가, KIND 섹터 데이터 연동, 섹터별 그룹 포맷 Telegram 출력.
+> v0.2.9.0부터 펀더멘털 레이어가 추가되었습니다. Naver Finance 모바일 API에서 PER/PBR/EPS를 조회(인증 불필요)하여 `cross_analyze()` 스코어에 −3~+2 델타를 적용. 텔레그램 시세 라인에 PER/PBR 토큰 표시(주목할 만한 경우에만). 시작 시 `prewarm_fundamentals()`로 캐시 사전 적재. pykrx 불필요.
 
 ---
 
@@ -224,6 +225,28 @@ class TradeSignal:
 - `macd_hist > 0` → confirm +1 / `macd_hist < 0` → conflict +1
 - `bb_pct < 20` (과매도) → confirm +1 / `bb_pct > 80` (과매수) → conflict +1
 - 두 MA 모두 위 → confirm +1 / 두 MA 모두 아래 → conflict +2
+
+**펀더멘털 레이어 (v0.2.9.0~)**:
+
+`cross_analyze()`는 각 종목에 대해 Naver Finance 모바일 API(`https://m.stock.naver.com/api/stock/{code}/basic`)로 PER/PBR/EPS를 조회합니다. 인증 불필요. `PriceContext`에 `per`, `pbr`, `eps` 필드 추가.
+
+펀더멘털 스코어 델타 (종목별):
+
+| 조건 | 델타 |
+|------|------|
+| EPS < 0 (적자) | −2 |
+| PER > 50 (고평가) | −1 |
+| PBR > 5 (고평가) | −1 |
+| PER < 15 (저평가) | +1 |
+| PBR < 1 (저평가) | +1 |
+
+멀티 티커 신호는 개별 델타의 평균을 최종 스코어에 합산 (합산이 아닌 평균 — 한 종목이 전체를 지배하지 않도록).
+
+캐시: `_fund_cache` (날짜 키) — 프로세스 재시작 시 초기화. 캐시 히트 ~0ms, 미스 ~150ms. `dict.setdefault()`로 스레드 안전.
+
+시작 시 `prewarm_fundamentals()`가 `YFINANCE_MAP`의 한국 티커 전체를 5-worker 스레드 풀로 사전 적재.
+
+텔레그램 표시: 주목할 만한 PER/PBR만 시세 라인에 토큰으로 표시 (`PER:12↓`, `PER:80↑`, `적자`, `PBR:0.6↓`, `PBR:7.0↑`). 평범한 종목은 토큰 없음.
 
 **반환값**:
 ```python
@@ -483,6 +506,7 @@ test_feed/
 ├── test_macro_signal.py           # pytest — 매크로 컨텍스트 신호 감지
 ├── test_chart_screener.py         # pytest — 스크리너 조건 A~G + KIND 섹터 (26개)
 ├── test_screener_telegram_regression_1.py # pytest — 스크리너 텔레그램 포맷 회귀 (12개)
+├── test_fundamental.py            # pytest — PER/PBR/EPS 펀더멘털 레이어 (41개)
 │
 ├── VERSION                        # 현재 버전 (SemVer 4자리)
 ├── CHANGELOG.md                   # 변경 이력
@@ -605,7 +629,7 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 
 | 항목 | 설명 |
 |------|------|
-| 뉴스 소스 확장 | Naver Finance 등 추가 한국어 소스 |
+| ~~뉴스 소스 확장~~ | ✅ v0.2.9.0 — Naver Finance 모바일 API로 PER/PBR/EPS 펀더멘털 조회 구현 |
 | ~~화이트리스트 인증~~ | ✅ v0.1.0.0 — `ALLOWED_CHAT_IDS` 환경변수로 구현 완료 |
 | ~~신호 이력 조회~~ | ✅ v0.1.0.0 — `/signals buy\|sell\|watch` 방향 필터 구현 완료 |
 | 교차분석 강화 | 거래량 급증, 52주 고/저가 근접 조건 추가 |
@@ -617,4 +641,4 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 
 ---
 
-*현재 코드베이스 v0.2.7.0 (2026-04-17) 기준*
+*현재 코드베이스 v0.2.9.0 (2026-04-18) 기준*
