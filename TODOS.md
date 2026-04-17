@@ -4,6 +4,16 @@ Items deferred from code review and planning sessions.
 
 ---
 
+## P4: Rename test_feeds.py → scripts/check_feeds.py (QA-2026-04-18)
+
+**What:** `test_feeds.py` is a standalone RSS feed connectivity script, not a pytest test file. Rename to `scripts/check_feeds.py` (or just `check_feeds.py`) and update any references.
+
+**Why:** The `test_` prefix causes pytest to attempt collection (0 tests found — no harm, but misleading). Companion issue to ISSUE-QA-001 (fixed). Low urgency since there are no side effects.
+
+**Effort:** XS (human: ~2 min / CC: ~1 min)
+**Priority:** P4
+
+---
 
 ## P3: Screener v2 — Condition G NaN Calibration (after first W17 run)
 
@@ -89,6 +99,7 @@ await conn.execute("""
 - P3 backlog clean sweep: asyncio fix, KOREA_BASE_RATE staleness warning, market baseline in calculate_metrics(), APScheduler SQLAlchemyJobStore persistence, dict cache with isocalendar() in backfill_historical(); `test_backtest.py` expanded to 20 tests **Completed:** 2026-04-10
 - ISSUE-001 (QA) Screener Telegram formatter over-escaped tickers in code spans (`005930.KS` → `005930\\.KS`); ISSUE-002 local `esc()` missing backtick; ISSUE-003 `test_db_dsn` isolation failure (load_dotenv restoring DB_PASSWORD during reload). All 3 fixed. `test_screener_telegram_regression_1.py` (8 regression tests). **Completed:** /qa 2026-04-16
 - Article type classification: `article_type` field on `TradeSignal` + `SIGNAL_PROMPT` + `_parse_signal_json()` + DB migration + `save_signal()` + `fetch_latest_signals()` + `run_scheduler.py` call site + Telegram type badges + backtest type breakdown; `test_article_type.py` (17 tests) + 2 backtest tests. **Completed:** v0.2.5.0 (2026-04-16); **QA:** ISSUE-001 (WATCH inflating type breakdown denominator) fixed + 1 regression test (2026-04-16)
+- ISSUE-QA-001 `test_screener_cmd.py` missing `__main__` guard — `asyncio.run(main())` at module level connected to production DB and sent 499-ticker screener results to Telegram on every `pytest` run. Fixed by adding guard. `test_screener_cmd_regression_1.py` (1 regression test). **Completed:** /qa 2026-04-18
 
 ## P2: HIGH CONFIDENCE Integration (v2 — after screener validation)
 
