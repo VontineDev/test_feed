@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.9.0] - 2026-04-18
+
+### Added
+
+- **Fundamental layer: PER/PBR/EPS enrichment** (`market_data.py`): `cross_analyze()` now factors in valuation fundamentals. Data sourced from Naver Finance mobile API (no credentials required; replaces pykrx which requires KRX login under Python 3.14). `PriceContext` gains `per`, `pbr`, `eps` fields. Fundamental score adjusts the signal score by −3 to +2: loss-making tickers (EPS < 0) penalized −2, high PER (>50) or high PBR (>5) penalized −1 each, cheap tickers (PER < 15 or PBR < 1) rewarded +1 each. Multi-ticker score uses average delta (not sum) to prevent one bad ticker from dominating.
+- **Fundamental display in Telegram** (`telegram_notify.py`): price lines now show PER/PBR tokens when noteworthy — `PER:12↓` for cheap, `PER:80↑` for expensive, `적자` for loss-making, `PBR:0.6↓` or `PBR:7.0↑` at extremes. Neutral companies show no fundamental tokens, keeping the price line clean for normal cases.
+- **Startup pre-warm** (`run_scheduler.py`): all Korean tickers in `YFINANCE_MAP` are pre-warmed via `prewarm_fundamentals()` at startup using a 5-worker thread pool. Avoids 150ms cold-miss latency on first signal of the day.
+- **Daily cache** (`market_data.py`): fundamental results cached by date key (`_fund_cache`), reset on process restart. Cache hits cost ~0ms; misses cost ~150ms (Naver API). Thread-safe via `dict.setdefault()`.
+
+### For contributors
+
+- `test_fundamental.py` (41 tests): `_parse_naver_value` (10 edge cases including Korean unit suffixes), `_to_krx_code` (4 cases), `_fundamental_score` (11 cases including boundary values per==15/50, pbr==1/5, eps==0), `_fetch_fundamental` (6 cases with mocked httpx: cache hit, HTTPX_OK=False, success, loss-maker, PER>200 cap, API exception), `cross_analyze` average delta (3 cases), Telegram per_str/pbr_str display (7 cases).
+
 ## [0.2.8.0] - 2026-04-17
 
 ### Added
