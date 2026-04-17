@@ -9,6 +9,7 @@
 > v0.2.1.0부터 텔레그램 라우팅이 한·외신 모두 `signal.is_actionable` 기반으로 통일되었습니다.
 > v0.2.5.0부터 `article_type` 기사 유형 분류(8종)가 추가되었습니다. 신호 알림에 유형 배지, `/backtest`에 유형별 적중률이 표시됩니다.
 > v0.2.6.0부터 주봉 차트 스크리너(`chart_screener.py`)가 추가되었습니다. KOSPI/KOSDAQ 전 종목을 Ichimoku + MA 6-조건으로 스크리닝하고 매주 일요일 20:30 KST에 텔레그램으로 발송합니다. `/screener` 명령어로 온디맨드 조회 가능.
+> v0.2.8.0부터 교차분석에 MACD·볼린저밴드·MA20/50 레이어가 추가되었습니다. `PriceContext`에 5개 Optional 필드, 텔레그램 시세 라인에 기술적 지표 토큰 표시.
 > v0.2.7.0부터 스크리너 v2: 120주선 조건 G 추가, KIND 섹터 데이터 연동, 섹터별 그룹 포맷 Telegram 출력.
 
 ---
@@ -219,6 +220,10 @@ class TradeSignal:
 - `change_pct >= 0.5%` → confirm +1
 - `change_pct <= -2%` → conflict +1
 - `RSI <= 30` (과매도) → confirm +1 (반등 기대)
+- `macd_cross == "bullish_cross"` → confirm +2
+- `macd_hist > 0` → confirm +1 / `macd_hist < 0` → conflict +1
+- `bb_pct < 20` (과매도) → confirm +1 / `bb_pct > 80` (과매수) → conflict +1
+- 두 MA 모두 위 → confirm +1 / 두 MA 모두 아래 → conflict +2
 
 **반환값**:
 ```python
