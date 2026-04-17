@@ -727,7 +727,8 @@ async def _fetch_type_breakdown(pool, min_signals: int = 5) -> list[dict]:
     try:
         async with pool.acquire() as conn:
             rows = await conn.fetch(query)
-    except Exception:
+    except Exception as e:
+        logger.warning("[백테스트] _fetch_type_breakdown 실패: %s", e)
         return []
 
     result = []
@@ -826,8 +827,8 @@ async def backtest_report_telegram(pool) -> str:
                     f"⚠️ *데이터 경고*: 최근 업데이트 {_esc(f'{hours_ago:.0f}')}시간 전"
                     " \\(가격 데이터가 오래되었을 수 있음\\)\n\n"
                 )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("[백테스트] 데이터 신선도 조회 실패: %s", e)
 
     today = _esc(datetime.now().strftime("%Y-%m-%d"))
     lines = []
@@ -915,7 +916,8 @@ async def backtest_report_telegram(pool) -> str:
     }
     try:
         type_rows = await _fetch_type_breakdown(pool, min_signals=5)
-    except Exception:
+    except Exception as e:
+        logger.warning("[백테스트] 타입별 정확도 조회 실패: %s", e)
         type_rows = []
 
     if type_rows:
@@ -933,7 +935,8 @@ async def backtest_report_telegram(pool) -> str:
     # 종목별 적중률 (CONFIRM, 1d, 5건 이상)
     try:
         ticker_rows = await _fetch_ticker_breakdown(pool, min_signals=5)
-    except Exception:
+    except Exception as e:
+        logger.warning("[백테스트] 종목별 정확도 조회 실패: %s", e)
         ticker_rows = []
 
     if ticker_rows:

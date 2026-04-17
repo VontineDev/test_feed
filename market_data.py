@@ -381,7 +381,9 @@ def _fetch_pykrx_index(code: str, ticker_name: str) -> PriceContext:
 def _to_krx_code(symbol: str) -> Optional[str]:
     """'005930.KS' → '005930', '035720.KQ' → '035720', 'NVDA' → None"""
     if symbol.endswith((".KS", ".KQ")):
-        return symbol.split(".")[0]
+        code = symbol.split(".")[0]
+        if code.isdigit() and len(code) == 6:
+            return code
     return None
 
 
@@ -419,7 +421,7 @@ def _fetch_fundamental(krx_code: str) -> dict:
         ti = {
             item["code"]: item["value"]
             for item in r.json().get("totalInfos", [])
-            if "code" in item
+            if "code" in item and "value" in item
         }
         per_raw = _parse_naver_value(ti.get("per", ""))
         eps_raw = _parse_naver_value(ti.get("eps", ""))

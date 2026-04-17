@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0.0] - 2026-04-18
+
+### Added
+- **Article type classification** (`signal_detector.py`, `db.py`, `telegram_notify.py`): `TradeSignal` now carries an `article_type` field (EARNINGS / MACRO / TECHNICAL / GUIDANCE / SECTOR / OTHER). `SIGNAL_PROMPT` instructs the LLM to classify each article. Type is persisted in `trade_signals.article_type` (DB column added idempotently). Signals include a `TYPE_BADGE` emoji in Telegram messages (🔴 earnings, 🌐 macro, 📊 technical, etc.).
+- **Per-article-type hit rate breakdown** (`backtest.py`, `generate_report.py`): backtest report now includes a breakdown of signal accuracy by article type. Identifies which categories produce the highest-conviction signals.
+- **Weekly chart screener** (`chart_screener.py`): scans all KOSPI/KOSDAQ stocks (~2,770) every Sunday at 20:30 KST using Ichimoku + 20/60-week MA conditions (6-condition filter). Results stored in `chart_signals` DB table and delivered to Telegram DM + channel simultaneously.
+- **`/screener` Telegram command** (`telegram_bot.py`): on-demand access to the latest weekly screening results from DB — no re-scan required.
+- **Screener v2: 120-week MA filter** (`chart_screener.py`): `close > 120wMA` required (condition G). Stocks with < 100 weeks of data pass automatically. `ScreenResult` gains `ma_120w` field.
+- **Screener v2: KIND sector grouping** (`chart_screener.py`, `telegram_notify.py`): each screened ticker carries its KRX sector from KIND. Sunday messages show top 5 sectors with top 3 stocks per sector.
+- **DB migrations** (`db.py`): `chart_signals.sector` (VARCHAR 80), `chart_signals.ma_120w` (FLOAT), `trade_signals.article_type` (VARCHAR 40) — all added idempotently via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
+- **Signal Cross-Analysis v2: MACD + Bollinger Bands + MA trend layer** (`market_data.py`): `cross_analyze()` now factors in MACD histogram direction, MACD cross (bullish/bearish), Bollinger %B position, and price vs MA20/MA50 alignment. Zero extra API calls — all indicators computed from the existing 1-year daily Close series.
+- **Richer Telegram signal messages** (`telegram_notify.py`): each price line now shows price change, RSI, MACD direction (▲▲/▼▼ for crosses), Bollinger %B, and MA20/MA50 position.
+- **Fundamental layer: PER/PBR/EPS enrichment** (`market_data.py`): `cross_analyze()` factors in valuation fundamentals sourced from Naver Finance mobile API (no credentials required). `PriceContext` gains `per`, `pbr`, `eps` fields. Fundamental score adjusts signal score by −3 to +2. Startup pre-warms all Korean tickers via 5-worker thread pool.
+- **Fundamental display in Telegram** (`telegram_notify.py`): price lines show PER/PBR tokens when noteworthy (`PER:12↓`, `PER:80↑`, `적자`, `PBR:0.6↓`). Neutral companies show no tokens.
+
+### Fixed
+- **WATCH signal noise** (`signal_detector.py`): `is_actionable` now requires strength ≥ 3 for WATCH signals (was ≥ 2), reducing false positives from ambiguous news.
+- **`_fetch_type_breakdown` SQL** (`backtest.py`): WATCH signals excluded from article type breakdown query — WATCH is a hold signal, not a trading action, and inflated breakdown counts.
+- **Ollama model name mismatch** (`summarizer.py`): default `OLLAMA_MODEL` changed from `Qwen3.5-9B:latest` to `qwen3.5:9b` — previous value caused 404 on all `/api/chat` calls.
+- **`/help` MarkdownV2 parse error** (`telegram_bot.py`): `<` and `>` in `/volume <종목명|티커>` escaped to `\<` and `\>`.
+
+### Tests (242 total)
+- `test_article_type.py`: 19 tests — 17 unit tests for type classification logic, 2 backtest integration tests.
+- `test_chart_screener.py`: 31 tests — KIND sector fetch, condition G (120wMA), screener pipeline.
+- `test_fundamental.py`: 41 tests — `_parse_naver_value`, `_fundamental_score`, `_fetch_fundamental`, `cross_analyze` average delta, Telegram display.
+- `test_macro_signal.py`: 10 new tests — MACD/BB/MA scoring (Group 8), yfinance TA computation (Group 9).
+- `test_signal_prompt.py`: 7 tests — WATCH ≥ 3 threshold.
+- `test_screener_telegram_regression_1.py`: 6 regression tests — KIND failure warning, sector-grouped format.
+- `test_screener_cmd.py`: 4 tests — `/screener` command handler.
+- `test_backtest.py`: updated with article type breakdown tests.
+
 ## [0.3.0.0] - 2026-04-14
 
 ### Added
