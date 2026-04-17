@@ -79,6 +79,14 @@ except ImportError:
     YFINANCE_OK = False
     logger.warning("yfinance 미설치 — pip install yfinance")
 
+try:
+    import pandas as pd
+    from ta.trend import MACD as TaMACD
+    from ta.volatility import BollingerBands
+    TA_OK = True
+except ImportError:
+    TA_OK = False
+
 PYKRX_OK = False  # Python 3.14 미지원 — yfinance로 대체
 
 
@@ -166,6 +174,11 @@ class PriceContext:
     week52_low: Optional[float]    # 52주 최저가
     volume_surge: bool             # 거래량 급증 (현재 거래량 ≥ 20일 평균의 2배)
     success: bool
+    macd_hist:  Optional[float] = None  # MACD histogram curr bar. >0=bullish, <0=bearish
+    macd_cross: Optional[str]   = None  # "bullish_cross" | "bearish_cross" | None
+    bb_pct:     Optional[float] = None  # Bollinger %B, 0-100 (NOT 0-1)
+    above_ma20: Optional[bool]  = None  # price >= 20-day MA
+    above_ma50: Optional[bool]  = None  # price >= 50-day MA
 
     @property
     def near_52w_high(self) -> bool:
@@ -236,12 +249,39 @@ def _fetch_yfinance(symbol: str, ticker_name: str) -> PriceContext:
         week52_high = round(max(closes), 2) if closes else None
         week52_low  = round(min(closes), 2) if closes else None
 
+        # MACD + Bollinger Bands + MA 포지션 — ta 라이브러리 (zero extra API calls)
+        if TA_OK:
+            _macd = TaMACD(close=hist["Close"])
+            _hist_series = _macd.macd_diff()
+            _mh_raw = _hist_series.iloc[-1] if len(_hist_series) >= 2 else None
+            macd_hist = float(_mh_raw) if _mh_raw is not None and not pd.isna(_mh_raw) else None
+            _mh_prev_raw = _hist_series.iloc[-2] if len(_hist_series) >= 2 else None
+            macd_hist_prev = float(_mh_prev_raw) if _mh_prev_raw is not None and not pd.isna(_mh_prev_raw) else None
+            macd_cross: Optional[str] = None
+            if macd_hist is not None and macd_hist_prev is not None:
+                if macd_hist > 0 and macd_hist_prev <= 0:
+                    macd_cross = "bullish_cross"
+                elif macd_hist < 0 and macd_hist_prev >= 0:
+                    macd_cross = "bearish_cross"
+            _bb = BollingerBands(close=hist["Close"], window=20, window_dev=2)
+            _bb_pct_series = _bb.bollinger_pband()
+            _bb_last = _bb_pct_series.iloc[-1]
+            bb_pct: Optional[float] = round(float(_bb_last) * 100, 1) if not pd.isna(_bb_last) else None
+            _ma20 = hist["Close"].rolling(20).mean().iloc[-1]
+            _ma50 = hist["Close"].rolling(50).mean().iloc[-1]
+            above_ma20: Optional[bool] = bool(current >= _ma20) if not pd.isna(_ma20) else None
+            above_ma50: Optional[bool] = bool(current >= _ma50) if not pd.isna(_ma50) else None
+        else:
+            macd_hist = macd_cross = bb_pct = above_ma20 = above_ma50 = None
+
         return PriceContext(
             ticker=ticker_name, symbol=symbol, source="yfinance",
             current=round(current, 2), change_pct=change_pct,
             rsi=rsi, volume_ratio=vol_ratio,
             week52_high=week52_high, week52_low=week52_low,
             volume_surge=volume_surge, success=True,
+            macd_hist=macd_hist, macd_cross=macd_cross,
+            bb_pct=bb_pct, above_ma20=above_ma20, above_ma50=above_ma50,
         )
     except Exception as e:
         logger.debug("[시세] yfinance 실패 (%s): %s", symbol, e)
@@ -429,6 +469,15 @@ def cross_analyze(
         prev_confirm  = confirm_count
         prev_conflict = conflict_count
 
+        # Scoring direction reference (BUY / SELL):
+        #   macd_cross bullish  → BUY +2 confirm  / SELL +1 conflict
+        #   macd_hist > 0       → BUY +1 confirm  / SELL +1 conflict
+        #   macd_hist < 0       → BUY +1 conflict / SELL +1 confirm
+        #   macd_cross bearish  → BUY +1 conflict / SELL +2 confirm
+        #   bb_pct < 20         → BUY +1 confirm  / SELL +1 conflict
+        #   bb_pct > 80         → BUY +1 conflict / SELL +1 confirm
+        #   above_ma20 & ma50   → BUY +1 confirm  / SELL +1 conflict
+        #   below_ma20 & ma50   → BUY +2 conflict / SELL +1 confirm
         if direction == "BUY":
             if ctx.change_pct >= 0.5:
                 confirm_count += 1
@@ -440,6 +489,26 @@ def cross_analyze(
                 confirm_count += 1   # 52주 최저가 근처 = 저점 매수 기대
             if ctx.near_52w_high:
                 conflict_count += 1  # 52주 최고가 근처 = 추가 상승 제한적
+            # MACD
+            if ctx.macd_cross == "bullish_cross":
+                confirm_count += 2
+            elif ctx.macd_hist is not None:
+                if ctx.macd_hist > 0:
+                    confirm_count += 1
+                elif ctx.macd_hist < 0:
+                    conflict_count += 1
+            # Bollinger Bands %B
+            if ctx.bb_pct is not None:
+                if ctx.bb_pct < 20:
+                    confirm_count += 1   # 과매도 반등 기대
+                elif ctx.bb_pct > 80:
+                    conflict_count += 1  # 과매수 — 고점 매수 위험
+            # MA 포지션
+            if ctx.above_ma20 is not None and ctx.above_ma50 is not None:
+                if ctx.above_ma20 and ctx.above_ma50:
+                    confirm_count += 1
+                elif not ctx.above_ma20 and not ctx.above_ma50:
+                    conflict_count += 2  # 완전 하락추세 = 강한 역방향
         elif direction == "SELL":
             if ctx.change_pct <= -0.5:
                 confirm_count += 1
@@ -451,6 +520,26 @@ def cross_analyze(
                 confirm_count += 1   # 52주 최고가 근처 = 차익실현 압력
             if ctx.near_52w_low:
                 conflict_count += 1  # 52주 최저가 근처 = 추가 하락 제한적
+            # MACD
+            if ctx.macd_cross == "bearish_cross":
+                confirm_count += 2
+            elif ctx.macd_hist is not None:
+                if ctx.macd_hist < 0:
+                    confirm_count += 1
+                elif ctx.macd_hist > 0:
+                    conflict_count += 1
+            # Bollinger Bands %B
+            if ctx.bb_pct is not None:
+                if ctx.bb_pct > 80:
+                    confirm_count += 1   # 과매수 — 하락 압력
+                elif ctx.bb_pct < 20:
+                    conflict_count += 1  # 이미 과매도 — 추가 하락 제한적
+            # MA 포지션
+            if ctx.above_ma20 is not None and ctx.above_ma50 is not None:
+                if ctx.above_ma20 and ctx.above_ma50:
+                    conflict_count += 1  # 강한 상승추세 = 매도 마찰
+                elif not ctx.above_ma20 and not ctx.above_ma50:
+                    confirm_count += 1
         elif direction == "WATCH":
             # WATCH는 방향 무관, 변동성 ±0.5% 이상일 때만 유의미 신호로 판정
             if abs(ctx.change_pct) >= 0.5:
