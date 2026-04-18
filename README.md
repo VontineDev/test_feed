@@ -18,7 +18,7 @@
 pip install -r requirements.txt
 
 # 환경변수 설정
-cp env.example .env
+cp .env.example .env
 # .env 편집 — DB_HOST, DB_NAME, DB_USER, DB_PASSWORD, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
 
 # 로컬 LLM 실행 (Ollama 기준)
@@ -129,6 +129,7 @@ pytest test_fundamental.py -v                     # PER/PBR/EPS 펀더멘털 레
 
 ## 문서
 
+- [USER_MANUAL.md](USER_MANUAL.md) — 설치부터 첫 텔레그램 알림까지 전체 가이드 (처음 설치하는 분은 여기서 시작)
 - [ARCHITECTURE.md](ARCHITECTURE.md) — 시스템 아키텍처, 모듈 상세, 데이터 흐름
 - [CHANGELOG.md](CHANGELOG.md) — 버전별 변경 이력
 
