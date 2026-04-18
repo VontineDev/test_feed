@@ -8,7 +8,8 @@ Long polling 방식으로 명령어를 수신하고 DB 조회 결과를 응답.
     /signals  — 최근 매매 신호 10건 (BUY/SELL/WATCH)
     /today    — 오늘 수집된 기사 요약 (카테고리별 건수 + 최신 5건)
     /backtest  — 교차분석 백테스팅 리포트 (판정별/종목별 적중률)
-    /screener  — 최신 주봉 차트 스크리닝 결과 (DM + 채널 동시 발송)
+    /screener  — 최신 주봉 차트 스크리닝 결과 (DB 조회, 명령어 발신자에게만 전송)
+    /scan      — 주봉 스크리닝 즉시 실행 (전 종목 실시간 스캔, 결과 저장 후 발신자에게 전송)
     /help      — 명령어 목록
 """
 
@@ -38,6 +39,8 @@ _last_update_id: int = 0
 _start_time: datetime = datetime.now(timezone.utc)
 # 누적 수집 건수 참조 (run_scheduler에서 주입)
 _seen_hashes_ref: Optional[set] = None
+# /scan 중복 실행 방지 락
+_scan_lock: asyncio.Lock = asyncio.Lock()
 
 
 def init_bot(seen_hashes: set) -> None:
@@ -344,6 +347,33 @@ async def _handle_screener(http: httpx.AsyncClient, chat_id: str, pool) -> None:
     await send_weekly_screener(results, http=http, target_chat_id=chat_id)
 
 
+async def _handle_scan(http: httpx.AsyncClient, chat_id: str, pool) -> None:
+    """/scan — 주봉 스크리닝 즉시 실행 (전 종목 실시간 스캔, 결과 저장 후 발신자에게 전송)"""
+    if not pool:
+        await _send(http, chat_id, "DB 미연결 상태입니다\\.")
+        return
+
+    if _scan_lock.locked():
+        await _send(http, chat_id, "⏳ 스크리닝이 이미 실행 중입니다\\. 완료 후 결과가 전송됩니다\\.")
+        return
+
+    async with _scan_lock:
+        await _send(http, chat_id,
+            "🔍 주봉 스크리닝 시작\\.\\.\\.\n전 종목 실시간 스캔 중 \\(약 10\\~20분 소요\\)\\.")
+        try:
+            from chart_screener import run_weekly_screen
+            from db import save_chart_signals
+            loop = asyncio.get_running_loop()
+            results = await loop.run_in_executor(None, run_weekly_screen)
+            saved = await save_chart_signals(pool, results)
+            logger.info("[봇/scan] 완료 — 통과:%d 저장:%d", len(results), saved)
+            from telegram_notify import send_weekly_screener
+            await send_weekly_screener(results, http=http, target_chat_id=chat_id)
+        except Exception as e:
+            logger.warning("[봇/scan] 실행 실패: %s", e)
+            await _send(http, chat_id, f"스크리닝 실행 중 오류가 발생했습니다\\: {esc(str(e))}")
+
+
 async def _handle_help(http: httpx.AsyncClient, chat_id: str) -> None:
     """/help — 명령어 목록"""
     lines = [
@@ -357,7 +387,8 @@ async def _handle_help(http: httpx.AsyncClient, chat_id: str) -> None:
         "/today — 오늘 수집 현황 \\+ 최신 기사",
         "/backtest — 교차분석 백테스팅 리포트",
         "/volume \\<종목명\\|티커\\> — 시간대별 거래량 패턴 분석",
-        "/screener — 최신 주봉 차트 스크리닝 결과 \\(DM \\+ 채널\\)",
+        "/screener — 최신 주봉 차트 스크리닝 결과 \\(DB 조회\\)",
+        "/scan — 주봉 스크리닝 즉시 실행 \\(전 종목 실시간 스캔, 약 10\\~20분\\)",
         "/help — 이 도움말",
     ]
     await _send(http, chat_id, "\n".join(lines))
@@ -414,6 +445,8 @@ async def _process_update(http: httpx.AsyncClient, update: dict, pool) -> None:
         await _handle_volume(http, chat_id, args)
     elif cmd == "/screener":
         await _handle_screener(http, chat_id, pool)
+    elif cmd == "/scan":
+        await _handle_scan(http, chat_id, pool)
     elif cmd in ("/help", "/start"):
         await _handle_help(http, chat_id)
     else:
@@ -432,7 +465,8 @@ async def _register_commands(http: httpx.AsyncClient) -> None:
         {"command": "today",    "description": "오늘 수집 현황 + 최신 기사"},
         {"command": "backtest", "description": "교차분석 백테스팅 리포트"},
         {"command": "volume",   "description": "시간대별 거래량 패턴 분석"},
-        {"command": "screener", "description": "최신 주봉 차트 스크리닝 결과 (DM + 채널)"},
+        {"command": "screener", "description": "최신 주봉 차트 스크리닝 결과 (DB 조회)"},
+        {"command": "scan",     "description": "주봉 스크리닝 즉시 실행 (전 종목 실시간 스캔)"},
         {"command": "help",     "description": "명령어 목록"},
     ]
     try:
