@@ -15,6 +15,46 @@ Items deferred from code review and planning sessions.
 
 ---
 
+## P3: HTML Screener Report — Sparklines
+
+**What:** Add close-price sparklines (mini bar or line charts) per stock row in the HTML screener report. Each row would show a 12-week price trend alongside the existing columns.
+
+**Why:** The screener design UI kit (`ui_kits/screener/index.html`) includes sparklines. They let you visually distinguish a recent breakout from a stale one at a glance, without opening the ticker in a charting app.
+
+**How to apply:**
+- Add `close_history: list[float] = field(default_factory=list)` to `ScreenResult` (after `ma_120w`)
+- In `screen_ticker()`, pass the last 12 Close values from `df["Close"].dropna().tail(12).tolist()` into the constructor
+- In `generate_html_report.py`, render as inline SVG `<polyline>` (no JS dependency) scaled to the cell height
+- Tests: add a test that `close_history` is populated when rows ≥ 12, and that empty history renders as empty cell not crash
+
+**Pros:** Matches design intent. Zero new API calls (data already fetched in `fetch_weekly_ohlcv`). SVG is inline — no JS or chart lib dependency.
+**Cons:** Changes `ScreenResult` dataclass interface — requires updating all constructors in tests (but CC makes this fast). Adds ~12 floats per stock to the in-memory result set (negligible).
+**Effort:** XS-S (human: ~3h / CC: ~20 min)
+**Priority:** P3
+**Blocked by:** ~~HTML report v1 (generate_html_report.py) must be implemented first~~ — unblocked (shipped v0.4.1.0)
+
+---
+
+## P3: HTML Screener Report — Sector-Grouped View
+
+**What:** Add an alternative sector-grouped view to the HTML screener report, either as a second `<section>` at the bottom or as a toggle. v1 uses 정배열/일반 grouping; this adds grouping by KIND 업종명.
+
+**Why:** Sector rotation is one of the core use cases for the screener. Seeing "반도체 4종목, 바이오 3종목, 에너지 2종목" in one glance shows whether the breakout is broad-based or concentrated. The existing `ScreenResult.sector` field is already populated — no new fetches.
+
+**How to apply:**
+- In `generate_html_report.py`, add `_group_by_sector(results)` that returns `dict[str, list[ScreenResult]]` sorted by sector name
+- Render as a second section `<h2>업종별</h2>` below the 정배열/일반 table
+- Stocks with `sector=""` go under "기타"
+- Tests: add test that sector grouping collapses stocks correctly and "기타" bucket catches empty sectors
+
+**Pros:** No data cost. Uses `ScreenResult.sector` already in hand. Adds real analytical value.
+**Cons:** Longer HTML output (two tables instead of one). Sector names from KIND can be verbose and inconsistent.
+**Effort:** XS (human: ~1h / CC: ~10 min)
+**Priority:** P3
+**Blocked by:** ~~HTML report v1 (generate_html_report.py) must be implemented first~~ — unblocked (shipped v0.4.1.0)
+
+---
+
 ## P3: Screener v2 — Condition G NaN Calibration (after first W17 run)
 
 **What:** After the first Sunday run with v2 (2026-W17 or later), check what fraction of passed stocks have `ma_120w IS NULL` (i.e., passed via the NaN-safe fallback, not a real 120wMA comparison):

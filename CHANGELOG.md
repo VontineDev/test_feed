@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.1.0] - 2026-04-19
+
+### Added
+- **HTML screener report** (`generate_html_report.py`): every Sunday screener run now writes a self-contained HTML file to `reports/screener/screener_YYYYMMDD_HHMM.html`. You get a clean two-section table (★ 정배열 / 일반), sorted by close price, with 120주선 displayed as `—` when data is insufficient (< 100 bars) — matching the footnote that explains the NaN-pass rule. Sectors default to `기타` when empty. HTML is generated as a pure function (`generate_html(results)`) so it's easy to test and easy to run standalone from the CLI.
+- **Design bundle support** (`generate_html_report.py`): the generator loads `web/screener_design/colors_and_type.css` and inlines fonts as base64 when the bundle is present. Falls back to system fonts with a WARNING log if the bundle is missing — no hard dependency.
+- **Print styles** (`generate_html_report.py`): the generated HTML includes `@media print` styles (white background, collapsed table borders) so you can print or save as PDF directly from the browser.
+- **Scheduler integration** (`run_scheduler.py`): HTML generation runs automatically after every Sunday screener job. Failure is isolated — a broken HTML write does not affect the existing Telegram delivery.
+
+### Tests
+- `test_generate_html_report.py`: 10 tests — empty state, ★ 정배열 section rendering, 일반 section absent when all stocks are 정배열, `ma_120w=None` → `—` (not "None"), HTML escaping on stock names, no external stylesheet links, `sector=""` → "기타", close-price sort order, `lang="ko"` attribute, footer footnote.
+
 ## [0.4.0.0] - 2026-04-18
 
 ### Added

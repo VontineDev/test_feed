@@ -517,6 +517,7 @@ test_feed/
 ├── db.py                          # PostgreSQL 연동 (asyncpg)
 ├── chart_screener.py              # 주봉 Ichimoku+MA 스크리너 (KOSPI/KOSDAQ 전종목)
 ├── generate_report.py             # 차트 스크리닝 결과를 UTF-8 파일로 저장 (CLI 스크립트)
+├── generate_html_report.py        # 차트 스크리닝 결과를 HTML 파일로 저장 — generate_html(results) 순수 함수
 ├── telegram_bot.py                # 봇 명령어 처리 (/status /signals /today /backtest /screener /help)
 ├── telegram_notify.py             # 신호 알림 전송
 ├── volume_pattern.py              # 거래량 패턴 분석
@@ -536,6 +537,7 @@ test_feed/
 ├── test_chart_screener.py         # pytest — 스크리너 조건 A~G + KIND 섹터 (26개)
 ├── test_screener_telegram_regression_1.py # pytest — 스크리너 텔레그램 포맷 회귀 (14개)
 ├── test_fundamental.py            # pytest — PER/PBR/EPS 펀더멘털 레이어 (41개)
+├── test_generate_html_report.py   # pytest — HTML 리포트 생성 (10개)
 │
 ├── VERSION                        # 현재 버전 (SemVer 4자리)
 ├── CHANGELOG.md                   # 변경 이력
@@ -671,4 +673,4 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 
 ---
 
-*현재 코드베이스 v0.4.0.0 (2026-04-18) 기준*
+*현재 코드베이스 v0.4.1.0 (2026-04-19) 기준*

@@ -65,6 +65,7 @@ market_data.py        # yfinance 시세 조회 + 교차분석
 backtest.py           # 판정 정확도 추적 + 백테스팅 리포트
 chart_screener.py     # 주봉 차트 스크리너 (Ichimoku + MA, KOSPI/KOSDAQ 전종목)
 generate_report.py    # 차트 스크리닝 결과를 UTF-8 파일로 저장 (CLI 스크립트)
+generate_html_report.py # 차트 스크리닝 결과를 HTML 파일로 저장 — 정배열/일반 섹션, 인라인 CSS
 db.py                 # PostgreSQL 연동 (asyncpg)
 telegram_bot.py       # 봇 명령어 처리
 telegram_notify.py    # 신호 알림 전송
@@ -84,6 +85,7 @@ test_signal_prompt.py              # pytest — 신호 감지 프롬프트 · WA
 test_chart_screener.py             # pytest — 주봉 스크리너 조건 + KIND 섹터 (26개)
 test_screener_telegram_regression_1.py  # pytest — 스크리너 텔레그램 포맷 회귀 (14개)
 test_fundamental.py                # pytest — PER/PBR/EPS 펀더멘털 레이어 (41개)
+test_generate_html_report.py       # pytest — HTML 리포트 생성 (10개)
 ```
 
 ## 환경변수
@@ -125,6 +127,7 @@ pytest test_signal_prompt.py -v               # 신호 프롬프트 · WATCH 임
 pytest test_chart_screener.py -v              # 주봉 스크리너 + KIND 섹터 (26개)
 pytest test_screener_telegram_regression_1.py -v  # 스크리너 텔레그램 포맷 회귀 (14개)
 pytest test_fundamental.py -v                     # PER/PBR/EPS 펀더멘털 레이어 (41개)
+pytest test_generate_html_report.py -v            # HTML 리포트 생성 (10개)
 ```
 
 ## 문서
@@ -135,4 +138,4 @@ pytest test_fundamental.py -v                     # PER/PBR/EPS 펀더멘털 레
 
 ## 버전
 
-현재 버전: `0.4.0.0` — [CHANGELOG](CHANGELOG.md) 참고
+현재 버전: `0.4.1.0` — [CHANGELOG](CHANGELOG.md) 참고
