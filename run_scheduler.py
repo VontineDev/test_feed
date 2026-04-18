@@ -664,6 +664,21 @@ async def main(interval: int, enable_summary: bool) -> None:
                 await tg_send_weekly_screener(results, http=http)
         except Exception as e:
             logger.warning("[차트스크리너] 실행 실패: %s", e)
+            return
+
+        try:
+            from generate_html_report import generate_html
+            from pathlib import Path as _Path
+            html_str = generate_html(results)
+            _html_dir = _Path("reports/screener")
+            _html_dir.mkdir(parents=True, exist_ok=True)
+            from datetime import datetime as _dt
+            from zoneinfo import ZoneInfo as _ZI
+            _html_path = _html_dir / f"screener_{_dt.now(_ZI('Asia/Seoul')).strftime('%Y%m%d_%H%M')}.html"
+            _html_path.write_text(html_str, encoding="utf-8")
+            logger.info("[차트스크리너] HTML 리포트: %s", _html_path)
+        except Exception as _html_e:
+            logger.warning("[차트스크리너] HTML 생성 실패 (비중요): %s", _html_e)
 
     scheduler.add_job(
         _weekly_screener_job,
