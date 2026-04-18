@@ -137,20 +137,18 @@ def get_all_tickers(sector_map: dict[str, str] | None = None) -> list[tuple[str,
 # ── OHLCV 수집 ─────────────────────────────────────────────────
 def fetch_weekly_ohlcv(ticker: str) -> Optional[pd.DataFrame]:
     """
-    yfinance에서 주봉 2년치 OHLCV 조회.
+    yfinance에서 주봉 3년치 OHLCV 조회.
     유효 데이터 부족(< 60행) 또는 실패 시 None 반환.
+
+    yf.Ticker.history() 사용: 인스턴스 기반이라 스레드 간 데이터 오염 없음.
+    (yf.download()는 내부 캐시/세션을 공유해 멀티스레드 환경에서 데이터 혼선 발생)
     """
     try:
-        df = yf.download(
-            ticker,
-            period="3y",
-            interval="1wk",
-            progress=False,
-            auto_adjust=True,
-        )
+        tkr = yf.Ticker(ticker)
+        df = tkr.history(period="3y", interval="1wk", auto_adjust=True)
         if df.empty:
             return None
-        # 멀티인덱스 컬럼 평탄화 (yfinance 0.2.x 변경 대응)
+        # history()는 항상 flat 컬럼 반환하지만 방어적으로 처리
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         df = df[["Open", "High", "Low", "Close", "Volume"]].copy()

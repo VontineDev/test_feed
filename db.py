@@ -229,6 +229,26 @@ CREATE INDEX IF NOT EXISTS idx_krx_listings_updated_at
 """
 
 
+# ── RLS 활성화 (Supabase PostgREST 노출 차단) ────────────────────
+# 이 백엔드는 asyncpg 직접 연결(postgres/service_role)을 사용하므로 RLS 영향 없음.
+# anon/authenticated 롤이 PostgREST를 통해 테이블에 접근하는 것만 차단.
+# ENABLE ROW LEVEL SECURITY는 이미 활성화된 테이블에 재실행해도 무해함(no-op).
+_ENABLE_RLS = "\n".join(
+    f"ALTER TABLE {tbl} ENABLE ROW LEVEL SECURITY;"
+    for tbl in [
+        "news_articles",
+        "trade_signals",
+        "cross_analysis_results",
+        "cross_analysis_prices",
+        "price_outcomes",
+        "daily_ohlcv",
+        "chart_signals",
+        "intraday_volumes",
+        "krx_listings",
+    ]
+)
+
+
 async def init_db(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
         await conn.execute(_CREATE_TABLE)
@@ -239,6 +259,7 @@ async def init_db(pool: asyncpg.Pool) -> None:
         await conn.execute(
             "ALTER TABLE chart_signals ADD COLUMN IF NOT EXISTS ma_120w FLOAT"
         )
+        await conn.execute(_ENABLE_RLS)
     logger.info("DB 테이블 준비 완료 (news_articles, krx_listings)")
 
 
