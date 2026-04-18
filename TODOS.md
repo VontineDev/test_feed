@@ -146,3 +146,31 @@ await conn.execute("""
 **Effort:** M (human: ~2 days / CC: ~30 min)
 **Priority:** P3
 **Blocked by:** price_outcomes tracking extended to chart_signals tickers; 30+ weeks of screener data.
+
+---
+
+## P2: USER_MANUAL.md — Ollama/LLM Install Section Depth
+
+**What:** When writing USER_MANUAL.md section 3 (설치 가이드), give Ollama installation
+especially detailed treatment: model download step (`ollama pull qwen3.5:9b` — 4-8GB,
+can take 10-30 min on slow connections), port configuration, and a dedicated
+troubleshooting subsection for LLM failures (model not found, port in use,
+download interrupted, out of disk space).
+
+**Why:** Outside-voice review of the user manual design identified Ollama model setup
+as the highest-abandonment step in the install flow. A Korean VPS user downloading
+a 7B model on limited bandwidth with no progress feedback will give up or misdiagnose
+failure. Getting this section right determines whether a stranger successfully completes
+the install.
+
+**How to apply:** When Claude Code writes USER_MANUAL.md, instruct it to treat the
+Ollama section as a first-class install guide (not a one-liner) and add these
+troubleshooting entries to section 10: `ollama list` shows no models, `ollama serve`
+port 11434 already in use, model download interrupted (resume with same pull command).
+
+**Pros:** Reduces the most common first-time install failure. Directly improves
+Success Criterion 1 (stranger installs without asking a question).
+**Cons:** Adds ~1-2 pages to the manual. Minor length increase.
+**Effort:** S (human: ~30 min / CC: ~5 min)
+**Priority:** P2
+**Blocked by:** USER_MANUAL.md writing session started.

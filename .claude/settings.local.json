@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(office-hours)",
+      "Bash(python *)",
+      "Bash(pip install *)"
+    ]
+  }
+}
