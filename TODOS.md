@@ -12,6 +12,7 @@ Items deferred from code review and planning sessions.
 
 **Effort:** XS (human: ~2 min / CC: ~1 min)
 **Priority:** P4
+**Completed:** v0.4.2.0 (2026-04-19)
 
 ---
 
@@ -32,6 +33,7 @@ Items deferred from code review and planning sessions.
 **Effort:** XS-S (human: ~3h / CC: ~20 min)
 **Priority:** P3
 **Blocked by:** ~~HTML report v1 (generate_html_report.py) must be implemented first~~ — unblocked (shipped v0.4.1.0)
+**Completed:** v0.4.2.0 (2026-04-19)
 
 ---
 
@@ -52,6 +54,7 @@ Items deferred from code review and planning sessions.
 **Effort:** XS (human: ~1h / CC: ~10 min)
 **Priority:** P3
 **Blocked by:** ~~HTML report v1 (generate_html_report.py) must be implemented first~~ — unblocked (shipped v0.4.1.0)
+**Completed:** v0.4.2.0 (2026-04-19)
 
 ---
 
@@ -116,6 +119,7 @@ await conn.execute("""
 
 **Priority:** P2
 **Deferred from:** `feat/krx-listings-db` (v0.3.0.0)
+**Completed:** v0.4.2.0 (2026-04-19)
 
 ---
 

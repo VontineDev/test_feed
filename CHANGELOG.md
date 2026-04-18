@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.2.0] - 2026-04-19
+
+### Added
+- **Sparklines in HTML screener report** (`generate_html_report.py`): each stock row now shows a 12-week close-price trend as an inline SVG sparkline. Lets you distinguish a fresh breakout from a months-old stale one at a glance, without opening a chart app. No JS or external dependencies — pure SVG `<polyline>`.
+- **Sector-grouped view** (`generate_html_report.py`): a second `업종별` section now appears below the 정배열/일반 tables, grouping results by KIND 업종명. Shows at a glance whether a breakout week is broad-based or concentrated in one sector. Uses the `ScreenResult.sector` field already populated — zero new API calls.
+- **Ticker resolution diagnostics** (`market_data.py`): a module-level `Counter` now tracks every ticker name that fully fails resolution (all 5 steps). `get_resolution_miss_report(top_n=10)` returns the top misses as a human-readable string. Called at the end of each `collect_job()` cycle — resolution gaps now surface as WARNING log lines in production.
+
+### Changed
+- **Step 5 resolution log level** (`market_data.py`): full ticker-miss logging upgraded from `DEBUG` to `WARNING` so it surfaces in production logs without requiring verbose mode.
+- **`test_feeds.py` renamed to `scripts/check_feeds.py`**: the RSS connectivity checker is not a pytest test file. Moved to `scripts/` to stop pytest from attempting collection (0 tests found, misleading).
+
 ## [0.4.1.0] - 2026-04-19
 
 ### Added
