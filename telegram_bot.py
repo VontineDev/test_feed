@@ -341,7 +341,7 @@ async def _handle_screener(http: httpx.AsyncClient, chat_id: str, pool) -> None:
     ]
 
     from telegram_notify import send_weekly_screener
-    await send_weekly_screener(results, http=http)
+    await send_weekly_screener(results, http=http, target_chat_id=chat_id)
 
 
 async def _handle_help(http: httpx.AsyncClient, chat_id: str) -> None:

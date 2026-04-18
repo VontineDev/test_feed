@@ -305,14 +305,16 @@ async def send_signal(
 async def send_weekly_screener(
     results: list,                          # list[ScreenResult]
     http: Optional[httpx.AsyncClient] = None,
+    target_chat_id: Optional[str] = None,  # 명령어 응답 시 지정; 없으면 env TELEGRAM_CHAT_ID + 채널
 ) -> bool:
     """
     주봉 차트 스크리닝 결과를 Telegram으로 전송.
     통과 종목이 없어도 '이번 주 없음' 메시지 발송.
+    target_chat_id가 지정되면 그 대화에만 발송하고 채널 브로드캐스트를 건너뜀.
     """
     try:
         token   = _get_token()
-        chat_id = _get_chat_id()
+        chat_id = target_chat_id or _get_chat_id()
     except ValueError as e:
         logger.warning("[Telegram] 설정 오류: %s", e)
         return False
@@ -370,7 +372,8 @@ async def send_weekly_screener(
 
         message = "\n".join(lines)
 
-    channel_id = _get_channel_id()
+    # target_chat_id가 지정된 경우 채널 브로드캐스트 건너뜀 (봇 명령어 응답 전용)
+    channel_id = "" if target_chat_id else _get_channel_id()
 
     _own_client = http is None
     if _own_client:
