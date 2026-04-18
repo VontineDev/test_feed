@@ -26,6 +26,7 @@ import asyncio
 import logging
 import os
 import re
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -33,6 +34,16 @@ from typing import Optional
 from ticker_cache import ticker_cache  # KRX DB-backed ticker lookup
 
 logger = logging.getLogger(__name__)
+
+_resolution_misses: Counter = Counter()
+
+
+def get_resolution_miss_report(top_n: int = 10) -> str:
+    """Return a human-readable summary of the top ticker resolution misses."""
+    if not _resolution_misses:
+        return "resolution misses: 0"
+    lines = [f"  '{name}': {count}" for name, count in _resolution_misses.most_common(top_n)]
+    return "Top resolution misses:\n" + "\n".join(lines)
 
 
 # ── 매크로 컨텍스트 ───────────────────────────────────────────
@@ -552,9 +563,10 @@ def get_price_context(
                 results.append(ctx)
                 continue
 
-        # 5. 매핑 실패 로깅
+        # 5. 매핑 실패 로깅 + 진단 카운터
         if not symbol and not (raw.isupper() and len(raw) <= 5) and not llm_symbol:
-            logger.debug("[매핑] 티커 매핑 실패: '%s' (key='%s')", raw, key)
+            _resolution_misses[raw] += 1
+            logger.warning("[매핑] 티커 완전 실패: '%s' (key='%s')", raw, key)
 
     return results
 

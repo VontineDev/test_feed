@@ -46,7 +46,7 @@ from telegram_notify import send_signal as tg_send_signal, send_weekly_screener 
 from signal_detector import detect_signal
 from article_fetcher import fetch_article_body
 from telegram_bot import bot_polling_loop, init_bot
-from market_data import cross_analyze, CrossAnalysis, MacroContext, get_macro_context
+from market_data import cross_analyze, CrossAnalysis, MacroContext, get_macro_context, get_resolution_miss_report
 
 # ── 로깅 설정 ────────────────────────────────────────────────
 logging.basicConfig(
@@ -304,6 +304,8 @@ async def collect_job() -> None:
             "▶ [수집] 완료 — 신규 %d건 적재  (누적 %d건, 요약 대기 %d건)",
             queued, len(_seen_hashes), queue_size,
         )
+
+    logger.info("[진단] %s", get_resolution_miss_report(10))
 
 
 # ──────────────────────────────────────────────────────────────
