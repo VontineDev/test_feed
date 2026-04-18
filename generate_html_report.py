@@ -74,6 +74,33 @@ def _load_css() -> str:
         return _FALLBACK_CSS
 
 
+def _sparkline(history: list[float]) -> str:
+    """Inline SVG polyline for 12-week close price trend. Returns '' if insufficient data."""
+    if len(history) < 2:
+        return ""
+    lo, hi = min(history), max(history)
+    if hi == lo:
+        return ""
+    W, H = 60, 20
+    pts = " ".join(
+        f"{round(i * W / (len(history) - 1), 1)},{round(H - (v - lo) / (hi - lo) * H, 1)}"
+        for i, v in enumerate(history)
+    )
+    return (
+        f"<svg width='{W}' height='{H}' style='vertical-align:middle;display:block'>"
+        f"<polyline points='{pts}' fill='none' stroke='#4a9' stroke-width='1.5'/>"
+        f"</svg>"
+    )
+
+
+def _group_by_sector(results: list[ScreenResult]) -> dict[str, list[ScreenResult]]:
+    groups: dict[str, list[ScreenResult]] = {}
+    for r in results:
+        key = r.sector.strip() or "기타"
+        groups.setdefault(key, []).append(r)
+    return dict(sorted(groups.items()))
+
+
 def _row(r: ScreenResult) -> str:
     name = _html.escape(r.name)
     if r.has_gapjum:
@@ -88,6 +115,7 @@ def _row(r: ScreenResult) -> str:
         f"<td class='num'>{_fmt(r.ma_60w)}</td>"
         f"<td class='num'>{_fmt(r.ma_120w)}</td>"
         f"<td class='num'>{_fmt(r.cloud_top)}</td>"
+        f"<td>{_sparkline(r.close_history)}</td>"
         f"</tr>\n"
     )
 
@@ -104,12 +132,24 @@ def _table(rows: list[ScreenResult]) -> str:
         "      <th scope='col' class='num'>60주선</th>\n"
         "      <th scope='col' class='num'>120주선</th>\n"
         "      <th scope='col' class='num'>구름상단</th>\n"
+        "      <th scope='col'>추세</th>\n"
         "    </tr></thead>\n"
         "    <tbody>\n"
         f"{body}"
         "    </tbody>\n"
         "  </table>\n"
     )
+
+
+def _sector_section(results: list[ScreenResult]) -> str:
+    """Render a sector-grouped view as a second section below the main table."""
+    groups = _group_by_sector(results)
+    parts = ["<h2>업종별</h2>\n"]
+    for sector, rows in groups.items():
+        count = len(rows)
+        parts.append(f"<h3>{_html.escape(sector)} ({count}종목)</h3>\n")
+        parts.append(_table(rows))
+    return "".join(parts)
 
 
 def generate_html(results: list[ScreenResult]) -> str:
@@ -142,6 +182,7 @@ def generate_html(results: list[ScreenResult]) -> str:
         if normal_rows:
             content += f"<h2>일반</h2>\n"
             content += _table(normal_rows)
+        content += _sector_section(results)
 
     # ── print styles ─────────────────────────────────────────────────
     print_css = """
@@ -177,6 +218,13 @@ h2 {
   font-weight: 600;
   margin: 24px 0 8px;
   color: var(--accent, #58a6ff);
+}
+
+h3 {
+  font-size: 13px;
+  font-weight: 500;
+  margin: 16px 0 6px;
+  color: var(--text-muted, #7d8590);
 }
 
 table {

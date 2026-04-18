@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional
@@ -59,8 +59,9 @@ class ScreenResult:
     has_gapjum: bool       # ma_20w > ma_60w (정배열 가점)
     screened_at: str       # ISO 8601 UTC 문자열
     week_of: str           # 예: '2026-W16'
-    sector: str = ""                  # KIND 업종명 (조회 실패 시 빈 문자열)
-    ma_120w: Optional[float] = None  # 120주선 (데이터 부족 시 None)
+    sector: str = ""                       # KIND 업종명 (조회 실패 시 빈 문자열)
+    ma_120w: Optional[float] = None       # 120주선 (데이터 부족 시 None)
+    close_history: list[float] = field(default_factory=list)  # 최근 12주 종가
 
 
 # ── KIND 섹터 매핑 ────────────────────────────────────────────
@@ -249,6 +250,8 @@ def screen_ticker(ticker: str, name: str, sector: str = "") -> Optional[ScreenRe
     if not (A and B and C and D and E and F and G):
         return None
 
+    close_history = df["Close"].dropna().tail(12).tolist()
+
     return ScreenResult(
         ticker=ticker,
         name=name,
@@ -262,6 +265,7 @@ def screen_ticker(ticker: str, name: str, sector: str = "") -> Optional[ScreenRe
         week_of=current_week_of(),
         sector=sector,
         ma_120w=ma_120w,
+        close_history=close_history,
     )
 
 
