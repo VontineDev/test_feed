@@ -34,6 +34,17 @@ class _FakeResult:
     week_of: str = "2026-W15"
     sector: str = "반도체"
     ma_120w: float | None = None
+    close_history: list = None  # noqa: RUF009 — stub class only, never passed to _sparkline
+    per: float | None = None
+    pbr: float | None = None
+    eps: float | None = None
+    dividend_yield: float | None = None
+    foreign_rate: float | None = None
+    volume_ratio_4w: float | None = None
+    high_w: float | None = None
+    volume_w: int | None = None
+    foreign_net_buy: float | None = None
+    inst_net_buy: float | None = None
 
 
 _SAMPLE = [

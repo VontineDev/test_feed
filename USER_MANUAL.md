@@ -1,4 +1,4 @@
-> 최종 검증 버전: v0.4.0.0 | Last verified against: v0.4.0.0
+> 최종 검증 버전: v0.4.2.0 | Last verified against: v0.4.2.0
 
 # 한국 주식 뉴스 신호 알림 시스템 — 사용자 매뉴얼
 
@@ -133,28 +133,61 @@ psql -h localhost -U news_user -d news_db -c "SELECT version();"
 
 ### 3-4. 로컬 LLM 설치 (Ollama — 기본)
 
-**Ollama 설치:**
+**이 단계가 가장 오래 걸립니다.** 모델 파일이 4~8GB이므로 인터넷 속도에 따라 10분에서 1시간 이상 걸릴 수 있습니다. 커피 한 잔 준비하세요.
+
+**Step 1. Ollama 설치:**
 
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
 ```
 
-**모델 다운로드 (약 4~8GB, 시간이 걸립니다):**
+설치 완료 후 Ollama 서버가 자동으로 백그라운드에서 시작됩니다 (포트 11434).
+
+서버 작동 확인:
+
+```bash
+curl http://localhost:11434/
+# "Ollama is running" 이 표시되면 성공
+```
+
+> **포트 충돌 주의:** 이미 다른 프로세스가 11434 포트를 사용 중이라면 Ollama 서버가 시작되지 않습니다.  
+> 아래 [증상 7: Ollama 포트 충돌](#증상-7-ollama-서버가-시작되지-않는다--포트-충돌) 항목을 참고하세요.
+
+**Step 2. 모델 다운로드:**
 
 ```bash
 ollama pull qwen3.5:9b
 ```
 
-> 다운로드 중 진행 상황이 터미널에 표시됩니다.
-> 느린 연결 환경에서는 30분 이상 걸릴 수 있습니다.
-> 중단된 경우 같은 명령어를 다시 실행하면 이어받습니다.
+다운로드 중 터미널에 진행 상황이 실시간으로 표시됩니다:
 
-**Ollama 서버 상태 확인:**
+```
+pulling manifest
+pulling 0e9b4b8d8e3d... 4.7 GB / 4.7 GB ████████████ 100%
+verifying sha256 digest
+writing manifest
+success
+```
+
+- **예상 용량:** 약 4~8GB (모델 버전에 따라 다름)
+- **예상 시간:** 100Mbps 환경에서 약 7분, 10Mbps VPS에서 약 60분
+- **다운로드 중단 시:** 걱정 없습니다. 같은 명령어(`ollama pull qwen3.5:9b`)를 다시 실행하면 중단된 위치에서 이어받습니다.
+- **디스크 공간 부족 시:** 10GB 이상 여유 공간을 확보한 후 다시 시도합니다.
+
+**Step 3. 모델 설치 확인:**
 
 ```bash
 ollama list
-# qwen3.5:9b 가 목록에 표시되면 준비 완료
 ```
+
+출력 예시:
+
+```
+NAME              ID              SIZE    MODIFIED
+qwen3.5:9b        a7d3ab2c4e7f    5.2 GB  3 minutes ago
+```
+
+`qwen3.5:9b` 가 목록에 있으면 준비 완료입니다. 목록이 비어 있으면 Step 2를 다시 실행하세요.
 
 **LM Studio를 사용하는 경우** (Ollama 대신):
 
@@ -618,6 +651,14 @@ G = 이번 주 종가 > 120주선 (데이터 부족 시 통과) — 장기 추�
 - 종목코드는 KRX 표준 6자리
 - 가격은 해당 주 금요일 종가 기준
 
+### HTML 보고서
+
+스크리너 실행 후 `screener_report_YYYY-WXX.html` 파일이 생성됩니다. 브라우저로 열면 다음을 확인할 수 있습니다:
+
+- **정배열 / 일반** 섹션으로 구분된 테이블
+- **추세 스파크라인**: 각 종목 행의 우측에 12주 가격 추이를 인라인 SVG 미니차트로 표시. 외부 라이브러리 없이 브라우저에서 바로 렌더링됩니다.
+- **업종별 섹션**: 테이블 하단에 KIND 섹터별 그룹 뷰 추가. 이번 주 돌파가 특정 섹터에 집중됐는지 한눈에 파악할 수 있습니다.
+
 ### 실행 일정
 
 매주 일요일 20:30 KST에 자동 실행됩니다.
@@ -627,9 +668,18 @@ G = 이번 주 종가 > 120주선 (데이터 부족 시 통과) — 장기 추�
 
 ```bash
 source venv/bin/activate
-python generate_report.py   # 결과를 파일로 저장
-# 또는
-python chart_screener.py    # 단독 테스트
+python generate_report.py
+# 두 파일이 생성됩니다:
+#   screening_report_YYYYMMDD_HHMM.txt   (텍스트, 현재 디렉터리)
+#   reports/screener/screener_YYYYMMDD_HHMM.html  (브라우저용 HTML)
+```
+
+수천 개 종목을 처리하므로 수십 분이 걸릴 수 있습니다 (`SCREENER_WORKERS` 값에 따라 다름).
+
+단독 테스트만 하려면:
+
+```bash
+python chart_screener.py    # 스크리닝 로직만 실행, 파일 저장 없음
 ```
 
 ---
@@ -723,6 +773,83 @@ ollama list
 3. `.env`의 `OLLAMA_MODEL` 값이 `ollama list` 의 모델 이름과 정확히 일치하는지 확인.
 
 4. LM Studio 폴백 확인: Ollama가 안 되면 `.env`에 `LM_STUDIO_BASE`와 `LM_STUDIO_MODEL` 설정.
+
+---
+
+### 증상 7: `ollama list` 에 모델이 없다 (목록 비어 있음)
+
+```bash
+ollama list
+# 출력: (아무것도 없음)
+```
+
+**원인:** 모델 다운로드가 완료되지 않았거나, 다른 디렉터리에 설치된 Ollama를 사용 중입니다.
+
+**해결 방법:**
+
+```bash
+# 모델 다운로드 (이미 일부 받았다면 이어받기)
+ollama pull qwen3.5:9b
+
+# 완료 후 확인
+ollama list
+# qwen3.5:9b 가 표시되어야 함
+```
+
+> 디스크가 부족한 경우: `df -h` 로 여유 공간을 확인하세요. 최소 8GB 이상 필요합니다.
+
+---
+
+### 증상 8: Ollama 서버가 시작되지 않는다 / 포트 충돌
+
+**로그 메시지 또는 에러:**
+
+```
+Error: listen tcp 127.0.0.1:11434: bind: address already in use
+```
+
+**원인:** 다른 프로세스가 이미 11434 포트를 점유하고 있습니다.
+
+**해결 방법:**
+
+```bash
+# 11434 포트를 사용 중인 프로세스 확인
+sudo lsof -i :11434
+
+# 해당 프로세스가 이전 Ollama 인스턴스라면 종료
+sudo pkill ollama
+
+# 다시 시작
+ollama serve
+```
+
+다른 프로세스가 11434를 사용 중이라면 Ollama 포트를 변경합니다:
+
+```bash
+# 환경 변수로 포트 지정 (예: 11435)
+OLLAMA_HOST=127.0.0.1:11435 ollama serve
+```
+
+`.env` 파일의 `OLLAMA_BASE` 도 같은 포트로 변경해야 합니다:
+
+```dotenv
+OLLAMA_BASE=http://localhost:11435
+```
+
+---
+
+### 증상 9: 모델 다운로드가 중단됐다
+
+`ollama pull` 실행 중 네트워크 오류, 시스템 종료, 또는 Ctrl+C 로 중단된 경우:
+
+**해결 방법:** 같은 명령어를 다시 실행하면 중단된 위치에서 자동으로 이어받습니다.
+
+```bash
+ollama pull qwen3.5:9b
+# "pulling manifest" 이후 중단된 지점부터 재개됩니다
+```
+
+처음부터 다시 다운로드하지 않습니다. 안심하고 재실행하세요.
 
 ---
 

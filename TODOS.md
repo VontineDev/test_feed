@@ -218,3 +218,45 @@ Success Criterion 1 (stranger installs without asking a question).
 **Effort:** S (human: ~30 min / CC: ~5 min)
 **Priority:** P2
 **Blocked by:** USER_MANUAL.md writing session started.
+**Completed:** v0.4.2.0 (2026-04-19)
+
+---
+
+## P3: 3-Stage Classifier — Daily Ticker Cap: Start at 150, Expand to 300 After Measurement
+
+**What:** Sprint 2 initial deployment caps `daily_flow` fetch to 150 tickers (not 300). After 2 weeks of production runs, check p50/p99 yfinance fetch latency in logs. If p99 < 0.5s, expand to 300.
+
+**Why:** yfinance throttles at large batch sizes. The 17:00 KST deadline (30-minute job window) is at risk if fetch latency exceeds ~0.3s/ticker with 8 workers. Starting at 150 ensures the deadline holds on launch day. Real data informs expansion — not estimates.
+
+**How to apply:**
+- In the Sprint 2 daily job, use: `cap = int(os.environ.get("DAILY_CLASSIFIER_TICKERS", "150"))`
+- Log p99 fetch time per daily run: sort `[INFO] [일봉] ... → API 수집` timestamps
+- When p99 < 0.5s for 5 consecutive runs: set `DAILY_CLASSIFIER_TICKERS=300` in .env
+
+**Pros:** Safe launch. Real measurement informs scale-up. Env-var configurable at runtime.
+**Cons:** Initially misses the 150-300 ticker range. Top Ichimoku candidates by score are still included.
+**Effort:** XS (human: ~15 min / CC: ~5 min)
+**Priority:** P3
+**Blocked by:** Sprint 2 daily job implementation.
+
+---
+
+## P3: 3-Stage Classifier — Tighten News Gating After Sprint 2 Ships
+
+**What:** Post-Sprint 2, change news eligibility rule from:
+`ticker in Ichimoku output OR in daily_flow within 7 days`
+to:
+`ticker in Ichimoku output OR has active stage_classification (Stage 1/2/3) within 7 days`
+
+**Why:** The current Sprint 1 gating is an improvement but still lets through tickers that have daily_flow data but failed all stage conditions (classified as None). True screener-first requires an active stage classification.
+
+**How to apply:**
+- In `summary_worker` eligibility check, add DB query: `SELECT 1 FROM stage_classifications WHERE ticker=$1 AND classified_date >= now()-interval '7 days' AND stage IS NOT NULL LIMIT 1`
+- Replaces the `daily_flow` 7d check entirely
+- Sprint 1 gating remains unchanged until Sprint 2 is in production with 7+ days of stage_classifications data
+
+**Pros:** True screener-first. News only for stocks actively staged.
+**Cons:** Requires Sprint 2 populated before tightening is meaningful.
+**Effort:** XS (human: ~20 min / CC: ~5 min)
+**Priority:** P3
+**Blocked by:** Sprint 2 (stage_classifications table populated for ≥ 7 days).

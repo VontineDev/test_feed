@@ -67,6 +67,9 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
+# ── 스크리닝 종목 캐시 (뉴스 게이팅용) ───────────────────────
+# 주봉 스크리닝 완료 시 갱신. 비어 있으면 게이팅 비활성 (초기 실행 방어).
+_screener_tickers: set[str] = set()
 
 
 # ── 피드 목록 ────────────────────────────────────────────────
@@ -462,6 +465,14 @@ async def summary_worker() -> None:
                     # FILTER 판정이면 신호 알림 억제
                     if cross and cross.verdict == "FILTER":
                         logger.info("  [교차] 역방향 시세로 신호 알림 억제")
+                    # 스크리너 게이팅: 관련 종목이 스크리닝 통과 종목에 없으면 억제
+                    elif _screener_tickers and signal.ticker_symbols and not (
+                        set(signal.ticker_symbols) & _screener_tickers
+                    ):
+                        logger.info(
+                            "  [게이팅] 스크리너 미통과 종목 신호 억제: %s",
+                            ", ".join(signal.ticker_symbols[:3]),
+                        )
                     else:
                         await tg_send_signal(art, summary_ko, signal, http=http, cross=cross)
 
@@ -473,7 +484,7 @@ async def summary_worker() -> None:
 
 # ── 스케줄러 진입점 ───────────────────────────────────────────
 async def main(interval: int, enable_summary: bool) -> None:
-    global _summary_queue, _db_pool
+    global _summary_queue, _db_pool, _screener_tickers
 
     logger.info("뉴스 크롤러 시작 — 수집 %d분 간격", interval)
     logger.info("구조: [수집 잡] → Queue → [요약 워커] (완전 분리)")
@@ -524,6 +535,15 @@ async def main(interval: int, enable_summary: bool) -> None:
                 logger.warning("[ticker_cache] 캐시 로드 타임아웃 (60s) — 정적 맵으로 운영")
             except Exception as _cache_e:
                 logger.warning("[ticker_cache] 캐시 로드 실패: %s — 정적 맵으로 운영", _cache_e)
+
+    # ── 스크리너 게이팅 캐시 초기화 (DB에서 이번 주 종목 로드) ──
+    if _db_pool:
+        try:
+            from db import get_chart_signals_this_week
+            _screener_tickers = await get_chart_signals_this_week(_db_pool)
+            logger.info("[게이팅] 스크리너 캐시 로드 — %d종목", len(_screener_tickers))
+        except Exception as _gt_e:
+            logger.warning("[게이팅] 스크리너 캐시 로드 실패: %s", _gt_e)
 
     # ── 봇 초기화 ─────────────────────────────────────────────
     init_bot(_seen_hashes)
@@ -653,15 +673,19 @@ async def main(interval: int, enable_summary: bool) -> None:
 
     # ── 차트 스크리닝: 주봉 스크리닝 (일요일 20:30 KST) ──────────
     async def _weekly_screener_job():
+        global _screener_tickers
+        loop = asyncio.get_running_loop()
         if not _db_pool:
             logger.warning("[차트스크리너] DB 풀 없음 — 스크리닝 건너뜀")
             return
         try:
             from chart_screener import run_weekly_screen
-            loop = asyncio.get_running_loop()
             results = await loop.run_in_executor(None, run_weekly_screen)
             saved = await save_chart_signals(_db_pool, results)
             logger.info("[차트스크리너] 완료 — 통과:%d 저장:%d", len(results), saved)
+            # 뉴스 게이팅 캐시 갱신
+            _screener_tickers = {r.ticker for r in results}
+            logger.info("[게이팅] 스크리너 캐시 갱신 — %d종목", len(_screener_tickers))
             async with httpx.AsyncClient() as http:
                 await tg_send_weekly_screener(results, http=http)
         except Exception as e:
@@ -681,6 +705,42 @@ async def main(interval: int, enable_summary: bool) -> None:
             logger.info("[차트스크리너] HTML 리포트: %s", _html_path)
         except Exception as _html_e:
             logger.warning("[차트스크리너] HTML 생성 실패 (비중요): %s", _html_e)
+
+        try:
+            from chart_backtest import incremental_update, fetch_kospi_weekly, build_summary, save_summary_json, load_signals_json, BACKTEST_DIR
+            from generate_backtest_html import generate_backtest_html
+            from pathlib import Path as _Path
+
+            # 미확정 결과가 있는 신호의 ticker만 OHLCV 재조회 (이번 주 통과 여부 무관)
+            from chart_screener import fetch_weekly_ohlcv as _fwohlcv
+            _pending = load_signals_json()
+            _pending_tickers = {
+                s.ticker for s in _pending
+                if s.return_1w is None or s.return_4w is None or s.return_13w is None
+            }
+            def _fetch_pending_ohlcv():
+                m = {}
+                for t in _pending_tickers:
+                    df = _fwohlcv(t)
+                    if df is not None:
+                        m[t] = df
+                return m
+            _ohlcv_map = await loop.run_in_executor(None, _fetch_pending_ohlcv)
+
+            _kospi_df = await loop.run_in_executor(None, fetch_kospi_weekly)
+            await loop.run_in_executor(None, incremental_update, _ohlcv_map, _kospi_df)
+
+            _signals = load_signals_json()
+            if _signals:
+                _summary = build_summary(_signals)
+                save_summary_json(_summary)
+                _bt_dir = _Path(str(BACKTEST_DIR))
+                _bt_dir.mkdir(parents=True, exist_ok=True)
+                _bt_html = generate_backtest_html(_summary)
+                (_bt_dir / "chart_backtest_latest.html").write_text(_bt_html, encoding="utf-8")
+                logger.info("[백테스트] 증분 업데이트 완료 — HTML 재생성")
+        except Exception as _bt_e:
+            logger.warning("[백테스트] 증분 업데이트 실패 (비중요): %s", _bt_e)
 
     scheduler.add_job(
         _weekly_screener_job,

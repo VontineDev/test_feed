@@ -349,3 +349,92 @@ class TestFetchKindSectorMap:
             result = fetch_kind_sector_map()
 
         assert result == {}
+
+
+# ── save_chart_signals 컬럼 회귀 테스트 ─────────────────────────
+
+class TestSaveChartSignalsColumns:
+    """save_chart_signals() INSERT must include high_w ($13) and volume_w ($14).
+
+    Regression guard: adding columns to chart_signals requires updating the
+    positional INSERT in save_chart_signals(). If the parameter count mismatches
+    the column count, the weekly screener silently saves zero rows on Sunday.
+    """
+
+    @pytest.mark.asyncio
+    async def test_insert_includes_high_w_and_volume_w(self):
+        """Verify conn.execute receives 14 positional parameters ($1..$14)."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from db import save_chart_signals
+        from chart_screener import ScreenResult
+        from datetime import datetime, timezone
+
+        result = ScreenResult(
+            ticker="005930.KS",
+            name="삼성전자",
+            close=75000.0,
+            ma_20w=70000.0,
+            ma_60w=65000.0,
+            cloud_top=74000.0,
+            is_enhanced=False,
+            has_gapjum=True,
+            screened_at=datetime.now(timezone.utc).isoformat(),
+            week_of="2026-W17",
+            high_w=77000.0,
+            volume_w=1_500_000,
+        )
+
+        # Capture the positional args passed to conn.execute
+        execute_calls: list = []
+
+        async def _fake_execute(sql: str, *args):
+            execute_calls.append((sql, args))
+
+        from contextlib import asynccontextmanager
+
+        mock_conn = AsyncMock()
+        mock_conn.execute = _fake_execute
+
+        @asynccontextmanager
+        async def _fake_acquire():
+            yield mock_conn
+
+        mock_pool = MagicMock()
+        mock_pool.acquire = _fake_acquire
+
+        await save_chart_signals(mock_pool, [result])
+
+        assert execute_calls, "conn.execute was never called"
+        _sql, _args = execute_calls[0]
+        # Should have 14 positional args: ticker name close ma_20w ma_60w cloud_top
+        # is_enhanced has_gapjum week_of screened_at sector ma_120w high_w volume_w
+        assert len(_args) == 14, (
+            f"Expected 14 params (including high_w, volume_w), got {len(_args)}: {_args}"
+        )
+        # high_w is $13 (index 12)
+        assert _args[12] == 77000.0, f"high_w should be $13, got {_args[12]}"
+        # volume_w is $14 (index 13)
+        assert _args[13] == 1_500_000, f"volume_w should be $14, got {_args[13]}"
+
+    @pytest.mark.asyncio
+    async def test_screen_result_high_w_volume_w_default_none(self):
+        """New fields default to None — existing ScreenResult() callers are backward-compatible."""
+        from chart_screener import ScreenResult
+        from datetime import datetime, timezone
+
+        r = ScreenResult(
+            ticker="000660.KS",
+            name="SK하이닉스",
+            close=180000.0,
+            ma_20w=170000.0,
+            ma_60w=160000.0,
+            cloud_top=178000.0,
+            is_enhanced=False,
+            has_gapjum=False,
+            screened_at=datetime.now(timezone.utc).isoformat(),
+            week_of="2026-W17",
+        )
+        assert r.high_w is None
+        assert r.volume_w is None
+        assert r.foreign_net_buy is None
+        assert r.inst_net_buy is None
