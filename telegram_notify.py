@@ -350,9 +350,12 @@ async def send_weekly_screener(
         # 종목 수 기준 상위 5개 섹터
         top_sectors = sorted(by_sector.items(), key=lambda x: -len(x[1]))[:5]
 
+        from screener_filters import filter_summary
+        f_sum = filter_summary(results)
         lines = [
             f"📊 *주봉 차트 스크리닝 \\({esc(week)}\\)*",
-            f"통과: {len(results)}개 \\(섹터 상위 5\\)\n",
+            f"통과: {len(results)}개 \\(정배열 {sum(1 for r in results if r.has_gapjum)}개\\)",
+            f"🏷 저평가 {f_sum.get('저평가_우량주', 0)}개 \\| 성장 {f_sum.get('성장주', 0)}개 \\| 배당 {f_sum.get('배당주', 0)}개\n",
         ]
 
         # KIND 데이터 없음 경고

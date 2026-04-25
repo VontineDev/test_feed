@@ -69,5 +69,17 @@ report_path = f"screening_report_{datetime.now(_KST).strftime('%Y%m%d_%H%M')}.tx
 with open(report_path, "w", encoding="utf-8") as f:
     f.write("\n".join(lines))
 
-print(f"리포트 저장 완료: {report_path}")
+print(f"텍스트 리포트 저장: {report_path}")
+
+try:
+    from pathlib import Path
+    from generate_html_report import generate_html
+    html_dir = Path("reports/screener")
+    html_dir.mkdir(parents=True, exist_ok=True)
+    html_path = html_dir / f"screener_{datetime.now(_KST).strftime('%Y%m%d_%H%M')}.html"
+    html_path.write_text(generate_html(results), encoding="utf-8")
+    print(f"HTML 리포트 저장: {html_path}")
+except Exception as e:
+    print(f"HTML 생성 실패 (텍스트 리포트는 정상 저장됨): {e}")
+
 print(f"통과 종목: {len(results)}개")

@@ -16,6 +16,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from chart_screener import ScreenResult, current_week_of
+from screener_filters import ALL_PRESETS, filter_summary
 
 logger = logging.getLogger(__name__)
 _KST = ZoneInfo("Asia/Seoul")
@@ -48,6 +49,41 @@ def _fmt(v: float | None) -> str:
     return f"{v:,.0f}"
 
 
+def _fmt_ratio(v: float | None, decimals: int = 1) -> str:
+    """Format a ratio/percentage, or '—' for None/NaN."""
+    if v is None:
+        return "—"
+    if isinstance(v, float) and math.isnan(v):
+        return "—"
+    return f"{v:.{decimals}f}"
+
+
+_BADGE_STYLES = {
+    "저평가_우량주": "background:#1a4a1a;color:#4caf50;",
+    "성장주":        "background:#1a2a4a;color:#58a6ff;",
+    "배당주":        "background:#4a3a00;color:#ffd700;",
+    "가격건전성":    "background:#2a2a2a;color:#aaaaaa;",
+}
+_BADGE_SHORT = {
+    "저평가_우량주": "저평가",
+    "성장주":        "성장",
+    "배당주":        "배당",
+    "가격건전성":    "건전",
+}
+
+
+def _filter_badges(r: ScreenResult) -> str:
+    parts = []
+    for name, preset in ALL_PRESETS.items():
+        if preset.predicate(r):
+            style = _BADGE_STYLES.get(name, "")
+            label = _BADGE_SHORT.get(name, name)
+            parts.append(
+                f"<span style='font-size:10px;padding:1px 5px;border-radius:3px;{style}'>{label}</span>"
+            )
+    return "&nbsp;".join(parts)
+
+
 def _embed_fonts(css: str, font_dir: Path) -> str:
     """Replace url('../fonts/*.woff2') references with inline base64 data URIs."""
     def replacer(m: re.Match) -> str:
@@ -74,11 +110,55 @@ def _load_css() -> str:
         return _FALLBACK_CSS
 
 
+def _sparkline(history: list[float]) -> str:
+    """Inline SVG polyline for 12-week close price trend. Returns '' if insufficient data."""
+    if len(history) < 2:
+        return ""
+    lo, hi = min(history), max(history)
+    if hi == lo:
+        return ""
+    W, H = 60, 20
+    pts = " ".join(
+        f"{round(i * W / (len(history) - 1), 1)},{round(H - (v - lo) / (hi - lo) * H, 1)}"
+        for i, v in enumerate(history)
+    )
+    return (
+        f"<svg width='{W}' height='{H}' style='vertical-align:middle;display:block'>"
+        f"<polyline points='{pts}' fill='none' stroke='#4a9' stroke-width='1.5'/>"
+        f"</svg>"
+    )
+
+
+def _group_by_sector(results: list[ScreenResult]) -> dict[str, list[ScreenResult]]:
+    groups: dict[str, list[ScreenResult]] = {}
+    for r in results:
+        key = r.sector.strip() or "기타"
+        groups.setdefault(key, []).append(r)
+    return dict(sorted(groups.items()))
+
+
+def _flow_badge(v: float | None) -> str:
+    """Colored badge for net buy value: green > 0, red < 0, gray None."""
+    if v is None or (isinstance(v, float) and math.isnan(v)):
+        return f"<span style='color:#555;font-size:11px'>—</span>"
+    color = "#4caf50" if v > 0 else "#f44336"
+    sign = "+" if v > 0 else ""
+    return (
+        f"<span style='color:{color};font-size:11px;font-weight:600'>"
+        f"{sign}{v:,.0f}</span>"
+    )
+
+
 def _row(r: ScreenResult) -> str:
     name = _html.escape(r.name)
     if r.has_gapjum:
         name = f"{name} ★"
     sector = _html.escape(r.sector) if r.sector else "기타"
+    per_str = _fmt_ratio(r.per, 1) if r.per is not None else "—"
+    pbr_str = _fmt_ratio(r.pbr, 2) if r.pbr is not None else "—"
+    div_str = (_fmt_ratio(r.dividend_yield, 1) + "%") if r.dividend_yield is not None else "—"
+    foreign_str = (_fmt_ratio(r.foreign_rate, 1) + "%") if r.foreign_rate is not None else "—"
+    badges = _filter_badges(r)
     return (
         f"    <tr>"
         f"<td>{name}</td>"
@@ -88,6 +168,14 @@ def _row(r: ScreenResult) -> str:
         f"<td class='num'>{_fmt(r.ma_60w)}</td>"
         f"<td class='num'>{_fmt(r.ma_120w)}</td>"
         f"<td class='num'>{_fmt(r.cloud_top)}</td>"
+        f"<td class='num'>{per_str}</td>"
+        f"<td class='num'>{pbr_str}</td>"
+        f"<td class='num'>{div_str}</td>"
+        f"<td class='num'>{foreign_str}</td>"
+        f"<td class='num'>{_flow_badge(r.foreign_net_buy)}</td>"
+        f"<td class='num'>{_flow_badge(r.inst_net_buy)}</td>"
+        f"<td>{_sparkline(r.close_history)}</td>"
+        f"<td>{badges}</td>"
         f"</tr>\n"
     )
 
@@ -104,12 +192,31 @@ def _table(rows: list[ScreenResult]) -> str:
         "      <th scope='col' class='num'>60주선</th>\n"
         "      <th scope='col' class='num'>120주선</th>\n"
         "      <th scope='col' class='num'>구름상단</th>\n"
+        "      <th scope='col' class='num'>PER</th>\n"
+        "      <th scope='col' class='num'>PBR</th>\n"
+        "      <th scope='col' class='num'>배당</th>\n"
+        "      <th scope='col' class='num'>외국인%</th>\n"
+        "      <th scope='col' class='num'>외인순매수</th>\n"
+        "      <th scope='col' class='num'>기관순매수</th>\n"
+        "      <th scope='col'>추세</th>\n"
+        "      <th scope='col'>필터</th>\n"
         "    </tr></thead>\n"
         "    <tbody>\n"
         f"{body}"
         "    </tbody>\n"
         "  </table>\n"
     )
+
+
+def _sector_section(results: list[ScreenResult]) -> str:
+    """Render a sector-grouped view as a second section below the main table."""
+    groups = _group_by_sector(results)
+    parts = ["<h2>업종별</h2>\n"]
+    for sector, rows in groups.items():
+        count = len(rows)
+        parts.append(f"<h3>{_html.escape(sector)} ({count}종목)</h3>\n")
+        parts.append(_table(rows))
+    return "".join(parts)
 
 
 def generate_html(results: list[ScreenResult]) -> str:
@@ -123,6 +230,7 @@ def generate_html(results: list[ScreenResult]) -> str:
     now_kst = datetime.now(_KST).strftime("%Y-%m-%d %H:%M KST")
     total = len(results)
     gapjum_count = sum(1 for r in results if r.has_gapjum)
+    f_summary = filter_summary(results)
 
     gapjum_rows = [r for r in results if r.has_gapjum]
     normal_rows = [r for r in results if not r.has_gapjum]
@@ -142,6 +250,7 @@ def generate_html(results: list[ScreenResult]) -> str:
         if normal_rows:
             content += f"<h2>일반</h2>\n"
             content += _table(normal_rows)
+        content += _sector_section(results)
 
     # ── print styles ─────────────────────────────────────────────────
     print_css = """
@@ -177,6 +286,13 @@ h2 {
   font-weight: 600;
   margin: 24px 0 8px;
   color: var(--accent, #58a6ff);
+}
+
+h3 {
+  font-size: 13px;
+  font-weight: 500;
+  margin: 16px 0 6px;
+  color: var(--text-muted, #7d8590);
 }
 
 table {
@@ -232,6 +348,7 @@ footer {
 <header>
   <h1>주봉 차트 스크리닝 리포트 &nbsp;│&nbsp; {_html.escape(week_of)}</h1>
   <p class="meta">생성: {_html.escape(now_kst)} &nbsp;│&nbsp; 통과: {total}종목 (정배열 {gapjum_count}종목)</p>
+  <p class="meta" style="margin-top:4px">필터: 저평가 우량주 {f_summary.get("저평가_우량주", 0)}개 &nbsp;│&nbsp; 성장주 {f_summary.get("성장주", 0)}개 &nbsp;│&nbsp; 배당주 {f_summary.get("배당주", 0)}개 &nbsp;│&nbsp; 가격건전성 {f_summary.get("가격건전성", 0)}개</p>
 </header>
 <main>
 {content}

@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0.0] - 2026-04-25
+
+### Added
+- **Screener-first architecture** (`run_scheduler.py`): news signals are now gated by the weekly screener. If a ticker hasn't passed Stage 1 screening this week, its news signals are suppressed. `_screener_tickers: set[str]` is a module-level cache warmed from DB at startup and refreshed after every Sunday screener job.
+- **Stage 2 filter presets** (`screener_filters.py`): four named filters — `저평가`, `성장`, `배당`, `가격건전성` — that apply quantitative conditions (PER, PBR, EPS, dividend yield, volume spike) to `ScreenResult` lists. Used by the HTML report and future Telegram segmentation.
+- **Backtest engine** (`chart_backtest.py`): `BacktestSignal` dataclass tracks 1w/4w/13w returns and KOSPI excess returns per screener signal. `incremental_update()` fills pending return fields using yfinance weekly OHLCV (no look-ahead via `_check_at_row`). `build_summary()` produces monthly + annual metrics (win rate, avg return, median, excess return). Runs automatically after each Sunday screener job.
+- **Backtest HTML report** (`generate_backtest_html.py`): renders the backtest summary as a dark-mode HTML file written to `BACKTEST_DIR/chart_backtest_latest.html`. Shows annual and monthly breakdowns for 전체/정배열/일반 groups with sparkline trend.
+- **Foreign/institutional flow columns** in HTML screener report (`generate_html_report.py`): `_flow_badge()` renders green/red badges for `foreign_net_buy` and `inst_net_buy` fields. Data shows `—` until Sprint 2 wires the Naver flow API.
+- **`daily_flow` DB table** (`db.py`): stores daily foreign/institutional net-buy data per ticker (`ticker`, `trade_date`, `foreign_net`, `inst_net`, `foreign_streak`, `inst_streak`). `save_daily_flow()` upserts with ON CONFLICT. Sprint 2 will wire the scheduler.
+- **`high_w` / `volume_w` in `chart_signals`** (`db.py`, `chart_screener.py`): weekly high and volume captured from yfinance OHLCV and persisted alongside each screener result. Required for Stage 2 spike-volume and S1-high conditions.
+- **`fetch_daily_flow()`** (`market_data.py`): queries Naver Finance mobile `investorTrendDays` endpoint for foreign/institutional net-buy data. Synchronous (for `run_in_executor`). Handles null values from the API gracefully.
+- **`target_chat_id` param** in `send_weekly_screener()` (`telegram_notify.py`): when set, sends only to that chat ID and skips channel broadcast. `/screener` bot command now passes the invoker's `chat_id` — prevents channel broadcasts triggered by individual users.
+- **`SCREENER_WORKERS=8`** documented in `.env.example` for the daily 16:30 KST classifier job latency budget.
+
+### Changed
+- **`calc_rsi()` renamed from `_calc_rsi()`** (`market_data.py`): now a public function for reuse in `screener_filters.py` and future stage classifier modules.
+- **`save_chart_signals()` extended to 14 positional params** (`db.py`): `$13=high_w`, `$14=volume_w` added with ON CONFLICT upsert.
+
+### Tests
+- `test_chart_backtest.py`: 31 tests — no look-ahead slice guard, return calculations, excess return, nearest-price lookup, `_group_metrics` (win rate, avg, median, None exclusion), `compute_metrics` (전체/정배열/일반), `build_summary` (monthly grouping, annual totals), JSON round-trip, `_week_label`.
+- `test_screener_filters.py`: Stage 2 filter preset validation.
+- `test_news_gating.py`: 5 tests — non-screener signal suppressed, screener signal allowed, empty cache disables gating, partial overlap allows, non-actionable still blocked.
+- `test_screener_telegram_regression_1.py`: ISSUE-001/002 regression (ticker code span, backtick escaping).
+- `test_screener_telegram_regression_2.py`: ISSUE-003 regression (`target_chat_id` channel broadcast fix).
+- `test_chart_screener.py`: 2 new tests for `save_chart_signals` `$13`/`$14` params and backward compatibility.
+
+## [0.4.2.0] - 2026-04-19
+
+### Added
+- **Sparklines in HTML screener report** (`generate_html_report.py`): each stock row now shows a 12-week close-price trend as an inline SVG sparkline. Lets you distinguish a fresh breakout from a months-old stale one at a glance, without opening a chart app. No JS or external dependencies — pure SVG `<polyline>`.
+- **Sector-grouped view** (`generate_html_report.py`): a second `업종별` section now appears below the 정배열/일반 tables, grouping results by KIND 업종명. Shows at a glance whether a breakout week is broad-based or concentrated in one sector. Uses the `ScreenResult.sector` field already populated — zero new API calls.
+- **Ticker resolution diagnostics** (`market_data.py`): a module-level `Counter` now tracks every ticker name that fully fails resolution (all 5 steps). `get_resolution_miss_report(top_n=10)` returns the top misses as a human-readable string. Called at the end of each `collect_job()` cycle — resolution gaps now surface as WARNING log lines in production.
+
+### Changed
+- **Step 5 resolution log level** (`market_data.py`): full ticker-miss logging upgraded from `DEBUG` to `WARNING` so it surfaces in production logs without requiring verbose mode.
+- **`test_feeds.py` renamed to `scripts/check_feeds.py`**: the RSS connectivity checker is not a pytest test file. Moved to `scripts/` to stop pytest from attempting collection (0 tests found, misleading).
+
 ## [0.4.1.0] - 2026-04-19
 
 ### Added

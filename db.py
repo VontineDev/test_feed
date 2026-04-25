@@ -149,6 +149,19 @@ CREATE INDEX IF NOT EXISTS idx_daily_sym_date
 CREATE INDEX IF NOT EXISTS idx_daily_market
     ON daily_ohlcv (market, date DESC);
 
+-- ── 일별 외국인/기관 순매수 (3단계 스크리닝용) ─────────────
+CREATE TABLE IF NOT EXISTS daily_flow (
+    ticker          TEXT        NOT NULL,
+    trade_date      DATE        NOT NULL,
+    foreign_net     BIGINT,                  -- 외국인 순매수 (주)
+    inst_net        BIGINT,                  -- 기관 순매수 (주)
+    foreign_streak  SMALLINT,               -- 외국인 연속 순매수일 (음수 = 순매도)
+    inst_streak     SMALLINT,               -- 기관 연속 순매수일 (음수 = 순매도)
+    created_at      TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (ticker, trade_date)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_flow_date ON daily_flow (trade_date DESC);
+
 -- ── 주봉 차트 스크리닝 결과 ──────────────────────────────────
 CREATE TABLE IF NOT EXISTS chart_signals (
     id          SERIAL PRIMARY KEY,
@@ -242,6 +255,7 @@ _ENABLE_RLS = "\n".join(
         "cross_analysis_prices",
         "price_outcomes",
         "daily_ohlcv",
+        "daily_flow",
         "chart_signals",
         "intraday_volumes",
         "krx_listings",
@@ -258,6 +272,12 @@ async def init_db(pool: asyncpg.Pool) -> None:
         )
         await conn.execute(
             "ALTER TABLE chart_signals ADD COLUMN IF NOT EXISTS ma_120w FLOAT"
+        )
+        await conn.execute(
+            "ALTER TABLE chart_signals ADD COLUMN IF NOT EXISTS high_w FLOAT"
+        )
+        await conn.execute(
+            "ALTER TABLE chart_signals ADD COLUMN IF NOT EXISTS volume_w BIGINT"
         )
         await conn.execute(_ENABLE_RLS)
     logger.info("DB 테이블 준비 완료 (news_articles, krx_listings)")
@@ -787,8 +807,8 @@ async def save_chart_signals(
                     INSERT INTO chart_signals
                         (ticker, name, close, ma_20w, ma_60w, cloud_top,
                          is_enhanced, has_gapjum, week_of, screened_at,
-                         sector, ma_120w)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                         sector, ma_120w, high_w, volume_w)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
                     ON CONFLICT (ticker, week_of) DO UPDATE SET
                         close       = EXCLUDED.close,
                         ma_20w      = EXCLUDED.ma_20w,
@@ -798,7 +818,9 @@ async def save_chart_signals(
                         has_gapjum  = EXCLUDED.has_gapjum,
                         screened_at = EXCLUDED.screened_at,
                         sector      = EXCLUDED.sector,
-                        ma_120w     = EXCLUDED.ma_120w
+                        ma_120w     = EXCLUDED.ma_120w,
+                        high_w      = EXCLUDED.high_w,
+                        volume_w    = EXCLUDED.volume_w
                     """,
                     r.ticker,
                     r.name,
@@ -812,12 +834,46 @@ async def save_chart_signals(
                     datetime.fromisoformat(r.screened_at),
                     r.sector,
                     r.ma_120w,
+                    r.high_w,
+                    r.volume_w,
                 )
                 count += 1
         logger.info("[차트스크리너] chart_signals %d건 저장/갱신", count)
     except Exception as e:
         logger.error("[차트스크리너] 저장 실패: %s", e)
     return count
+
+
+async def save_daily_flow(
+    pool: asyncpg.Pool,
+    ticker: str,
+    trade_date: str,
+    foreign_net: Optional[int],
+    inst_net: Optional[int],
+    foreign_streak: Optional[int] = None,
+    inst_streak: Optional[int] = None,
+) -> None:
+    """Upsert one daily_flow row. trade_date: 'YYYY-MM-DD' string."""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO daily_flow
+                (ticker, trade_date, foreign_net, inst_net, foreign_streak, inst_streak)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (ticker, trade_date)
+            DO UPDATE SET
+                foreign_net    = EXCLUDED.foreign_net,
+                inst_net       = EXCLUDED.inst_net,
+                foreign_streak = EXCLUDED.foreign_streak,
+                inst_streak    = EXCLUDED.inst_streak
+            """,
+            ticker,
+            trade_date,
+            foreign_net,
+            inst_net,
+            foreign_streak,
+            inst_streak,
+        )
 
 
 async def load_chart_signals_latest(pool: asyncpg.Pool) -> tuple[str, list]:
@@ -836,7 +892,7 @@ async def load_chart_signals_latest(pool: asyncpg.Pool) -> tuple[str, list]:
                 """
                 SELECT ticker, name, close, ma_20w, ma_60w, cloud_top,
                        is_enhanced, has_gapjum, week_of, screened_at,
-                       sector, ma_120w
+                       sector, ma_120w, high_w, volume_w
                 FROM chart_signals
                 WHERE week_of = $1
                 ORDER BY has_gapjum DESC, close DESC

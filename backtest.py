@@ -40,7 +40,7 @@ from db import (
 from market_data import (
     CrossAnalysis,
     PriceContext,
-    _calc_rsi,
+    calc_rsi,
     _fetch_yfinance,
     cross_analyze,
     get_price_context,
@@ -205,7 +205,7 @@ def _build_price_context_historical(
         prev = closes[-2]
         change_pct = round((current - prev) / prev * 100, 2) if prev else 0
 
-        rsi = _calc_rsi(closes)
+        rsi = calc_rsi(closes)
 
         avg_vol = sum(volumes[-20:]) / len(volumes[-20:]) if len(volumes) >= 5 else None
         vol_ratio = round(volumes[-1] / avg_vol, 2) if avg_vol else None

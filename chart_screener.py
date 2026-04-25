@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional
@@ -59,8 +59,19 @@ class ScreenResult:
     has_gapjum: bool       # ma_20w > ma_60w (정배열 가점)
     screened_at: str       # ISO 8601 UTC 문자열
     week_of: str           # 예: '2026-W16'
-    sector: str = ""                  # KIND 업종명 (조회 실패 시 빈 문자열)
-    ma_120w: Optional[float] = None  # 120주선 (데이터 부족 시 None)
+    sector: str = ""                       # KIND 업종명 (조회 실패 시 빈 문자열)
+    ma_120w: Optional[float] = None       # 120주선 (데이터 부족 시 None)
+    close_history: list[float] = field(default_factory=list)  # 최근 12주 종가
+    per: Optional[float] = None           # Naver: PER (손실 시 None)
+    pbr: Optional[float] = None           # Naver: PBR
+    eps: Optional[float] = None           # Naver: EPS (원)
+    dividend_yield: Optional[float] = None  # Naver: 배당수익률 (%)
+    foreign_rate: Optional[float] = None   # Naver: 외국인 보유 비율 (%)
+    volume_ratio_4w: Optional[float] = None  # 이번 주 거래량 / 직전 3주 평균
+    high_w: Optional[float] = None          # 이번 주 고가 (Stage 2 S1-high 계산용)
+    volume_w: Optional[int] = None          # 이번 주 거래량 (Stage 2 spike-vol 기준)
+    foreign_net_buy: Optional[float] = None  # 외국인 순매수 (최근 거래일, Naver)
+    inst_net_buy: Optional[float] = None     # 기관 순매수 (최근 거래일, Naver)
 
 
 # ── KIND 섹터 매핑 ────────────────────────────────────────────
@@ -249,7 +260,24 @@ def screen_ticker(ticker: str, name: str, sector: str = "") -> Optional[ScreenRe
     if not (A and B and C and D and E and F and G):
         return None
 
-    return ScreenResult(
+    close_history = df["Close"].dropna().tail(12).tolist()
+
+    # 거래량 비율: 이번 주 / 직전 3주 평균
+    vol_series = df["Volume"].dropna()
+    if len(vol_series) >= 4:
+        recent_vol = float(vol_series.iloc[-1])
+        avg_prior = float(vol_series.iloc[-4:-1].mean())
+        volume_ratio_4w = round(recent_vol / avg_prior, 2) if avg_prior > 0 else None
+    else:
+        volume_ratio_4w = None
+
+    # high_w / volume_w — 이번 주 고가·거래량 (Stage 2 S1 기준값)
+    high_raw = cur.get("High", float("nan"))
+    high_w = float(high_raw) if not pd.isna(high_raw) else None
+    vol_raw = cur.get("Volume", float("nan"))
+    volume_w = int(vol_raw) if not pd.isna(vol_raw) and vol_raw is not None else None
+
+    result = ScreenResult(
         ticker=ticker,
         name=name,
         close=close,
@@ -262,7 +290,27 @@ def screen_ticker(ticker: str, name: str, sector: str = "") -> Optional[ScreenRe
         week_of=current_week_of(),
         sector=sector,
         ma_120w=ma_120w,
+        close_history=close_history,
+        volume_ratio_4w=volume_ratio_4w,
+        high_w=high_w,
+        volume_w=volume_w,
     )
+
+    # 펀더멘털 보강 — Naver Integration API (캐시됨, ~0ms 재조회)
+    krx_code = ticker.split(".")[0]
+    if krx_code.isdigit() and len(krx_code) == 6:
+        try:
+            from market_data import _fetch_fundamental
+            fund = _fetch_fundamental(krx_code)
+            result.per = fund.get("per")
+            result.pbr = fund.get("pbr")
+            result.eps = fund.get("eps")
+            result.dividend_yield = fund.get("dividend_yield")
+            result.foreign_rate = fund.get("foreign_rate")
+        except Exception as e:
+            logger.debug("[스크리너] 펀더멘털 조회 실패 (%s): %s", ticker, e)
+
+    return result
 
 
 # ── 전체 스크리닝 실행 ─────────────────────────────────────────

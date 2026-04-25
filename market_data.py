@@ -26,6 +26,7 @@ import asyncio
 import logging
 import os
 import re
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -33,6 +34,16 @@ from typing import Optional
 from ticker_cache import ticker_cache  # KRX DB-backed ticker lookup
 
 logger = logging.getLogger(__name__)
+
+_resolution_misses: Counter = Counter()
+
+
+def get_resolution_miss_report(top_n: int = 10) -> str:
+    """Return a human-readable summary of the top ticker resolution misses."""
+    if not _resolution_misses:
+        return "resolution misses: 0"
+    lines = [f"  '{name}': {count}" for name, count in _resolution_misses.most_common(top_n)]
+    return "Top resolution misses:\n" + "\n".join(lines)
 
 
 # ── 매크로 컨텍스트 ───────────────────────────────────────────
@@ -224,7 +235,7 @@ class PriceContext:
 
 # ── RSI 계산 ─────────────────────────────────────────────────
 
-def _calc_rsi(closes: list[float], period: int = 14) -> Optional[float]:
+def calc_rsi(closes: list[float], period: int = 14) -> Optional[float]:
     if len(closes) < period + 1:
         return None
     deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]
@@ -254,7 +265,7 @@ def _fetch_yfinance(symbol: str, ticker_name: str) -> PriceContext:
         current = closes[-1]
         prev    = closes[-2] if len(closes) >= 2 else current
         change_pct = round((current - prev) / prev * 100, 2)
-        rsi = _calc_rsi(closes)
+        rsi = calc_rsi(closes)
 
         # 거래량 비율 및 급증 판정
         avg_vol = sum(volumes[-20:]) / len(volumes[-20:]) if len(volumes) >= 5 else None
@@ -326,7 +337,7 @@ def _fetch_pykrx_stock(code: str, ticker_name: str) -> PriceContext:
         current = closes[-1]
         prev    = closes[-2] if len(closes) >= 2 else current
         change_pct = round((current - prev) / prev * 100, 2)
-        rsi = _calc_rsi(closes)
+        rsi = calc_rsi(closes)
         vol_ratio = round(volumes[-1] / (sum(volumes[-20:]) / len(volumes[-20:])), 2) if len(volumes) >= 5 else None
 
         week52_high = round(max(closes), 0) if closes else None
@@ -357,7 +368,7 @@ def _fetch_pykrx_index(code: str, ticker_name: str) -> PriceContext:
         current = closes[-1]
         prev    = closes[-2] if len(closes) >= 2 else current
         change_pct = round((current - prev) / prev * 100, 2)
-        rsi = _calc_rsi(closes)
+        rsi = calc_rsi(closes)
 
         week52_high = round(max(closes), 2) if closes else None
         week52_low  = round(min(closes), 2) if closes else None
@@ -426,11 +437,15 @@ def _fetch_fundamental(krx_code: str) -> dict:
         per_raw = _parse_naver_value(ti.get("per", ""))
         eps_raw = _parse_naver_value(ti.get("eps", ""))
         pbr_raw = _parse_naver_value(ti.get("pbr", ""))
+        div_raw = _parse_naver_value(ti.get("dividendYieldRatio", ""))
+        foreign_raw = _parse_naver_value(ti.get("foreignRate", ""))
 
         result = {
             "per": per_raw if per_raw is not None and 0 < per_raw <= 200 else None,
             "pbr": pbr_raw if pbr_raw is not None and pbr_raw > 0 else None,
             "eps": eps_raw,
+            "dividend_yield": div_raw if div_raw is not None and div_raw >= 0 else None,
+            "foreign_rate": foreign_raw if foreign_raw is not None and 0 <= foreign_raw <= 100 else None,
         }
         # EPS < 0 means loss-making — PER is meaningless
         if eps_raw is not None and eps_raw < 0:
@@ -440,6 +455,49 @@ def _fetch_fundamental(krx_code: str) -> dict:
 
     _fund_cache.setdefault(today, {})[krx_code] = result
     return result
+
+
+def fetch_daily_flow(ticker: str) -> dict:
+    """Fetch today's foreign/institutional net buy for a single KRX ticker.
+
+    Uses Naver Finance mobile investor API. Returns a dict with keys:
+      date (str | None), foreign_net (int | None), inst_net (int | None)
+
+    Returns all-None values on any failure — Pre-Sprint Spike validates endpoint shape.
+    Note: this is a sync function; callers in async context must use run_in_executor().
+    """
+    _empty = {"date": None, "foreign_net": None, "inst_net": None}
+    if not HTTPX_OK:
+        return _empty
+
+    krx_code = ticker.split(".")[0]
+    if not (krx_code.isdigit() and len(krx_code) == 6):
+        return _empty
+
+    try:
+        r = _httpx.get(
+            f"https://m.stock.naver.com/api/stock/{krx_code}/investorTrendDays",
+            params={"count": "1"},
+            timeout=5,
+        )
+        r.raise_for_status()
+        data = r.json()
+        # Expected shape: list of {date, foreigner: {netBuy}, institution: {netBuy}}
+        # Exact schema confirmed during Pre-Sprint Spike — parse defensively
+        if not data or not isinstance(data, list):
+            return _empty
+        latest = data[0]
+        date_str = latest.get("date")
+        foreign_net = _parse_naver_value(str((latest.get("foreigner") or {}).get("netBuy", "")))
+        inst_net = _parse_naver_value(str((latest.get("institution") or {}).get("netBuy", "")))
+        return {
+            "date": date_str,
+            "foreign_net": int(foreign_net) if foreign_net is not None else None,
+            "inst_net": int(inst_net) if inst_net is not None else None,
+        }
+    except Exception as e:
+        logger.debug("[일별수급] Naver API 실패 (%s): %s", ticker, e)
+        return _empty
 
 
 def _fundamental_score(ctx: "PriceContext") -> tuple[int, list[str]]:
@@ -552,9 +610,10 @@ def get_price_context(
                 results.append(ctx)
                 continue
 
-        # 5. 매핑 실패 로깅
+        # 5. 매핑 실패 로깅 + 진단 카운터
         if not symbol and not (raw.isupper() and len(raw) <= 5) and not llm_symbol:
-            logger.debug("[매핑] 티커 매핑 실패: '%s' (key='%s')", raw, key)
+            _resolution_misses[raw] += 1
+            logger.warning("[매핑] 티커 완전 실패: '%s' (key='%s')", raw, key)
 
     return results
 
