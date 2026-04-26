@@ -279,3 +279,29 @@ to:
 **Effort:** XS (human: ~30 min / CC: ~5 min)
 **Priority:** P3
 **Blocked by:** ~~Sprint 3 (backtest_engine.py) must ship first.~~ Unblocked (shipped v0.7.0.0). Note: actual implementation uses direct yfinance OHLCV fetch per-run, not signals2.json; re-fetch approach is already in place. Just needs `--hold-weeks N` param added to `BacktestConfig` and `_fill_returns`.
+
+---
+
+## P3: backtest_engine — Stage 2 Replay (_replay_stage2)
+
+**What:** Add `_replay_stage2()` to `backtest_engine.py`. Currently only Stage 1 is replayed in `stage` mode. Stage 2 walk-forward requires: (1) replaying Stage 1 signals first, (2) looking forward 14 days from each Stage 1 signal for Stage 2 conditions.
+
+Stage 2 conditions to replay:
+- Condition 1: `close` in Stage 1 high −5% ~ −20% range (uses `s1_high = close_at_signal_day`)
+- Condition 2: `close >= MA20 * 0.95`
+- Condition 3: `vol_today / vol_s1_day` in [0.30, 0.60] (거래량 비율)
+- Condition 4: `inst_streak >= 0` — not replayable (no historical 수급), skip as with Stage 1 수급
+
+**거래대금 vs 거래량 note:** `compare_tx_amt.py` validated (2026-04-27, 10 tickers) that `Volume × Close` approximates actual 거래대금 with 1.38% mean absolute error, 3.55% max. For the 30~60% ratio check, errors partially cancel. Use volume-based ratio for Condition 3 backtest.
+
+**How to apply:**
+- In `backtest_engine.py`, add `_replay_stage2(ticker, name, daily_df, market, config)` that first calls `_replay_stage()` (or inlines Stage 1 check) to find S1 dates, then for each S1 signal date scans the next 14 days for Stage 2 conditions.
+- Add `"stage2"` to `BacktestConfig.mode` valid values.
+- Add `--mode stage2` to `run_backtest.py` CLI.
+- Add `test_replay_stage2.py` with at least: S1 prerequisite check, each condition independently, 14-day lookback boundary, condition 4 skipped gracefully.
+
+**Pros:** Validates the full 3-stage classifier pipeline end-to-end. Can measure whether Stage 2 entries outperform raw Stage 1.
+**Cons:** Replaying Stage 2 requires Stage 1 history in the same data window — increases memory footprint for long backtests. The 수급 skip means Stage 2 replay is 3/4 conditions, same limitation as Stage 1.
+**Effort:** S (human: ~1 day / CC: ~20 min)
+**Priority:** P3
+**Blocked by:** Nothing. `compare_tx_amt.py` validation complete (2026-04-27).

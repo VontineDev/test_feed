@@ -380,6 +380,7 @@ DATABASE_URL 환경변수 → DB_HOST/PORT/NAME/USER/PASSWORD 개별 변수
 | `/signals watch` | WATCH 신호만 필터링하여 조회 |
 | `/today` | 오늘 카테고리별 수집 건수 + 최신 기사 5건 한글 요약 |
 | `/backtest` | 판정별·유형별·종목별 적중률 백테스팅 리포트 (48h 데이터 신선도 경고 포함) |
+| `/backtest2 <mode> <start> <end>` | 통합 백테스트 — ichimoku/stage/cross 모드, 기간 지정 (v0.7.0.0~) |
 | `/screener` | 최신 주봉 차트 스크리닝 결과 — DM + 채널 동시 발송 |
 | `/help` | 명령어 목록 |
 
@@ -515,14 +516,19 @@ test_feed/
 ├── article_fetcher.py             # 기사 본문 크롤링 (멀티소스 + fallback)
 ├── summarizer.py                  # 로컬 LLM 한글 요약 (Ollama → LM Studio)
 ├── signal_detector.py             # LLM 매매 신호 감지 (JSON 구조화 출력)
-├── market_data.py                 # yfinance 시세 조회 + 교차분석
-├── backtest.py                    # 판정 정확도 추적 + 백테스팅 리포트
+├── market_data.py                 # yfinance 시세 조회 + 교차분석 + Naver Finance 펀더멘털
+├── backtest.py                    # 판정 정확도 추적 + 백테스팅 리포트 (/backtest 명령어)
 ├── db.py                          # PostgreSQL 연동 (asyncpg)
 ├── chart_screener.py              # 주봉 Ichimoku+MA 스크리너 (KOSPI/KOSDAQ 전종목)
-├── generate_report.py             # 차트 스크리닝 결과를 UTF-8 파일로 저장 (CLI 스크립트)
-├── generate_html_report.py        # 차트 스크리닝 결과를 HTML 파일로 저장 — generate_html(results) 순수 함수
-├── telegram_bot.py                # 봇 명령어 처리 (/status /signals /today /backtest /screener /help)
-├── telegram_notify.py             # 신호 알림 전송
+├── screener_filters.py            # Stage 2 필터 프리셋 (v0.5.0.0~)
+├── stage_classifier.py            # 일봉 3단계 분류기 — Stage 1/2/3 + 피크아웃 신호 (v0.6.0.0~)
+├── backtest_engine.py             # 통합 백테스트 엔진 — ichimoku/stage/cross 3모드 (v0.7.0.0~)
+├── run_backtest.py                # 백테스트 CLI (v0.7.0.0~)
+├── compare_tx_amt.py              # 거래대금 근사 오차 검증 — Naver 실제값 vs Vol×Close (개발용)
+├── generate_report.py             # 차트 스크리닝 결과를 UTF-8 파일로 저장 (CLI)
+├── generate_html_report.py        # 차트 스크리닝 결과를 HTML 파일로 저장
+├── telegram_bot.py                # 봇 명령어 처리 (/status /signals /today /backtest /backtest2 /screener /help)
+├── telegram_notify.py             # 신호 알림 전송 + Ichimoku/Stage 비교 메시지
 ├── volume_pattern.py              # 거래량 패턴 분석
 ├── krx_sync.py                    # KRX 전체 종목 DB 동기화 (KOSPI+KOSDAQ ~2500종목)
 ├── ticker_cache.py                # 종목명→yfinance 심볼 인메모리 캐시 (startup 로드, 20:00 KST 갱신)
@@ -541,15 +547,18 @@ test_feed/
 ├── test_screener_telegram_regression_1.py # pytest — 스크리너 텔레그램 포맷 회귀 (14개)
 ├── test_fundamental.py            # pytest — PER/PBR/EPS 펀더멘털 레이어 (41개)
 ├── test_generate_html_report.py   # pytest — HTML 리포트 생성 (10개)
+├── test_stage_classifier.py       # pytest — 일봉 3단계 분류기 전 코드패스 (29개)
+├── test_backtest_engine.py        # pytest — 통합 백테스트 엔진 (60개)
 │
 ├── VERSION                        # 현재 버전 (SemVer 4자리)
 ├── CHANGELOG.md                   # 변경 이력
 ├── TODOS.md                       # 미결 작업 목록
 ├── ARCHITECTURE.md                # 본 아키텍처 문서
 │
-├── env.example                    # 환경변수 템플릿
+├── .env.example                   # 환경변수 템플릿
 ├── requirements.txt               # 의존성
-├── pgadmin_queries.sql            # DB 관리 쿼리
+├── sql/pgadmin_queries.sql        # DB 관리 쿼리
+├── scripts/check_feeds.py         # RSS 피드 연결 확인 스크립트
 ├── register_task.ps1              # Windows 작업 스케줄러 등록
 ├── Run.ps1                        # Windows 실행 스크립트
 └── start_crawler.bat              # 배치 실행 파일
@@ -676,4 +685,4 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 
 ---
 
-*현재 코드베이스 v0.4.1.0 (2026-04-19) 기준*
+*현재 코드베이스 v0.7.0.0 (2026-04-27) 기준*

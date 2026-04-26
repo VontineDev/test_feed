@@ -70,6 +70,7 @@ chart_screener.py     # 주봉 차트 스크리너 (Ichimoku + MA, KOSPI/KOSDAQ 
 stage_classifier.py   # 일봉 3단계 분류기 — Stage 1/2/3 분류 + 피크아웃 신호 (v0.6.0.0~)
 backtest_engine.py    # 통합 백테스트 엔진 — ichimoku / stage / cross 3모드, Sharpe·MDD·거래비용 (v0.7.0.0~)
 run_backtest.py       # 백테스트 CLI — python run_backtest.py --mode ichimoku --start 2025-01-01 --end 2026-01-01
+compare_tx_amt.py     # 거래대금 근사 오차 검증 — Naver 실제값 vs yfinance Vol×Close 비교 (개발·검증용)
 generate_report.py    # 차트 스크리닝 결과를 UTF-8 파일로 저장 (CLI 스크립트)
 generate_html_report.py # 차트 스크리닝 결과를 HTML 파일로 저장 — 정배열/일반 섹션, 인라인 CSS
 db.py                 # PostgreSQL 연동 (asyncpg)
@@ -145,6 +146,7 @@ pytest test_backtest_engine.py -v               # 통합 백테스트 엔진 (60
 - [USER_MANUAL.md](USER_MANUAL.md) — 설치부터 첫 텔레그램 알림까지 전체 가이드 (처음 설치하는 분은 여기서 시작)
 - [ARCHITECTURE.md](ARCHITECTURE.md) — 시스템 아키텍처, 모듈 상세, 데이터 흐름
 - [CHANGELOG.md](CHANGELOG.md) — 버전별 변경 이력
+- [docs/HowToBacktest.md](docs/HowToBacktest.md) — 통합 백테스트 엔진 사용 가이드 (backtest_engine.py CLI)
 
 ## 버전
 
