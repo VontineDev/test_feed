@@ -98,7 +98,7 @@ def check_peakout(
         if candle_range > 0 and (high - close) > 0.5 * candle_range:
             vol_series = price_df["Volume"].dropna()
             if len(vol_series) >= 20:
-                avg_vol = float(vol_series.iloc[-20:-1].mean())
+                avg_vol = float(vol_series.iloc[-21:-1].mean())
                 if avg_vol > 0 and vol >= 1.5 * avg_vol:
                     return True
 
@@ -245,6 +245,8 @@ def _check_stage3(
     highs  = price_df["High"].dropna() if "High" in price_df.columns else pd.Series(dtype=float)
 
     if len(closes) < 31:
+        return False
+    if len(highs) < 11:
         return False
 
     close_today = float(closes.iloc[-1])

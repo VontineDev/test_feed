@@ -773,7 +773,6 @@ async def main(interval: int, enable_summary: bool) -> None:
 
         # 1. Ichimoku 비교용 결과 (D4: load_chart_signals_latest 사용 — 종목명/has_gapjum 포함)
         _week, ichimoku_rows = await load_chart_signals_latest(_db_pool)
-        ichimoku_tickers_set = {r["ticker"] for r in ichimoku_rows}
         logger.info("[3단계] Ichimoku 비교 풀: %d종목 (week_of=%s)", len(ichimoku_rows), _week)
 
         # 2. 전 종목 티커 목록 (KOSPI + KOSDAQ, ~2770개)
@@ -835,7 +834,6 @@ async def main(interval: int, enable_summary: bool) -> None:
         logger.info("[3단계] daily_flow 적재 완료")
 
         # 2b. daily OHLCV (60일, yfinance, 병렬) — chart_screener.py fetch_weekly_ohlcv와 유사 구조
-        from chart_screener import fetch_weekly_ohlcv as _fetch_weekly_ohlcv
         import yfinance as _yf
 
         def _fetch_daily_ohlcv(ticker: str):
@@ -979,7 +977,7 @@ async def main(interval: int, enable_summary: bool) -> None:
 
     scheduler.add_job(
         _daily_stage_job,
-        CronTrigger(hour=7, minute=30, timezone="UTC"),  # = 16:30 KST
+        CronTrigger(day_of_week="mon-fri", hour=7, minute=30, timezone="UTC"),  # = 16:30 KST
         id="daily_stage_classifier",
         max_instances=1,
         misfire_grace_time=3600,

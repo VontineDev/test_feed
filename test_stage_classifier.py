@@ -251,21 +251,23 @@ class TestStage3:
 # ── Stage 우선순위 ─────────────────────────────────────────────
 
 def test_stage3_priority_over_stage1():
-    """Stage 3 > Stage 1: Stage 1 조건도 통과하지만 Stage 3 반환."""
-    # 연속 상승 → RSI 높음, 거래량 급증, Stage 1 + Stage 3 동시 통과 가능성
-    closes = [90.0 + i * 1.5 for i in range(65)]
-    vols   = [400_000] * 64 + [700_000]
-    highs  = [c + 0.5 for c in closes]
-    lows   = [c - 0.5 for c in closes]
-    idx = pd.date_range(end="2026-04-26", periods=65, freq="D", tz="UTC")
+    """Stage 3 > Stage 1: 두 조건 모두 통과하는 데이터에서 Stage 3 반환을 검증."""
+    # 점진적 상승(손실 없음 → RSI=100) + 마지막 바에서 +6.25% 급등 + 10일 고가 돌파
+    # Stage 1: +6.25% ≥ 5%, 거래량 2.5×, MA20/MA60 상회, 52주 괴리 0%, 수급 ✓
+    # Stage 3: RSI=100, 거래량 2.5×, 10일 돌파(92.2→97.0), 외인+기관 동시 ✓
+    n = 65
+    closes = [85.0 + i * 0.1 for i in range(n - 1)] + [97.0]
+    highs  = [c * 1.01 for c in closes]
+    lows   = [c * 0.99 for c in closes]
+    vols   = [400_000] * (n - 1) + [1_000_000]
+    idx = pd.date_range(end="2026-04-26", periods=n, freq="D", tz="UTC")
     df = pd.DataFrame(
         {"Open": closes, "High": highs, "Low": lows, "Close": closes, "Volume": vols},
         index=idx,
     )
     flow = _make_flow_df(foreign_net=200, inst_net=150)
-    s1_hist = _s1_history_14d("TEST.KS")
-    result = classify_stage("TEST.KS", df, flow, s1_hist, "KOSPI")
-    assert result in (None, 1, 2, 3)  # 어느 것이든 최고 stage
+    result = classify_stage("TEST.KS", df, flow, {}, "KOSPI")
+    assert result == 3  # Stage 3 > Stage 1 우선순위 검증
 
 
 # ── check_peakout ─────────────────────────────────────────────

@@ -299,7 +299,7 @@ async def init_db(pool: asyncpg.Pool) -> None:
             "ALTER TABLE stage_classifications ADD COLUMN IF NOT EXISTS s1_volume BIGINT"
         )
         await conn.execute(_ENABLE_RLS)
-    logger.info("DB 테이블 준비 완료 (news_articles, krx_listings)")
+    logger.info("DB 테이블 준비 완료 (news_articles, stage_classifications, krx_listings, …)")
 
 
 # ── 중복 체크 ─────────────────────────────────────────────────
@@ -982,8 +982,8 @@ async def get_stage1_history(
             result.setdefault(r["ticker"], []).append(dict(r))
         return result
     except Exception as e:
-        logger.warning("[stage] get_stage1_history 실패: %s", e)
-        return {}
+        logger.error("[stage] get_stage1_history 실패: %s", e)
+        raise
 
 
 async def save_stage_classifications(
