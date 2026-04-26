@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0.0] - 2026-04-27
+
+### Added
+- **통합 백테스트 엔진** (`backtest_engine.py`): 이치모쿠(주봉) / 3단계 Stage 1(일봉) / 교차(두 신호 동일 ISO 주) 3개 모드. 기간·시장·티커 수·거래비용 전부 파라미터로 지정. 출력 지표: 승률(7d/28d/91d), 평균·중앙값 수익률, KOSPI 초과수익률, 샤프비율(연환산), MDD(equity curve). 티커당 1개 OHLCV fetch → 이치모쿠는 주봉으로 리샘플, Stage는 일봉 직접 사용.
+- **백테스트 CLI** (`run_backtest.py`): `python run_backtest.py --mode ichimoku --start 2025-01-01 --end 2026-01-01 [--market KOSPI|KOSDAQ|ALL] [--max N] [--tx-cost F] [--rf F]` 로 커맨드라인 실행. 결과는 텍스트 표로 출력.
+- **`/backtest2` 텔레그램 명령어** (`telegram_bot.py`): `/backtest2 ichimoku 2025-01-01 2026-01-01`, `stage`, `cross` 모드 지원. 백테스트 완료 시 결과 자동 전송. 중복 실행 방지 Lock 내장. 10년 초과 기간 및 음수 거래비용 입력 차단.
+- **KRX 거래비용 반영**: 기본값 0.210% 왕복 (매수 수수료 0.014% + 매도 수수료 0.014% + 증권거래세 0.180% + 농어촌특별세 0.002%). `--tx-cost` 플래그로 사용자 정의 가능.
+- **Cross 신호 중복 제거** (`backtest_engine.py`): 동일 종목·동일 주에 Stage 1이 복수 발동해도 가장 이른 신호 1건만 유지, 지표 과대계상 방지.
+
+### Technical
+- 데이터 수집: 백테스트 시작 760일 전부터 yfinance 일봉 병렬 수집(ThreadPoolExecutor, 기본 8워커). MA120w(주봉 120주, min_periods=100) 충분한 룩백 확보.
+- Ichimoku 재현: W-FRI 주봉 리샘플 → `calc_ichimoku(visual=False)` → 7조건 walk-forward. 미래 데이터 참조 없음.
+- Stage 1 재현: 일봉 4/5 조건(상승률·거래량·MA20/60·52주 고점 괴리). 수급 조건(외국인·기관)은 과거 데이터 미제공으로 생략, 결과 리포트에 경고 표시.
+- MDD는 신호 날짜 순 누적 equity curve 기준 (equal-weight, 순차 포지션 가정).
+- 샤프비율: 보유 기간 28일 기준 연환산 (periods_per_year = 252/28 ≈ 9, rf_annual = 3% 기본).
+
+### Tests
+- `test_backtest_engine.py`: 60개 — 유틸(week_label·price_lookup·nearest_price), Sharpe(7개), MDD(5개), GroupMetrics(5개), fill_returns(5개), cross_filter(6개 + 중복 제거 1개), BacktestConfig 검증(7개), _replay_stage(5개 — 조건별·시장별·기간 외), 리포트 생성(5개).
+
 ## [0.6.0.0] - 2026-04-26
 
 ### Added

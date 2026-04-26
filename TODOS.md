@@ -278,4 +278,4 @@ to:
 **Cons:** Re-fetching OHLCV adds 5-30 seconds to report generation for non-standard periods. Acceptable if the note explains the delay.
 **Effort:** XS (human: ~30 min / CC: ~5 min)
 **Priority:** P3
-**Blocked by:** Sprint 3 (backtest_engine.py) must ship first.
+**Blocked by:** ~~Sprint 3 (backtest_engine.py) must ship first.~~ Unblocked (shipped v0.7.0.0). Note: actual implementation uses direct yfinance OHLCV fetch per-run, not signals2.json; re-fetch approach is already in place. Just needs `--hold-weeks N` param added to `BacktestConfig` and `_fill_returns`.

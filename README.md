@@ -40,7 +40,10 @@ python run_scheduler.py
 | `/signals watch` | WATCH 신호만 조회 |
 | `/today` | 오늘 카테고리별 수집 건수 + 최신 기사 5건 |
 | `/backtest` | 판정별·유형별·종목별 적중률 백테스팅 리포트 |
+| `/backtest2 <mode> <start> <end>` | 통합 백테스트 — ichimoku / stage / cross 모드, 기간 지정 가능 |
 | `/screener` | 최신 주봉 차트 스크리닝 결과 (DM + 채널) |
+| `/scan` | 주봉 스크리닝 즉시 실행 (전 종목 실시간 스캔, 약 10~20분) |
+| `/volume <종목명\|티커>` | 시간대별 거래량 패턴 분석 |
 | `/help` | 명령어 목록 |
 
 ## 데이터 흐름
@@ -65,6 +68,8 @@ market_data.py        # yfinance 시세 조회 + 교차분석
 backtest.py           # 판정 정확도 추적 + 백테스팅 리포트
 chart_screener.py     # 주봉 차트 스크리너 (Ichimoku + MA, KOSPI/KOSDAQ 전종목)
 stage_classifier.py   # 일봉 3단계 분류기 — Stage 1/2/3 분류 + 피크아웃 신호 (v0.6.0.0~)
+backtest_engine.py    # 통합 백테스트 엔진 — ichimoku / stage / cross 3모드, Sharpe·MDD·거래비용 (v0.7.0.0~)
+run_backtest.py       # 백테스트 CLI — python run_backtest.py --mode ichimoku --start 2025-01-01 --end 2026-01-01
 generate_report.py    # 차트 스크리닝 결과를 UTF-8 파일로 저장 (CLI 스크립트)
 generate_html_report.py # 차트 스크리닝 결과를 HTML 파일로 저장 — 정배열/일반 섹션, 인라인 CSS
 db.py                 # PostgreSQL 연동 (asyncpg)
@@ -88,6 +93,7 @@ test_screener_telegram_regression_1.py  # pytest — 스크리너 텔레그램 �
 test_fundamental.py                # pytest — PER/PBR/EPS 펀더멘털 레이어 (41개)
 test_generate_html_report.py       # pytest — HTML 리포트 생성 (10개)
 test_stage_classifier.py           # pytest — 일봉 3단계 분류기 전 코드패스 (29개)
+test_backtest_engine.py            # pytest — 통합 백테스트 엔진 (60개 — Sharpe·MDD·cross filter·stage replay)
 ```
 
 ## 환경변수
@@ -131,6 +137,7 @@ pytest test_screener_telegram_regression_1.py -v  # 스크리너 텔레그램 �
 pytest test_fundamental.py -v                     # PER/PBR/EPS 펀더멘털 레이어 (41개)
 pytest test_generate_html_report.py -v            # HTML 리포트 생성 (10개)
 pytest test_stage_classifier.py -v               # 일봉 3단계 분류기 전 코드패스 (29개)
+pytest test_backtest_engine.py -v               # 통합 백테스트 엔진 (60개)
 ```
 
 ## 문서
@@ -141,4 +148,4 @@ pytest test_stage_classifier.py -v               # 일봉 3단계 분류기 전 
 
 ## 버전
 
-현재 버전: `0.6.0.0` — [CHANGELOG](CHANGELOG.md) 참고
+현재 버전: `0.7.0.0` — [CHANGELOG](CHANGELOG.md) 참고
