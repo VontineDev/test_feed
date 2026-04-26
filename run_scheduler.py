@@ -41,8 +41,16 @@ except ImportError:
     pass  # python-dotenv 미설치 시 환경변수 직접 설정으로 동작
 
 from summarizer import summarize, Backend
-from db import create_pool, get_dsn, init_db, save_article, save_signal, save_cross_analysis, load_seen_hashes, save_chart_signals
-from telegram_notify import send_signal as tg_send_signal, send_weekly_screener as tg_send_weekly_screener
+from db import (
+    create_pool, get_dsn, init_db, save_article, save_signal, save_cross_analysis,
+    load_seen_hashes, save_chart_signals, load_chart_signals_latest,
+    get_stage1_history, save_stage_classifications, save_daily_flow, get_prev_streak,
+)
+from telegram_notify import (
+    send_signal as tg_send_signal,
+    send_weekly_screener as tg_send_weekly_screener,
+    send_screener_comparison as tg_send_screener_comparison,
+)
 from signal_detector import detect_signal
 from article_fetcher import fetch_article_body
 from telegram_bot import bot_polling_loop, init_bot
@@ -746,6 +754,233 @@ async def main(interval: int, enable_summary: bool) -> None:
         _weekly_screener_job,
         CronTrigger(day_of_week="sun", hour=20, minute=30, timezone="Asia/Seoul"),
         id="weekly_chart_screener",
+        max_instances=1,
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+
+    # ── 3단계 분류기: 일별 16:30 KST (UTC 07:30) ─────────────────
+    # Ichimoku 주봉 스크리너와 완전히 독립 실행. 전 종목 대상.
+    # 병렬 fetch 구조는 chart_screener.py의 run_weekly_screen()과 유사하게 구현.
+    # (복사+주석: DRY 허용, 세 번째 복사 시 추상화 — D5 결정)
+    async def _daily_stage_job():
+        if not _db_pool:
+            logger.warning("[3단계] DB 풀 없음 — 스킵")
+            return
+
+        loop = asyncio.get_running_loop()
+        logger.info("[3단계] 일별 분류 시작")
+
+        # 1. Ichimoku 비교용 결과 (D4: load_chart_signals_latest 사용 — 종목명/has_gapjum 포함)
+        _week, ichimoku_rows = await load_chart_signals_latest(_db_pool)
+        ichimoku_tickers_set = {r["ticker"] for r in ichimoku_rows}
+        logger.info("[3단계] Ichimoku 비교 풀: %d종목 (week_of=%s)", len(ichimoku_rows), _week)
+
+        # 2. 전 종목 티커 목록 (KOSPI + KOSDAQ, ~2770개)
+        from chart_screener import get_all_tickers as _get_all_tickers
+        all_tickers: list[tuple[str, str, str]] = await loop.run_in_executor(
+            None, _get_all_tickers, None
+        )
+        logger.info("[3단계] 분류 대상: %d종목 / SCREENER_WORKERS=%s",
+                    len(all_tickers), os.environ.get("SCREENER_WORKERS", "1"))
+
+        # 2a. fetch_daily_flow() → streak 계산 → save_daily_flow() (D3)
+        from market_data import fetch_daily_flow as _fetch_daily_flow
+        from datetime import date as _date
+
+        today = _date.today()
+
+        async def _upsert_flow(ticker: str) -> None:
+            """당일 수급 데이터 1건 fetch → streak 계산 → DB upsert."""
+            try:
+                flow = await loop.run_in_executor(None, _fetch_daily_flow, ticker)
+                if flow.get("date") is None:
+                    return
+                foreign_net = flow.get("foreign_net")
+                inst_net    = flow.get("inst_net")
+
+                # streak 계산: 전일 streak 조회 + 오늘 부호로 증감 (없으면 0 초기화)
+                prev_f, prev_i = await get_prev_streak(_db_pool, ticker, today)
+                prev_f = prev_f or 0
+                prev_i = prev_i or 0
+
+                def _next_streak(prev: int, net: Optional[int]) -> Optional[int]:
+                    if net is None:
+                        return None
+                    if net > 0:
+                        return max(prev, 0) + 1
+                    if net < 0:
+                        return min(prev, 0) - 1
+                    return 0  # 순매수 = 0 이면 streak 리셋
+
+                f_streak = _next_streak(prev_f, foreign_net)
+                i_streak = _next_streak(prev_i, inst_net)
+
+                await save_daily_flow(
+                    _db_pool, ticker, today.isoformat(),
+                    foreign_net, inst_net, f_streak, i_streak,
+                )
+            except Exception as e:
+                logger.debug("[3단계] flow 저장 실패 (%s): %s", ticker, e)
+
+        # 병렬 fetch — SCREENER_WORKERS 수 제한
+        import asyncio
+        semaphore = asyncio.Semaphore(int(os.environ.get("SCREENER_WORKERS", "1")))
+
+        async def _bounded_upsert(ticker: str) -> None:
+            async with semaphore:
+                await _upsert_flow(ticker)
+
+        await asyncio.gather(*[_bounded_upsert(t) for t, _, _ in all_tickers])
+        logger.info("[3단계] daily_flow 적재 완료")
+
+        # 2b. daily OHLCV (60일, yfinance, 병렬) — chart_screener.py fetch_weekly_ohlcv와 유사 구조
+        from chart_screener import fetch_weekly_ohlcv as _fetch_weekly_ohlcv
+        import yfinance as _yf
+
+        def _fetch_daily_ohlcv(ticker: str):
+            """60일 일봉 OHLCV. yfinance Ticker.history() 패턴 (Sprint 1에서 검증)."""
+            try:
+                tkr = _yf.Ticker(ticker)
+                df = tkr.history(period="60d", interval="1d", auto_adjust=True)
+                if df.empty or len(df) < 21:
+                    return None
+                if isinstance(df.columns, __import__("pandas").MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
+                df.index = __import__("pandas").to_datetime(df.index, utc=True)
+                return df
+            except Exception:
+                return None
+
+        workers = int(os.environ.get("SCREENER_WORKERS", "1"))
+        from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _as_completed
+
+        price_map: dict[str, object] = {}
+        with _TPE(max_workers=workers) as pool_ex:
+            futures = {pool_ex.submit(_fetch_daily_ohlcv, t): t for t, _, _ in all_tickers}
+            for fut in _as_completed(futures):
+                tk = futures[fut]
+                try:
+                    df = fut.result()
+                    if df is not None:
+                        price_map[tk] = df
+                except Exception:
+                    pass
+        logger.info("[3단계] OHLCV 수집: %d/%d종목", len(price_map), len(all_tickers))
+
+        # 3. daily_flow 20일 배치 로드 (asyncpg 스레드 제약 회피 — asyncpg-threadpool-no-db)
+        from datetime import timedelta as _td
+        since_20d = today - _td(days=20)
+        flow_map: dict[str, object] = {}
+        import pandas as _pd
+        try:
+            async with _db_pool.acquire() as conn:
+                rows_flow = await conn.fetch(
+                    """
+                    SELECT ticker, trade_date, foreign_net, inst_net,
+                           foreign_streak, inst_streak
+                    FROM   daily_flow
+                    WHERE  trade_date >= $1
+                    ORDER  BY trade_date ASC
+                    """,
+                    since_20d,
+                )
+            for row in rows_flow:
+                t = row["ticker"]
+                if t not in flow_map:
+                    flow_map[t] = []
+                flow_map[t].append(dict(row))
+            # DataFrame 변환
+            for t, rows_list in flow_map.items():
+                df_f = _pd.DataFrame(rows_list)
+                df_f = df_f.set_index("trade_date")
+                df_f.index = _pd.to_datetime(df_f.index)
+                flow_map[t] = df_f
+        except Exception as e:
+            logger.warning("[3단계] flow_map 로드 실패: %s", e)
+
+        # 4. s1_history 배치 조회 (DB, asyncpg 스레드 제약 회피)
+        all_ticker_list = [t for t, _, _ in all_tickers]
+        since_14d = today - _td(days=14)
+        s1_history = await get_stage1_history(_db_pool, all_ticker_list, since_14d)
+        logger.info("[3단계] s1_history: %d종목 이력", len(s1_history))
+
+        # 5. classify_stage() 병렬 실행 (pre-loaded data 전달)
+        from stage_classifier import classify_stage as _classify, check_peakout as _peakout
+
+        market_map = {t: ("KOSDAQ" if s.endswith(".KQ") else "KOSPI") for t, _, s in all_tickers}
+
+        def _classify_one(ticker: str) -> tuple[str, Optional[int], bool]:
+            price_df = price_map.get(ticker)
+            flow_df  = flow_map.get(ticker, _pd.DataFrame())
+            if price_df is None:
+                return ticker, None, False
+            market = market_map.get(ticker, "KOSPI")
+            stage = _classify(ticker, price_df, flow_df, s1_history, market)
+            peakout = _peakout(ticker, flow_df, price_df) if stage == 3 else False
+            return ticker, stage, peakout
+
+        stage_results: dict[str, int] = {}
+        peakout_flags: set[str] = set()
+        upsert_rows: list[dict] = []
+
+        with _TPE(max_workers=workers) as pool_ex2:
+            futures2 = {pool_ex2.submit(_classify_one, t): t for t in all_ticker_list}
+            for fut in _as_completed(futures2):
+                try:
+                    ticker, stage, peakout = fut.result()
+                    if stage is not None:
+                        stage_results[ticker] = stage
+                        if peakout:
+                            peakout_flags.add(ticker)
+
+                        # Stage 1 당일 메타데이터 수집 (s1_high, s1_volume)
+                        s1_high = s1_vol = None
+                        if stage == 1:
+                            pdf = price_map.get(ticker)
+                            if pdf is not None and not pdf.empty:
+                                last_row = pdf.iloc[-1]
+                                s1_high = float(last_row.get("High") or last_row.get("Close") or 0) or None
+                                s1_vol  = int(last_row.get("Volume") or 0) or None
+
+                        upsert_rows.append({
+                            "ticker":          ticker,
+                            "classified_date": today,
+                            "stage":           stage,
+                            "s1_entry_date":   today if stage == 1 else None,
+                            "s1_high":         s1_high,
+                            "s1_volume":       s1_vol,
+                            "peakout_flag":    peakout,
+                        })
+                except Exception as e:
+                    logger.debug("[3단계] 분류 오류: %s", e)
+
+        logger.info("[3단계] 분류 완료 — Stage1:%d Stage2:%d Stage3:%d 피크아웃:%d",
+                    sum(1 for s in stage_results.values() if s == 1),
+                    sum(1 for s in stage_results.values() if s == 2),
+                    sum(1 for s in stage_results.values() if s == 3),
+                    len(peakout_flags))
+
+        # 6. stage_classifications upsert
+        await save_stage_classifications(_db_pool, upsert_rows)
+
+        # 7. 텔레그램 비교 메세지 전송
+        try:
+            await tg_send_screener_comparison(
+                ichimoku_rows=ichimoku_rows,
+                stage_results=stage_results,
+                peakout_flags=peakout_flags,
+            )
+        except Exception as e:
+            logger.warning("[3단계] 텔레그램 전송 실패: %s", e)
+
+        logger.info("[3단계] 일별 분류 완료")
+
+    scheduler.add_job(
+        _daily_stage_job,
+        CronTrigger(hour=7, minute=30, timezone="UTC"),  # = 16:30 KST
+        id="daily_stage_classifier",
         max_instances=1,
         misfire_grace_time=3600,
         replace_existing=True,

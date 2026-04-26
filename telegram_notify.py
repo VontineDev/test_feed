@@ -389,3 +389,103 @@ async def send_weekly_screener(
     finally:
         if _own_client:
             await http.aclose()
+
+
+async def send_screener_comparison(
+    ichimoku_rows: list[dict],           # load_chart_signals_latest() 반환값 (D4)
+    stage_results: dict[str, int],       # ticker → stage (1/2/3), 전 종목 분류 결과
+    peakout_flags: set[str],             # Stage 3 피크아웃 ticker 집합
+    http: Optional[httpx.AsyncClient] = None,
+) -> bool:
+    """
+    독립 실행된 주봉 Ichimoku와 일봉 3단계 분류기 결과를 사후 교차해 Telegram 전송.
+
+    두 시스템은 완전히 독립 — 전 종목 대상 실행 후 결과를 교차함.
+    포맷: 겹치는 종목 우선(양쪽 통과) → Ichimoku만/Stage만 카운트 → 피크아웃 경고.
+    """
+    try:
+        token   = _get_token()
+        chat_id = _get_chat_id()
+    except ValueError as e:
+        logger.warning("[Telegram] 설정 오류: %s", e)
+        return False
+
+    def esc(text: str) -> str:
+        for ch in r"\_*[]()~`>#+-=|{}.!":
+            text = text.replace(ch, f"\\{ch}")
+        return text
+
+    def esc_code(text: str) -> str:
+        return text.replace("\\", "\\\\").replace("`", "\\`")
+
+    from datetime import date as _date
+    today_str = esc(_date.today().strftime("%Y-%m-%d"))
+
+    ichimoku_tickers = {r["ticker"] for r in ichimoku_rows}
+    # 종목 이름/정배열 조회용 맵
+    ichimoku_info: dict[str, dict] = {r["ticker"]: r for r in ichimoku_rows}
+
+    overlap = ichimoku_tickers & set(stage_results.keys())
+    ichimoku_only = ichimoku_tickers - set(stage_results.keys())
+    stage_only    = set(stage_results.keys()) - ichimoku_tickers
+
+    lines: list[str] = [
+        f"📊 *스크리너 교차 확인 \\({today_str}\\)*",
+        "",
+    ]
+
+    if overlap:
+        # Stage 내림차순(3→1), 정배열 우선 정렬
+        def _sort_key(t: str) -> tuple:
+            info  = ichimoku_info.get(t, {})
+            stage = stage_results.get(t, 0)
+            gapjum = bool(info.get("has_gapjum", False))
+            return (-stage, not gapjum)
+
+        sorted_overlap = sorted(overlap, key=_sort_key)[:10]  # 최대 10개 표시
+        lines.append(f"✅ *양쪽 통과 \\({esc(str(len(overlap)))}종목\\) — 최우선 감시*")
+        for ticker in sorted_overlap:
+            info    = ichimoku_info.get(ticker, {})
+            name    = esc(str(info.get("name", ticker.split(".")[0])))
+            code    = esc_code(ticker.split(".")[0])
+            stage   = stage_results.get(ticker, 0)
+            star    = " ★정배열" if info.get("has_gapjum") else ""
+            lines.append(f"• {name} `{code}` Stage{stage}{esc(star)}")
+        if len(overlap) > 10:
+            lines.append(f"  _\\(외 {esc(str(len(overlap) - 10))}종목\\)_")
+        lines.append("")
+    else:
+        lines.append("✅ 양쪽 공통 통과 종목 없음")
+        lines.append("")
+
+    lines.append(
+        f"📌 Ichimoku만 통과: {esc(str(len(ichimoku_only)))}종목"
+    )
+    lines.append(
+        f"📌 Stage만 해당: {esc(str(len(stage_only)))}종목"
+    )
+
+    # 피크아웃 경고
+    if peakout_flags:
+        lines.append("")
+        lines.append("⚠️ *Stage3 피크아웃 주의*")
+        for ticker in list(peakout_flags)[:5]:
+            info = ichimoku_info.get(ticker, {})
+            name = esc(str(info.get("name", ticker.split(".")[0])))
+            code = esc_code(ticker.split(".")[0])
+            lines.append(f"• {name} `{code}`")
+
+    message = "\n".join(lines)
+
+    channel_id = _get_channel_id()
+    _own_client = http is None
+    if _own_client:
+        http = httpx.AsyncClient()
+    try:
+        ok = await _post_message(http, token, chat_id, message, label="교차비교(DM)")
+        if channel_id:
+            await _post_message(http, token, channel_id, message, label="교차비교(채널)")
+        return ok
+    finally:
+        if _own_client:
+            await http.aclose()
