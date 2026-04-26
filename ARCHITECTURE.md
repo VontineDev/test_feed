@@ -14,6 +14,8 @@
 > v0.2.7.0부터 스크리너 v2: 120주선 조건 G 추가, KIND 섹터 데이터 연동, 섹터별 그룹 포맷 Telegram 출력.
 > v0.2.9.0부터 펀더멘털 레이어가 추가되었습니다. Naver Finance 모바일 API에서 PER/PBR/EPS를 조회(인증 불필요)하여 `cross_analyze()` 스코어에 −3~+2 델타를 적용. 텔레그램 시세 라인에 PER/PBR 토큰 표시(주목할 만한 경우에만). 시작 시 `prewarm_fundamentals()`로 캐시 사전 적재. pykrx 불필요.
 > v0.4.0.0부터 기사 유형 분류(8종), 주봉 차트 스크리너 v2(120주선 + KIND 섹터 그룹), 교차분석 v2(MACD·볼린저밴드·MA20/50), 펀더멘털 레이어를 통합하여 출시. 이전 v0.2.5.0~v0.2.9.0 브랜치 기능 전체가 이 버전으로 병합됨.
+> v0.5.0.0부터 스크리너 우선 아키텍처가 적용되었습니다. 뉴스 신호는 해당 주 주봉 스크리너 통과 종목에만 텔레그램 알림이 발송됩니다. 스크리너 백테스트 엔진(`chart_backtest.py`), Stage 2 필터 프리셋(`screener_filters.py`), `daily_flow` DB 테이블이 추가되었습니다.
+> v0.6.0.0부터 일봉 3단계 분류기(`stage_classifier.py`)가 추가되었습니다. 매일 16:30 KST에 KOSPI + KOSDAQ 전 종목을 Stage 1(랠리 초입) / Stage 2(중간 조정) / Stage 3(과열 재가속)으로 분류하고 `stage_classifications` 테이블에 저장합니다. 주봉 Ichimoku 결과와 교차 비교한 결과를 텔레그램으로 자동 발송합니다.
 
 ---
 

@@ -260,3 +260,22 @@ to:
 **Effort:** XS (human: ~20 min / CC: ~5 min)
 **Priority:** P3
 **Blocked by:** Sprint 2 (stage_classifications table populated for ≥ 7 days).
+
+---
+
+## P3: backtest_engine — Non-Standard Measurement Period (on-the-fly N-week)
+
+**What:** When `/backtest2 stage 8` is called and 8w is not a stored period, compute the actual return on-the-fly from the stored price snapshot instead of falling back to the nearest standard period (4w). Currently the MVP falls back to nearest standard period with a "(closest: 4w)" note.
+
+**Why:** Users may want specific horizons (6w, 8w, 10w) that don't map cleanly to the stored 1/4/13 week checkpoints. The stored OHLCV data is already present in signals2.json — on-the-fly computation is straightforward.
+
+**How to apply:**
+- In `backtest_engine.py`, `build_comparison_report(measure_weeks=N)` checks if N is in [1, 4, 13]. If not, for each signal fetch `_nearest_price(stock_lookup, signal_date + timedelta(weeks=N))` and compute the return directly.
+- Requires that signals2.json stores the 60-day OHLCV snapshot per ticker, OR re-fetches from yfinance at report time (slower but simpler).
+- If re-fetching: cache results in `/tmp/backtest_ohlcv_cache/` keyed by ticker+date to avoid duplicate fetches within one report run.
+
+**Pros:** Flexible measurement horizon for power users. No schema change to signals2.json.
+**Cons:** Re-fetching OHLCV adds 5-30 seconds to report generation for non-standard periods. Acceptable if the note explains the delay.
+**Effort:** XS (human: ~30 min / CC: ~5 min)
+**Priority:** P3
+**Blocked by:** Sprint 3 (backtest_engine.py) must ship first.

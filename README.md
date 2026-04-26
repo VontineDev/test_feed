@@ -64,11 +64,12 @@ signal_detector.py    # LLM 매매 신호 감지
 market_data.py        # yfinance 시세 조회 + 교차분석
 backtest.py           # 판정 정확도 추적 + 백테스팅 리포트
 chart_screener.py     # 주봉 차트 스크리너 (Ichimoku + MA, KOSPI/KOSDAQ 전종목)
+stage_classifier.py   # 일봉 3단계 분류기 — Stage 1/2/3 분류 + 피크아웃 신호 (v0.6.0.0~)
 generate_report.py    # 차트 스크리닝 결과를 UTF-8 파일로 저장 (CLI 스크립트)
 generate_html_report.py # 차트 스크리닝 결과를 HTML 파일로 저장 — 정배열/일반 섹션, 인라인 CSS
 db.py                 # PostgreSQL 연동 (asyncpg)
 telegram_bot.py       # 봇 명령어 처리
-telegram_notify.py    # 신호 알림 전송
+telegram_notify.py    # 신호 알림 전송 + Ichimoku/Stage 비교 메시지
 volume_pattern.py     # 거래량 패턴 분석
 krx_sync.py           # KRX 전체 종목 DB 동기화 (KOSPI+KOSDAQ ~2500종목)
 ticker_cache.py       # 종목명→yfinance 심볼 인메모리 캐시 (startup 로드, 20:00 KST 갱신)
@@ -86,6 +87,7 @@ test_chart_screener.py             # pytest — 주봉 스크리너 조건 + KIN
 test_screener_telegram_regression_1.py  # pytest — 스크리너 텔레그램 포맷 회귀 (14개)
 test_fundamental.py                # pytest — PER/PBR/EPS 펀더멘털 레이어 (41개)
 test_generate_html_report.py       # pytest — HTML 리포트 생성 (10개)
+test_stage_classifier.py           # pytest — 일봉 3단계 분류기 전 코드패스 (29개)
 ```
 
 ## 환경변수
@@ -128,6 +130,7 @@ pytest test_chart_screener.py -v              # 주봉 스크리너 + KIND 섹�
 pytest test_screener_telegram_regression_1.py -v  # 스크리너 텔레그램 포맷 회귀 (14개)
 pytest test_fundamental.py -v                     # PER/PBR/EPS 펀더멘털 레이어 (41개)
 pytest test_generate_html_report.py -v            # HTML 리포트 생성 (10개)
+pytest test_stage_classifier.py -v               # 일봉 3단계 분류기 전 코드패스 (29개)
 ```
 
 ## 문서
@@ -138,4 +141,4 @@ pytest test_generate_html_report.py -v            # HTML 리포트 생성 (10개
 
 ## 버전
 
-현재 버전: `0.4.1.0` — [CHANGELOG](CHANGELOG.md) 참고
+현재 버전: `0.6.0.0` — [CHANGELOG](CHANGELOG.md) 참고

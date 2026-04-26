@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0.0] - 2026-04-26
+
+### Added
+- **Daily 3-stage stock classifier** (`stage_classifier.py`): `classify_stage()` evaluates all KOSPI + KOSDAQ tickers (~2,770) every weekday at 16:30 KST. Returns Stage 1 (랠리 초입 — daily surge + volume spike + net-buy), Stage 2 (중간 조정·재매집 — pullback within 14 days of a Stage 1 signal), or Stage 3 (과열 재가속 — breakout above consolidation high, RSI ≥ 70, both foreign and institutional net-buy). Priority: Stage 3 > 2 > 1.
+- **Peakout signal** (`stage_classifier.py`): `check_peakout()` flags Stage 3 stocks where foreign + institutional streaks both hit ≤ −2, or where an upper-wick candle (high − close > 50% of range) coincides with a volume spike.
+- **`stage_classifications` DB table** (`db.py`): stores ticker, date, stage (1/2/3), s1_entry_date, s1_high, s1_volume, peakout_flag. Primary key: (ticker, classified_date). Two indexes for date-desc and ticker+date-desc queries.
+- **DB helpers** (`db.py`): `get_stage1_history()` batch-loads Stage 1 records from `stage_classifications` (not `chart_signals`) for Stage 2 lookback; `save_stage_classifications()` upserts; `get_prev_streak()` returns the previous day's foreign/institutional streak for daily increment computation.
+- **`_daily_stage_job()`** (`run_scheduler.py`): new APScheduler job at UTC 07:30 (= 16:30 KST). Steps: fetch daily flow + compute streaks via `get_prev_streak()`, load 60-day OHLCV via yfinance, batch-load flow_df and Stage 1 history from DB (asyncpg thread-safety — no DB calls inside ThreadPoolExecutor), classify all tickers in parallel, upsert results, send comparison Telegram message.
+- **Ichimoku + Stage comparison Telegram message** (`telegram_notify.py`): `send_screener_comparison()` sends an overlap-first summary after each daily classification — tickers passing both Ichimoku (weekly) and Stage (daily) appear first as highest-confidence candidates, followed by Ichimoku-only and Stage-only sections. Peakout warnings appended when triggered.
+- **USER_MANUAL.md Section 8** — 일봉 3단계 분류기: documents Stage 1/2/3 conditions as user-readable tables, comparison Telegram message format, peakout signal, and SCREENER_WORKERS latency note.
+
+### Technical
+- All DB queries batch-loaded before entering `ThreadPoolExecutor` — no asyncpg calls from worker threads (learnings: asyncpg-threadpool-no-db).
+- Stage 1 history source: `stage_classifications WHERE stage=1` (full 2770-ticker coverage, independent of Ichimoku gate).
+- `s1_volume` column added to `stage_classifications` for Stage 2 volume contraction check.
+
+### Fixed (pre-landing review)
+- **`daily_stage_classifier` weekend cron** (`run_scheduler.py`): job was firing every day including Saturday and Sunday, calling Naver's API 2770 times for all-null results and sending an empty Telegram message. Now correctly restricted to `day_of_week="mon-fri"`.
+- **`get_stage1_history` silent failure** (`db.py`): on DB timeout or pool exhaustion, the function was swallowing the exception and returning `{}`, causing Stage 2 results to silently disappear for the entire day. Now propagates the exception so `_daily_stage_job` can abort and avoid saving corrupted data.
+- **`check_peakout` volume average off-by-one** (`stage_classifier.py`): `iloc[-20:-1]` gives 19 days, not 20. Fixed to `iloc[-21:-1]` to match `_check_stage1`'s 20-day average.
+- **`_check_stage3` breakout guard** (`stage_classifier.py`): breakout condition was silently skipped for stocks with fewer than 11 High data points (newly listed stocks). Added explicit `if len(highs) < 11: return False` guard.
+
+### Tests
+- `test_stage_classifier.py`: 29 tests covering Stage 1 (12 — including zero-avg-vol and zero-52w-high guards), Stage 2 (7), Stage 3 (3), priority ordering (1), `check_peakout` (6). All 384 tests pass (29 new + 355 existing).
+- Priority ordering test redesigned — previous fixture never satisfied Stage 1 or Stage 3 conditions (0.81% daily change < 5% threshold), making `assert result in (None,1,2,3)` a tautology. New fixture triggers both Stage 1 and Stage 3 simultaneously and asserts `result == 3`.
+
 ## [0.5.0.0] - 2026-04-25
 
 ### Added
