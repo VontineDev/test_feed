@@ -181,6 +181,21 @@ CREATE TABLE IF NOT EXISTS chart_signals (
 );
 CREATE INDEX IF NOT EXISTS idx_chart_signals_week_ticker ON chart_signals(week_of, ticker);
 
+-- ── 3단계 분류 결과 (일별, 전 종목 대상) ────────────────────
+CREATE TABLE IF NOT EXISTS stage_classifications (
+    ticker          TEXT        NOT NULL,
+    classified_date DATE        NOT NULL,
+    stage           SMALLINT    NOT NULL,  -- 1, 2, 3
+    s1_entry_date   DATE,                  -- Stage 1 감지일
+    s1_high         NUMERIC,               -- Stage 1 당일 고가
+    s1_volume       BIGINT,                -- Stage 1 당일 거래량 (Stage 2 볼륨 수축 조건용)
+    peakout_flag    BOOLEAN     DEFAULT false,
+    created_at      TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (ticker, classified_date)
+);
+CREATE INDEX IF NOT EXISTS idx_stage_class_date ON stage_classifications (classified_date DESC);
+CREATE INDEX IF NOT EXISTS idx_stage_class_ticker ON stage_classifications (ticker, classified_date DESC);
+
 -- ── 분봉 거래량 데이터 (StockData.org / yfinance) ────────────
 CREATE TABLE IF NOT EXISTS intraday_volumes (
     id              BIGSERIAL       PRIMARY KEY,
@@ -257,6 +272,7 @@ _ENABLE_RLS = "\n".join(
         "daily_ohlcv",
         "daily_flow",
         "chart_signals",
+        "stage_classifications",
         "intraday_volumes",
         "krx_listings",
     ]
@@ -278,6 +294,9 @@ async def init_db(pool: asyncpg.Pool) -> None:
         )
         await conn.execute(
             "ALTER TABLE chart_signals ADD COLUMN IF NOT EXISTS volume_w BIGINT"
+        )
+        await conn.execute(
+            "ALTER TABLE stage_classifications ADD COLUMN IF NOT EXISTS s1_volume BIGINT"
         )
         await conn.execute(_ENABLE_RLS)
     logger.info("DB 테이블 준비 완료 (news_articles, krx_listings)")
@@ -922,6 +941,119 @@ async def get_chart_signals_this_week(pool: asyncpg.Pool) -> set[str]:
     except Exception as e:
         logger.warning("[차트스크리너] 이번 주 신호 조회 실패: %s", e)
         return set()
+
+
+# ── 3단계 분류 이력 조회 ─────────────────────────────────────
+async def get_stage1_history(
+    pool: asyncpg.Pool,
+    tickers: list[str],
+    since_date: "datetime | date",
+) -> dict[str, list[dict]]:
+    """
+    stage_classifications WHERE stage=1 에서 Stage 1 이력 반환.
+
+    D1 결정: chart_signals(Ichimoku 통과만) 대신 stage_classifications 조회.
+    이유: 전 종목 Stage 1 일별 감지와 일관 — Ichimoku 통과 여부와 독립.
+    Stage 2 lookback은 최소 5일이므로 당일 Stage 1과 충돌 없음 (D9).
+
+    반환: {ticker: [{classified_date, s1_high, s1_volume}, ...]}
+    s1_high / s1_volume이 NULL인 행은 Stage 2 볼륨/가격 조건 스킵.
+    """
+    if not tickers:
+        return {}
+    if hasattr(since_date, "date"):
+        since_date = since_date.date()
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT ticker, classified_date, s1_high, s1_volume
+                FROM   stage_classifications
+                WHERE  ticker = ANY($1)
+                  AND  stage  = 1
+                  AND  classified_date >= $2
+                ORDER  BY classified_date DESC
+                """,
+                tickers,
+                since_date,
+            )
+        result: dict[str, list[dict]] = {}
+        for r in rows:
+            result.setdefault(r["ticker"], []).append(dict(r))
+        return result
+    except Exception as e:
+        logger.warning("[stage] get_stage1_history 실패: %s", e)
+        return {}
+
+
+async def save_stage_classifications(
+    pool: asyncpg.Pool,
+    rows: list[dict],
+) -> int:
+    """
+    stage_classifications upsert.
+    rows: list of {ticker, classified_date, stage, s1_entry_date, s1_high, s1_volume, peakout_flag}
+    반환: 저장/갱신 건수.
+    """
+    if not rows:
+        return 0
+    count = 0
+    try:
+        async with pool.acquire() as conn:
+            for r in rows:
+                await conn.execute(
+                    """
+                    INSERT INTO stage_classifications
+                        (ticker, classified_date, stage,
+                         s1_entry_date, s1_high, s1_volume, peakout_flag)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7)
+                    ON CONFLICT (ticker, classified_date) DO UPDATE SET
+                        stage         = EXCLUDED.stage,
+                        s1_entry_date = EXCLUDED.s1_entry_date,
+                        s1_high       = EXCLUDED.s1_high,
+                        s1_volume     = EXCLUDED.s1_volume,
+                        peakout_flag  = EXCLUDED.peakout_flag
+                    """,
+                    r["ticker"],
+                    r["classified_date"],
+                    r["stage"],
+                    r.get("s1_entry_date"),
+                    r.get("s1_high"),
+                    r.get("s1_volume"),
+                    r.get("peakout_flag", False),
+                )
+                count += 1
+        logger.info("[stage] stage_classifications %d건 저장/갱신", count)
+    except Exception as e:
+        logger.error("[stage] save_stage_classifications 실패: %s", e)
+    return count
+
+
+async def get_prev_streak(
+    pool: asyncpg.Pool,
+    ticker: str,
+    trade_date: "date",
+) -> tuple[Optional[int], Optional[int]]:
+    """전일 foreign_streak, inst_streak 반환. 없으면 (None, None)."""
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT foreign_streak, inst_streak
+                FROM   daily_flow
+                WHERE  ticker = $1
+                  AND  trade_date < $2
+                ORDER  BY trade_date DESC
+                LIMIT  1
+                """,
+                ticker,
+                trade_date,
+            )
+        if row:
+            return row["foreign_streak"], row["inst_streak"]
+    except Exception as e:
+        logger.debug("[stage] get_prev_streak 실패 (%s): %s", ticker, e)
+    return None, None
 
 
 # ── 재시작 시 중복 해시 복원 ──────────────────────────────────
