@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.1.0] - 2026-05-02
+
+### Added
+- **샤프비율 7d·91d 추가** (`backtest_engine.py`): 기존 28d 연환산 샤프비율에 더해 7일·91일 보유 기준 샤프비율(`sharpe_7d`, `sharpe_91d`)도 함께 산출. 수익률 기간(7d/28d/91d)과 샤프비율 기간이 일치해 지표 일관성 확보.
+- **`_replay_ichimoku` 단위 테스트** (`test_backtest_engine.py`): 데이터 부족(< 62주), 횡보 가격(신호 없음), 기간 외(신호 없음), 구름 돌파 신호 감지, 연속 신호 방지(Condition B) 5개 케이스 추가. 네트워크 없이 합성 데이터로 실행.
+
+### Changed
+- **`MODE_KOR` 상수 분리** (`backtest_engine.py`): 모드별 한국어 표시 문자열(`이치모쿠(주봉)` 등)을 모듈 수준 상수 `MODE_KOR`로 추출. `BacktestResult` 리포트 메서드 2곳·텔레그램 봇 1곳에서 재사용.
+
+### Technical
+- `backtest_engine.py`, `run_backtest.py`, `test_backtest_engine.py` 코드베이스 실제 반영 (v0.7.0.0은 설계 문서 선반영 버전).
+- `/backtest2` 텔레그램 명령어 구현 완료 (`telegram_bot.py`).
+
 ## [0.7.0.0] - 2026-04-27
 
 ### Added
