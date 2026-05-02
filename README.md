@@ -94,7 +94,7 @@ test_screener_telegram_regression_1.py  # pytest — 스크리너 텔레그램 �
 test_fundamental.py                # pytest — PER/PBR/EPS 펀더멘털 레이어 (41개)
 test_generate_html_report.py       # pytest — HTML 리포트 생성 (10개)
 test_stage_classifier.py           # pytest — 일봉 3단계 분류기 전 코드패스 (29개)
-test_backtest_engine.py            # pytest — 통합 백테스트 엔진 (60개 — Sharpe·MDD·cross filter·stage replay)
+test_backtest_engine.py            # pytest — 통합 백테스트 엔진 (65개 — Sharpe·MDD·cross filter·stage replay)
 ```
 
 ## 환경변수
@@ -138,7 +138,7 @@ pytest test_screener_telegram_regression_1.py -v  # 스크리너 텔레그램 �
 pytest test_fundamental.py -v                     # PER/PBR/EPS 펀더멘털 레이어 (41개)
 pytest test_generate_html_report.py -v            # HTML 리포트 생성 (10개)
 pytest test_stage_classifier.py -v               # 일봉 3단계 분류기 전 코드패스 (29개)
-pytest test_backtest_engine.py -v               # 통합 백테스트 엔진 (60개)
+pytest test_backtest_engine.py -v               # 통합 백테스트 엔진 (65개)
 ```
 
 ## 문서
@@ -150,4 +150,4 @@ pytest test_backtest_engine.py -v               # 통합 백테스트 엔진 (60
 
 ## 버전
 
-현재 버전: `0.7.0.0` — [CHANGELOG](CHANGELOG.md) 참고
+현재 버전: `0.7.1.0` — [CHANGELOG](CHANGELOG.md) 참고

@@ -17,6 +17,7 @@
 > v0.5.0.0부터 스크리너 우선 아키텍처가 적용되었습니다. 뉴스 신호는 해당 주 주봉 스크리너 통과 종목에만 텔레그램 알림이 발송됩니다. 스크리너 백테스트 엔진(`chart_backtest.py`), Stage 2 필터 프리셋(`screener_filters.py`), `daily_flow` DB 테이블이 추가되었습니다.
 > v0.6.0.0부터 일봉 3단계 분류기(`stage_classifier.py`)가 추가되었습니다. 매일 16:30 KST에 KOSPI + KOSDAQ 전 종목을 Stage 1(랠리 초입) / Stage 2(중간 조정) / Stage 3(과열 재가속)으로 분류하고 `stage_classifications` 테이블에 저장합니다. 주봉 Ichimoku 결과와 교차 비교한 결과를 텔레그램으로 자동 발송합니다.
 > v0.7.0.0부터 통합 백테스트 엔진(`backtest_engine.py`)이 추가되었습니다. 이치모쿠(주봉) / 3단계 Stage 1(일봉) / 교차(두 신호 동일 주 발동) 3개 모드로 과거 구간 백테스트를 실행합니다. 지표: 승률(7d/28d/91d), 평균·중앙값 수익률, KOSPI 초과수익률, 샤프비율(연환산), MDD. KRX 왕복 거래비용(기본 0.21%) 반영. `/backtest2 ichimoku 2025-01-01 2026-01-01` 텔레그램 명령어로 온디맨드 실행 가능.
+> v0.7.1.0부터 샤프비율 7d·91d가 추가되었습니다(`backtest_engine.py`). 기존 28d 연환산 샤프비율에 더해 7일·91일 보유 기준 `sharpe_7d`·`sharpe_91d`도 산출합니다. `MODE_KOR` 상수를 모듈 수준으로 분리하여 리포트 메서드와 텔레그램 봇에서 재사용. `_replay_ichimoku` 단위 테스트 5개 추가 — 총 65개. `/backtest2` 텔레그램 명령어 구현 완료.
 
 ---
 
@@ -548,7 +549,7 @@ test_feed/
 ├── test_fundamental.py            # pytest — PER/PBR/EPS 펀더멘털 레이어 (41개)
 ├── test_generate_html_report.py   # pytest — HTML 리포트 생성 (10개)
 ├── test_stage_classifier.py       # pytest — 일봉 3단계 분류기 전 코드패스 (29개)
-├── test_backtest_engine.py        # pytest — 통합 백테스트 엔진 (60개)
+├── test_backtest_engine.py        # pytest — 통합 백테스트 엔진 (65개)
 │
 ├── VERSION                        # 현재 버전 (SemVer 4자리)
 ├── CHANGELOG.md                   # 변경 이력
@@ -685,4 +686,4 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 
 ---
 
-*현재 코드베이스 v0.7.0.0 (2026-04-27) 기준*
+*현재 코드베이스 v0.7.1.0 (2026-05-02) 기준*
