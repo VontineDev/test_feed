@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.1.0] - 2026-05-05
+
+### Added
+- **KRX OpenAPI 클라이언트** (`krx_openapi.py`): `data-dbg.krx.co.kr` 공식 REST API 경유로 KOSPI/KOSDAQ 종목 마스터, 일별 OHLCV, KOSPI 지수 시세 수집. Bearer 토큰 인증(`KRX_OPENAPI_KEY`).
+- **OHLCV DB 캐시 레이어** (`ohlcv_cache.py`): yfinance 반복 다운로드를 줄이기 위한 psycopg2 캐시. `batch_fetch_cached()`로 캐시 히트 시 DB 직접 로드, 미스 시 yfinance 병렬 수집 후 저장. `load_flow_data()`로 수급 데이터 사전 로드.
+- **수급 데이터 파이프라인** (`krx_flow_sync.py`): data.krx.co.kr에서 외국인·기관 순매수 이력을 `daily_flow` 테이블에 적재. krx-direct / pykrx / CSV 백엔드 지원. KRX 계정(KRX_ID/KRX_PW) 필요.
+- **백테스트 조건 5 수급 연결** (`backtest_engine.py`): `BacktestConfig.dsn` 설정 시 `daily_flow`에서 수급 데이터 사전 로드 후 `_replay_stage()` 조건 5(외국인·기관 순매수 > 0)에 적용. DSN 없으면 수급 조건 자동 생략(하위 호환).
+- **`run_backtest.py` DSN 플래그**: `--dsn` CLI 옵션 추가. 미설정 시 `DATABASE_URL` 환경변수 자동 로드.
+
+### Changed
+- **`krx_sync.py` KRX OpenAPI 전환**: 기존 data.krx.co.kr HTTP 스크래핑을 KRX 공식 REST API로 대체. 스크래핑 없이 `ISU_CD`, `ISU_NM` 등 정식 필드 사용.
+- **`chart_screener.py` 종목 조회 1순위**: `KRX_OPENAPI_KEY` 설정 시 KRX OpenAPI가 FinanceDataReader보다 먼저 사용됨.
+
+### Fixed
+- **`.env.example` 키 이름**: `KRX_API_KEY` → `KRX_OPENAPI_KEY` (코드와 불일치 수정).
+- **`backtest_engine.py:723` 빈 dict 판정**: `if flow_lookup:` → `if flow_lookup is not None:` (수급 데이터 0건일 때 note 문구 오표시 수정).
+
 ## [0.7.1.0] - 2026-05-02
 
 ### Added
