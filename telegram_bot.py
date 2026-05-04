@@ -354,6 +354,12 @@ async def _handle_backtest2(
 
     from backtest_engine import BacktestConfig, TX_COST_DEFAULT, MODE_KOR, run_backtest
 
+    try:
+        from db import get_dsn as _get_dsn
+        _dsn: str | None = _get_dsn()
+    except Exception:
+        _dsn = None
+
     config = BacktestConfig(
         mode=mode,
         start=start,
@@ -361,6 +367,7 @@ async def _handle_backtest2(
         market=market,
         tx_cost_rt=tx_cost if tx_cost is not None else TX_COST_DEFAULT,
         max_tickers=max_tickers,
+        dsn=_dsn,
     )
 
     mode_kor = MODE_KOR.get(mode, mode)

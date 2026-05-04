@@ -3,7 +3,7 @@ backtest_engine.py  —  통합 백테스트 엔진 (Sprint 3)
 ────────────────────────────────────────────────────────────
 3개 모드:
   ichimoku — 주봉 이치모쿠 7조건 walk-forward 재현
-  stage    — 일봉 Stage 1 가격 조건 재현 (수급 제외, 4/5 조건)
+  stage    — 일봉 Stage 1 가격 조건 재현 (5/5 조건, 수급은 daily_flow 있을 때)
   cross    — 이치모쿠 + Stage 1 동일 ISO 주 교차
 
 지표:
@@ -64,6 +64,7 @@ class BacktestConfig:
     max_tickers: int = 200        # 0 = 전종목 (수십 분 소요)
     rf_rate_annual: float = 0.030  # 무위험수익률 (한국국채 3% 기준)
     workers: int = 8
+    dsn: Optional[str] = None     # PostgreSQL DSN. 설정 시 daily_ohlcv 캐시 사용
 
     def __post_init__(self) -> None:
         if self.mode not in ("ichimoku", "stage", "cross"):
@@ -458,14 +459,16 @@ def _replay_stage(
     daily_df: pd.DataFrame,
     market: str,
     config: BacktestConfig,
+    flow_lookup: Optional[dict[tuple[str, date], tuple[Optional[int], Optional[int]]]] = None,
 ) -> list[SignalRecord]:
-    """일봉 Stage 1 가격 조건 walk-forward 재현 (4/5 조건, 수급 제외).
+    """일봉 Stage 1 가격 조건 walk-forward 재현 (5/5 조건).
 
     조건 1: 일일 상승률 ≥ 5%(KOSPI) / 7%(KOSDAQ)
     조건 2: 거래량 ≥ 2× 20일 평균
     조건 3: close > MA20 AND MA60
     조건 4: 52주 고점 대비 괴리율 ≤ 20%
-    조건 5: 수급(외국인·기관 순매수) — 과거 데이터 미제공으로 생략
+    조건 5: 수급 — 외국인 또는 기관 순매수 > 0
+             (flow_lookup 제공 시 적용. 해당 날짜 데이터 없으면 조건 생략)
     """
     threshold = _S1_THRESHOLD.get(market, 0.05)
 
@@ -520,7 +523,18 @@ def _replay_stage(
         if week52_high <= 0 or (week52_high - close_today) / week52_high > 0.20:
             continue
 
-        # 조건 5 (수급): 생략
+        # 조건 5: 수급 (외국인·기관 순매수)
+        # flow_lookup이 제공됐고 해당 날짜 데이터가 있을 때만 필터링.
+        # 데이터 없는 날짜는 통과 (과거 데이터 미수집 구간 보호).
+        if flow_lookup is not None:
+            flow = flow_lookup.get((ticker, row_date))
+            if flow is not None:
+                f_net, i_net = flow
+                if not (
+                    (f_net is not None and f_net > 0)
+                    or (i_net is not None and i_net > 0)
+                ):
+                    continue
 
         signals.append(SignalRecord(
             ticker=ticker,
@@ -637,14 +651,40 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
     fetch_end   = config.end   + timedelta(days=105)
 
     # 3. OHLCV 병렬 수집
-    ticker_syms = [t for t, _, _ in tickers]
-    ohlcv_map   = _batch_fetch_ohlcv(ticker_syms, fetch_start, fetch_end, config.workers)
+    if config.dsn:
+        from ohlcv_cache import batch_fetch_cached, fetch_index_cached
+        ticker_pairs = [
+            (t, "KOSDAQ" if t.endswith(".KQ") else "KOSPI")
+            for t, _, _ in tickers
+        ]
+        ohlcv_map = batch_fetch_cached(
+            ticker_pairs, fetch_start, fetch_end,
+            config.workers, config.dsn, _fetch_single_ohlcv,
+        )
+        kospi_df = fetch_index_cached(
+            "^KS11", "IDX", fetch_start, fetch_end,
+            config.dsn, _fetch_index,
+        )
+    else:
+        ticker_syms = [t for t, _, _ in tickers]
+        ohlcv_map   = _batch_fetch_ohlcv(ticker_syms, fetch_start, fetch_end, config.workers)
+        kospi_df    = _fetch_index("^KS11", fetch_start, fetch_end)
 
-    # 4. KOSPI 벤치마크
-    kospi_df     = _fetch_index("^KS11", fetch_start, fetch_end)
+    # 4. KOSPI 벤치마크 조회
     kospi_lookup = _build_price_lookup(kospi_df) if kospi_df is not None else {}
 
-    # 5. 신호 재현
+    # 5. 수급 데이터 사전 로드 (stage/cross 모드 + DSN 있을 때)
+    flow_lookup: Optional[dict] = None
+    if config.dsn and config.mode in ("stage", "cross"):
+        try:
+            from ohlcv_cache import load_flow_data
+            ticker_syms = [t for t, _, _ in tickers]
+            flow_lookup = load_flow_data(config.dsn, ticker_syms, config.start, config.end)
+            logger.info("[백테스트] 수급 데이터 로드: %d건", len(flow_lookup))
+        except Exception as e:
+            logger.warning("[백테스트] 수급 데이터 로드 실패 (조건 5 생략): %s", e)
+
+    # 6. 신호 재현
     all_signals: list[SignalRecord] = []
 
     for ticker, name, _ in tickers:
@@ -656,13 +696,13 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
         if config.mode in ("ichimoku", "cross"):
             all_signals.extend(_replay_ichimoku(ticker, name, df, mkt, config))
         if config.mode in ("stage", "cross"):
-            all_signals.extend(_replay_stage(ticker, name, df, mkt, config))
+            all_signals.extend(_replay_stage(ticker, name, df, mkt, config, flow_lookup))
 
-    # 6. Cross 필터
+    # 7. Cross 필터
     if config.mode == "cross":
         all_signals = _apply_cross_filter(all_signals)
 
-    # 7. 수익률 계산
+    # 8. 수익률 계산
     stock_lookup_cache: dict[str, dict[date, float]] = {}
     for sig in all_signals:
         df = ohlcv_map.get(sig.ticker)
@@ -672,15 +712,18 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
             stock_lookup_cache[sig.ticker] = _build_price_lookup(df)
         _fill_returns(sig, stock_lookup_cache[sig.ticker], kospi_lookup, config.tx_cost_rt)
 
-    # 8. 날짜 순 정렬 → MDD equity curve가 시간 순서대로 누적
+    # 9. 날짜 순 정렬 → MDD equity curve가 시간 순서대로 누적
     all_signals.sort(key=lambda s: s.signal_date)
 
-    # 9. 집계 지표
+    # 10. 집계 지표
     overall = _compute_group_metrics(all_signals, config.rf_rate_annual)
 
     note = ""
     if config.mode in ("stage", "cross"):
-        note = "Stage 1: 수급 조건(외국인·기관 순매수) 제외 — 과거 데이터 미제공"
+        if flow_lookup is not None:
+            note = f"Stage 1: 수급 조건(외국인·기관 순매수) 적용 — {len(flow_lookup)}건 기준"
+        else:
+            note = "Stage 1: 수급 조건(외국인·기관 순매수) 제외 — daily_flow 데이터 없음"
 
     logger.info(
         "[백테스트] 완료 — 신호:%d 승률28d:%s",

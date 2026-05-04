@@ -73,9 +73,23 @@ def main() -> None:
         "--workers", type=int, default=8,
         help="병렬 워커 수 (기본: 8)",
     )
+    parser.add_argument(
+        "--dsn", type=str, default=None,
+        metavar="DSN",
+        help="PostgreSQL DSN (설정 시 OHLCV 캐시 + 수급 조건 5 활성화). "
+             "미설정 시 DATABASE_URL 환경변수에서 자동 로드.",
+    )
     args = parser.parse_args()
 
     from backtest_engine import BacktestConfig, TX_COST_DEFAULT, run_backtest
+
+    dsn = args.dsn
+    if dsn is None:
+        try:
+            from db import get_dsn
+            dsn = get_dsn()
+        except Exception:
+            dsn = None
 
     config = BacktestConfig(
         mode=args.mode,
@@ -86,6 +100,7 @@ def main() -> None:
         max_tickers=args.max_tickers,
         rf_rate_annual=args.rf_rate,
         workers=args.workers,
+        dsn=dsn,
     )
 
     print(f"\n백테스트 실행 중... (티커 수집 + 데이터 다운로드 수 분 소요)\n")
