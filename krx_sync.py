@@ -1,31 +1,20 @@
 """
 krx_sync.py — KRX 전체 종목 리스트를 krx_listings 테이블에 동기화.
-출처: data.krx.co.kr (공개 API, 인증 불필요)
+출처: KRX Open API (data-dbg.krx.co.kr) — 공식 REST API, scraping 불필요.
+      환경변수 KRX_OPENAPI_KEY 필요 (openapi.krx.co.kr 가입 후 발급).
 
 krx_listings 테이블은 db.py의 init_db()에서 생성됩니다.
 """
 from __future__ import annotations
 
-import json
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Optional
 
 import asyncpg
-import httpx
 
 logger = logging.getLogger(__name__)
 
-KRX_API_URL = "https://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd"
-KRX_PAYLOAD = {
-    "bld": "dbms/MDC/STAT/standard/MDCSTAT01901",
-    "mktId": "ALL",
-    "share": "1",
-    "money": "1",
-    "csvxls_isNo": "false",
-}
-
-# KOSPI와 KOSDAQ만 yfinance로 조회 가능. KONEX 등은 심볼이 없으므로 제외.
 SUPPORTED_MARKETS: frozenset[str] = frozenset({"KOSPI", "KOSDAQ"})
 
 UPSERT_SQL = """
@@ -112,58 +101,60 @@ def _row_to_params(item: dict[str, Any]) -> Optional[tuple]:
 
 
 async def sync_krx_listings(pool: asyncpg.Pool) -> int:
-    """
-    data.krx.co.kr에서 전체 종목 리스트를 가져와 krx_listings에 upsert.
-    반환값: upsert된 행 수. 오류 시 예외 발생.
+    """KRX Open API에서 전체 종목 리스트를 가져와 krx_listings에 upsert.
 
+    data.krx.co.kr scraping 대신 공식 REST API 사용.
+    반환값: upsert된 행 수.
     전제: init_db()가 먼저 호출되어 krx_listings 테이블이 생성돼 있어야 합니다.
     """
-    logger.info("[krx_sync] data.krx.co.kr 전체 종목 조회 시작 ...")
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(KRX_API_URL, data=KRX_PAYLOAD)
-        resp.raise_for_status()
-        # KRX는 EUC-KR 응답을 반환할 수 있음. 명시적으로 디코딩.
-        try:
-            data = json.loads(resp.content.decode("euc-kr"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            data = resp.json()  # UTF-8 fallback
+    from krx_openapi import KRXOpenAPIClient
 
-    rows_raw = data.get("OutBlock_1", [])
+    client = KRXOpenAPIClient()
+    # 오늘 또는 가장 최근 영업일 기준
+    bas_dd = (date.today() - timedelta(days=1)).strftime("%Y%m%d")
+
+    logger.info("[krx_sync] KRX Open API 종목 조회 시작 (%s) ...", bas_dd)
+
+    # KOSPI + KOSDAQ 동시 조회
+    rows_kospi  = client.get_kospi_tickers(bas_dd)
+    rows_kosdaq = client.get_kosdaq_tickers(bas_dd)
+
+    rows_raw = [
+        (row, "KOSPI",  ".KS") for row in rows_kospi
+    ] + [
+        (row, "KOSDAQ", ".KQ") for row in rows_kosdaq
+    ]
+
     if not rows_raw:
-        raise ValueError("[krx_sync] OutBlock_1이 비어 있음")
+        raise ValueError("[krx_sync] KRX Open API 응답 없음 — KRX_OPENAPI_KEY 확인")
 
-    # 총 건수 검증: 불일치 시 페이지네이션으로 인한 부분 응답으로 간주하고 중단
-    i_tot = data.get("iTotCnt")
-    if i_tot is not None and int(i_tot) != len(rows_raw):
-        raise ValueError(
-            f"[krx_sync] iTotCnt={i_tot}이지만 수신 {len(rows_raw)}행 "
-            "— 응답이 페이지네이션됐을 수 있음. upsert 중단."
-        )
+    params_list: list[tuple] = []
+    skipped = 0
 
-    params_list = [p for item in rows_raw if (p := _row_to_params(item)) is not None]
-    skipped = len(rows_raw) - len(params_list)
+    for row, market_raw, suffix in rows_raw:
+        p = _row_to_params_openapi(row, market_raw, suffix)
+        if p is None:
+            skipped += 1
+        else:
+            params_list.append(p)
+
     if skipped:
-        logger.debug("[krx_sync] %d행 건너뜀 (KONEX/미지원 시장 또는 필수 필드 누락)", skipped)
+        logger.debug("[krx_sync] %d행 건너뜀 (필수 필드 누락)", skipped)
 
     if not params_list:
         raise ValueError(
-            f"[krx_sync] 유효한 종목이 없음 (전체 {len(rows_raw)}행 필터링됨) "
-            "— upsert 중단"
+            f"[krx_sync] 유효한 종목이 없음 (전체 {len(rows_raw)}행 필터링됨)"
         )
 
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # sync_start_ts를 Postgres에서 가져와 clock skew 방지.
-            # Python 시계가 Postgres보다 앞서면 방금 upsert한 행이 삭제될 수 있음.
             sync_start_ts = await conn.fetchval("SELECT NOW()")
             await conn.executemany(UPSERT_SQL, params_list)
-            # 이번 sync에서 갱신되지 않은 행 = 상장폐지 종목 → 삭제
             deleted_status = await conn.execute(
                 "DELETE FROM krx_listings WHERE updated_at < $1",
                 sync_start_ts,
             )
             try:
-                # asyncpg execute() returns "DELETE N"
                 deleted_count = int(str(deleted_status).split()[-1])
             except (ValueError, IndexError):
                 deleted_count = 0
@@ -172,3 +163,33 @@ async def sync_krx_listings(pool: asyncpg.Pool) -> int:
 
     logger.info("[krx_sync] %d행 upsert 완료 (건너뜀 %d)", len(params_list), skipped)
     return len(params_list)
+
+
+def _row_to_params_openapi(
+    row: dict[str, Any], market: str, suffix: str
+) -> Optional[tuple]:
+    """KRX Open API 행 → krx_listings upsert 파라미터 튜플."""
+    isin  = row.get("ISU_CD", "").strip()
+    short = row.get("ISU_SRT_CD", "").strip().zfill(6)
+    name  = row.get("ISU_NM", "").strip()
+
+    if not isin or not short or not name:
+        return None
+
+    yf_symbol = f"{short}{suffix}"
+
+    return (
+        isin,
+        short,
+        name,
+        row.get("ISU_ABBRV", "").strip() or None,
+        row.get("ISU_ENG_NM", "").strip() or None,
+        _parse_listed_at(row.get("LIST_DD", "")),
+        market,
+        row.get("SECUGRP_NM", "").strip() or None,
+        row.get("SECT_TP_NM", "").strip() or None,
+        row.get("KIND_STKCERT_TP_NM", "").strip() or None,
+        row.get("PARVAL", "").strip() or None,
+        _parse_listed_shares(row.get("LIST_SHRS", "")),
+        yf_symbol,
+    )

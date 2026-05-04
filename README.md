@@ -78,6 +78,9 @@ telegram_bot.py       # 봇 명령어 처리
 telegram_notify.py    # 신호 알림 전송 + Ichimoku/Stage 비교 메시지
 volume_pattern.py     # 거래량 패턴 분석
 krx_sync.py           # KRX 전체 종목 DB 동기화 (KOSPI+KOSDAQ ~2500종목)
+krx_openapi.py        # KRX Open API REST 클라이언트 — OHLCV·종목마스터·지수 시세 (v0.7.1.0~)
+ohlcv_cache.py        # OHLCV DB 캐시 레이어 (psycopg2, daily_ohlcv 테이블) (v0.7.1.0~)
+krx_flow_sync.py      # 외국인·기관 순매수 파이프라인 → daily_flow 테이블 (v0.7.1.0~)
 ticker_cache.py       # 종목명→yfinance 심볼 인메모리 캐시 (startup 로드, 20:00 KST 갱신)
 batch_run.py          # 배치 OHLCV 내보내기 + 분석 스크립트
 test_backtest.py                   # pytest — 백테스팅 로직 (23개)
@@ -94,7 +97,7 @@ test_screener_telegram_regression_1.py  # pytest — 스크리너 텔레그램 �
 test_fundamental.py                # pytest — PER/PBR/EPS 펀더멘털 레이어 (41개)
 test_generate_html_report.py       # pytest — HTML 리포트 생성 (10개)
 test_stage_classifier.py           # pytest — 일봉 3단계 분류기 전 코드패스 (29개)
-test_backtest_engine.py            # pytest — 통합 백테스트 엔진 (60개 — Sharpe·MDD·cross filter·stage replay)
+test_backtest_engine.py            # pytest — 통합 백테스트 엔진 (65개 — Sharpe·MDD·cross filter·stage replay)
 ```
 
 ## 환경변수
@@ -115,6 +118,13 @@ TELEGRAM_CHAT_ID=your_chat_id
 
 # (선택) 여러 Chat ID 허용
 ALLOWED_CHAT_IDS=123456789,987654321
+
+# (선택) KRX OpenAPI — OHLCV 캐시·종목마스터 (openapi.krx.co.kr 가입 후 발급)
+KRX_OPENAPI_KEY=your_krx_openapi_key
+
+# (선택) KRX 포털 계정 — 수급 데이터 수집 (krx_flow_sync.py)
+KRX_ID=your_krx_id
+KRX_PW=your_krx_password
 ```
 
 ## 테스트 실행
@@ -138,7 +148,7 @@ pytest test_screener_telegram_regression_1.py -v  # 스크리너 텔레그램 �
 pytest test_fundamental.py -v                     # PER/PBR/EPS 펀더멘털 레이어 (41개)
 pytest test_generate_html_report.py -v            # HTML 리포트 생성 (10개)
 pytest test_stage_classifier.py -v               # 일봉 3단계 분류기 전 코드패스 (29개)
-pytest test_backtest_engine.py -v               # 통합 백테스트 엔진 (60개)
+pytest test_backtest_engine.py -v               # 통합 백테스트 엔진 (65개)
 ```
 
 ## 문서
@@ -150,4 +160,4 @@ pytest test_backtest_engine.py -v               # 통합 백테스트 엔진 (60
 
 ## 버전
 
-현재 버전: `0.7.0.0` — [CHANGELOG](CHANGELOG.md) 참고
+현재 버전: `0.7.1.0` — [CHANGELOG](CHANGELOG.md) 참고

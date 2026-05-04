@@ -17,6 +17,7 @@
 > v0.5.0.0부터 스크리너 우선 아키텍처가 적용되었습니다. 뉴스 신호는 해당 주 주봉 스크리너 통과 종목에만 텔레그램 알림이 발송됩니다. 스크리너 백테스트 엔진(`chart_backtest.py`), Stage 2 필터 프리셋(`screener_filters.py`), `daily_flow` DB 테이블이 추가되었습니다.
 > v0.6.0.0부터 일봉 3단계 분류기(`stage_classifier.py`)가 추가되었습니다. 매일 16:30 KST에 KOSPI + KOSDAQ 전 종목을 Stage 1(랠리 초입) / Stage 2(중간 조정) / Stage 3(과열 재가속)으로 분류하고 `stage_classifications` 테이블에 저장합니다. 주봉 Ichimoku 결과와 교차 비교한 결과를 텔레그램으로 자동 발송합니다.
 > v0.7.0.0부터 통합 백테스트 엔진(`backtest_engine.py`)이 추가되었습니다. 이치모쿠(주봉) / 3단계 Stage 1(일봉) / 교차(두 신호 동일 주 발동) 3개 모드로 과거 구간 백테스트를 실행합니다. 지표: 승률(7d/28d/91d), 평균·중앙값 수익률, KOSPI 초과수익률, 샤프비율(연환산), MDD. KRX 왕복 거래비용(기본 0.21%) 반영. `/backtest2 ichimoku 2025-01-01 2026-01-01` 텔레그램 명령어로 온디맨드 실행 가능.
+> v0.7.1.0부터 데이터 인프라 레이어가 추가되었습니다. **KRX OpenAPI 클라이언트**(`krx_openapi.py`): `data-dbg.krx.co.kr` 공식 REST API로 종목 마스터·OHLCV·지수 시세 수집(Bearer 토큰). **OHLCV DB 캐시**(`ohlcv_cache.py`): psycopg2 기반 캐시 레이어, yfinance 반복 다운로드 감소. **수급 데이터 파이프라인**(`krx_flow_sync.py`): `data.krx.co.kr`에서 외국인·기관 순매수 이력을 `daily_flow` 테이블에 적재, 백테스트 조건 5(외국인·기관 순매수 > 0) 연결. 샤프비율 7d·91d 추가(`sharpe_7d`·`sharpe_91d`). 단위 테스트 총 65개.
 
 ---
 
@@ -531,6 +532,9 @@ test_feed/
 ├── telegram_notify.py             # 신호 알림 전송 + Ichimoku/Stage 비교 메시지
 ├── volume_pattern.py              # 거래량 패턴 분석
 ├── krx_sync.py                    # KRX 전체 종목 DB 동기화 (KOSPI+KOSDAQ ~2500종목)
+├── krx_openapi.py                 # KRX Open API REST 클라이언트 — OHLCV·종목마스터·지수 (v0.7.1.0~)
+├── ohlcv_cache.py                 # OHLCV DB 캐시 레이어 (psycopg2, daily_ohlcv 테이블) (v0.7.1.0~)
+├── krx_flow_sync.py               # 외국인·기관 순매수 파이프라인 → daily_flow 테이블 (v0.7.1.0~)
 ├── ticker_cache.py                # 종목명→yfinance 심볼 인메모리 캐시 (startup 로드, 20:00 KST 갱신)
 │
 ├── batch_run.py                   # 배치 OHLCV 내보내기 + 분석 스크립트
@@ -548,7 +552,7 @@ test_feed/
 ├── test_fundamental.py            # pytest — PER/PBR/EPS 펀더멘털 레이어 (41개)
 ├── test_generate_html_report.py   # pytest — HTML 리포트 생성 (10개)
 ├── test_stage_classifier.py       # pytest — 일봉 3단계 분류기 전 코드패스 (29개)
-├── test_backtest_engine.py        # pytest — 통합 백테스트 엔진 (60개)
+├── test_backtest_engine.py        # pytest — 통합 백테스트 엔진 (65개)
 │
 ├── VERSION                        # 현재 버전 (SemVer 4자리)
 ├── CHANGELOG.md                   # 변경 이력
@@ -576,7 +580,9 @@ test_feed/
 | LLM 추론 | Ollama (로컬) | Qwen3.5-9B — 요약·신호 감지 |
 | LLM fallback | LM Studio (로컬) | Qwen3-8B — Ollama 미실행 시 |
 | 시세 조회 | yfinance | 한국·미국·지수·원자재 전 세계 |
-| DB | asyncpg + PostgreSQL | 기사·신호 저장, 비동기 커넥션 풀 |
+| KRX 데이터 | KRX Open API (REST) | 종목마스터·OHLCV·지수 시세 (Bearer 토큰) |
+| DB (비동기) | asyncpg + PostgreSQL | 기사·신호 저장, 비동기 커넥션 풀 |
+| DB (동기) | psycopg2 + PostgreSQL | OHLCV 캐시·수급 데이터 (백테스트 동기 경로) |
 | 알림 | httpx (Telegram Bot API) | MarkdownV2 포맷 메시지 |
 | 환경변수 | python-dotenv | API 키·DB 정보 관리 |
 | 로깅 | Python logging | 수집·요약·신호·에러 로그 |
@@ -601,6 +607,13 @@ DATABASE_URL=postgresql://news_user:password@localhost:5432/news_db
 # Telegram
 TELEGRAM_TOKEN=your_bot_token
 TELEGRAM_CHAT_ID=your_chat_id
+
+# KRX OpenAPI — OHLCV·종목마스터·지수 (openapi.krx.co.kr 가입 후 발급)
+KRX_OPENAPI_KEY=your_krx_openapi_key
+
+# KRX 포털 계정 — 수급 데이터 (data.krx.co.kr, krx_flow_sync.py)
+KRX_ID=your_krx_id
+KRX_PW=your_krx_password
 ```
 
 ### 6-2. 로컬 LLM 실행
@@ -685,4 +698,4 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 
 ---
 
-*현재 코드베이스 v0.7.0.0 (2026-04-27) 기준*
+*현재 코드베이스 v0.7.1.0 (2026-05-05) 기준*

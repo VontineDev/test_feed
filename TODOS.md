@@ -4,6 +4,19 @@ Items deferred from code review and planning sessions.
 
 ---
 
+## P4: Move compare_tx_amt.py → scripts/compare_tx_amt.py (v0.7.0.0)
+
+**What:** `compare_tx_amt.py` is a dev validation script (Naver 거래대금 vs yfinance Vol×Close 오차 검증). It lives in the project root alongside production modules.
+
+**Why:** Avoids confusion between production code and dev tooling. The root should contain only production-runnable modules.
+
+**How to apply:** `git mv compare_tx_amt.py scripts/compare_tx_amt.py`. Create `scripts/` if it doesn't exist. No imports reference `compare_tx_amt.py` directly.
+
+**Effort:** XS (human: ~2 min / CC: ~1 min)
+**Priority:** P4
+
+---
+
 ## P4: Rename test_feeds.py → scripts/check_feeds.py (QA-2026-04-18)
 
 **What:** `test_feeds.py` is a standalone RSS feed connectivity script, not a pytest test file. Rename to `scripts/check_feeds.py` (or just `check_feeds.py`) and update any references.

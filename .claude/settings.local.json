@@ -3,7 +3,35 @@
     "allow": [
       "Skill(office-hours)",
       "Bash(python *)",
-      "Bash(pip install *)"
+      "Bash(pip install *)",
+      "WebFetch(domain:api.anthropic.com)",
+      "Bash(git add *)",
+      "Bash(git commit -m 'chore: rename test_feeds.py → scripts/check_feeds.py *)",
+      "Bash(git commit -m 'feat: sparklines and sector-grouped view in HTML screener report \\(v0.4.2.0\\) *)",
+      "Bash(git commit -m 'feat: ticker resolution miss diagnostics \\(v0.4.2.0\\) *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(touch ~/.claude/skills/gstack/.feature-prompted-model-overlay)",
+      "Read(//c/Users/1/.gstack/projects/VontineDev-test_feed/**)",
+      "Bash(rtk grep *)",
+      "Bash(rtk pytest *)",
+      "Bash(venv/Scripts/python.exe -m pytest test_news_gating.py test_chart_screener.py::TestSaveChartSignalsColumns -v --tb=short)",
+      "Bash(venv/Scripts/python.exe -m pytest test_screener_telegram_regression_1.py test_screener_telegram_regression_2.py test_screener_filters.py test_screener_cmd.py -v --tb=short)",
+      "Bash(venv/Scripts/python.exe -m pytest test_chart_screener.py -v --tb=short)",
+      "Bash(git checkout *)",
+      "Bash(rtk git *)",
+      "Bash(rtk gh *)",
+      "Skill(review)",
+      "Bash(~/.claude/skills/gstack/bin/gstack-config get *)",
+      "Bash(rtk ls *)",
+      "Bash(~/.claude/skills/gstack/bin/gstack-learnings-search *)",
+      "Bash(venv/Scripts/python.exe -m pytest test_stage_classifier.py -v --tb=short -q)",
+      "Bash(venv/Scripts/python.exe -m pytest -x --tb=short -q)",
+      "Bash('~/.claude/skills/gstack/bin/gstack-review-log' '{\"skill\":\"review\",\"timestamp\":\"__TRACKED_VAR__\",\"status\":\"issues_found\",\"issues_found\":0,\"critical\":0,\"informational\":0,\"quality_score\":8.5,\"specialists\":{\"testing\":{\"dispatched\":true,\"findings\":6,\"critical\":4,\"informational\":2},\"maintainability\":{\"dispatched\":true,\"findings\":4,\"critical\":0,\"informational\":4},\"security\":{\"dispatched\":false,\"reason\":\"scope\"},\"performance\":{\"dispatched\":false,\"reason\":\"scope\"}},\"findings\":[{\"fingerprint\":\"stage_classifier.py:101:maintainability\",\"severity\":\"INFORMATIONAL\",\"action\":\"auto-fixed\"},{\"fingerprint\":\"run_scheduler.py:838:maintainability\",\"severity\":\"INFORMATIONAL\",\"action\":\"auto-fixed\"},{\"fingerprint\":\"run_scheduler.py:776:maintainability\",\"severity\":\"INFORMATIONAL\",\"action\":\"auto-fixed\"},{\"fingerprint\":\"db.py:281:maintainability\",\"severity\":\"INFORMATIONAL\",\"action\":\"auto-fixed\"},{\"fingerprint\":\"run_scheduler.py:982:critical\",\"severity\":\"CRITICAL\",\"action\":\"auto-fixed\"},{\"fingerprint\":\"stage_classifier.py:254:informational\",\"severity\":\"INFORMATIONAL\",\"action\":\"auto-fixed\"},{\"fingerprint\":\"db.py:984:informational\",\"severity\":\"INFORMATIONAL\",\"action\":\"fixed\"},{\"fingerprint\":\"test_stage_classifier.py:268:testing\",\"severity\":\"INFORMATIONAL\",\"action\":\"fixed\"},{\"fingerprint\":\"stage_classifier.py:203:informational\",\"severity\":\"INFORMATIONAL\",\"action\":\"skipped\"}],\"commit\":\"__TRACKED_VAR__\"}')",
+      "Bash(~/.claude/skills/gstack/bin/gstack-learnings-log '{\"skill\":\"review\",\"type\":\"pitfall\",\"key\":\"apscheduler-cron-weekday-filter\",\"insight\":\"CronTrigger without day_of_week fires on weekends. Korean market job at 16:30 KST must use day_of_week=mon-fri. daily_volume_report had it right; daily_stage_classifier missed it.\",\"confidence\":10,\"source\":\"observed\",\"files\":[\"run_scheduler.py\"]}')",
+      "Bash(~/.claude/skills/gstack/bin/gstack-learnings-log '{\"skill\":\"review\",\"type\":\"pitfall\",\"key\":\"priority-test-tautology\",\"insight\":\"classify_stage\\(\\) always returns None|1|2|3 so assert result in \\(None,1,2,3\\) is always True. Priority ordering tests must assert specific expected stage, with fixture data that actually satisfies both competing conditions simultaneously.\",\"confidence\":10,\"source\":\"observed\",\"files\":[\"test_stage_classifier.py\"]}')",
+      "Bash(~/.claude/skills/gstack/bin/gstack-learnings-log '{\"skill\":\"review\",\"type\":\"pitfall\",\"key\":\"iloc-off-by-one-vol-avg\",\"insight\":\"iloc[-N:-1] gives N-1 elements, not N. For a 20-day average excluding today use iloc[-21:-1]. check_peakout used [-20:-1] \\(19 days\\) while _check_stage1 correctly used [-21:-1] \\(20 days\\).\",\"confidence\":10,\"source\":\"observed\",\"files\":[\"stage_classifier.py\"]}')",
+      "Bash(rtk read *)"
     ]
   }
 }

@@ -266,6 +266,133 @@ async def _handle_backtest(http: httpx.AsyncClient, chat_id: str, pool) -> None:
     await _send(http, chat_id, report)
 
 
+# /backtest2 중복 실행 방지 락
+_backtest2_lock: asyncio.Lock = asyncio.Lock()
+
+
+async def _handle_backtest2(
+    http: httpx.AsyncClient, chat_id: str, args: list[str]
+) -> None:
+    """/backtest2 <mode> <start> <end> [market] [--max N] [--tx-cost F]
+
+    예:
+      /backtest2 ichimoku 2025-01-01 2026-01-01
+      /backtest2 stage    2025-01-01 2026-01-01 KOSDAQ
+      /backtest2 cross    2025-01-01 2026-01-01 ALL --max 50
+    """
+    if _backtest2_lock.locked():
+        await _send_plain(http, chat_id,
+            "⏳ 백테스트가 이미 실행 중입니다. 완료 후 결과가 전송됩니다.")
+        return
+
+    # ── 인수 파싱 ──────────────────────────────────────────────
+    USAGE = (
+        "사용법: /backtest2 <mode> <start> <end> [market] [--max N] [--tx-cost F]\n"
+        "  mode   : ichimoku | stage | cross\n"
+        "  start  : YYYY-MM-DD\n"
+        "  end    : YYYY-MM-DD\n"
+        "  market : KOSPI | KOSDAQ | ALL (기본: ALL)\n"
+        "  --max N      : 최대 티커 수 (기본 200, 0=전종목)\n"
+        "  --tx-cost F  : 왕복 거래비용 (기본: KRX 실비 ~0.0021)\n\n"
+        "예) /backtest2 ichimoku 2025-01-01 2026-01-01\n"
+        "    /backtest2 stage 2025-01-01 2026-01-01 KOSDAQ --max 100"
+    )
+
+    if len(args) < 3:
+        await _send_plain(http, chat_id, USAGE)
+        return
+
+    mode  = args[0].lower()
+    start_str = args[1]
+    end_str   = args[2]
+
+    if mode not in ("ichimoku", "stage", "cross"):
+        await _send_plain(http, chat_id, f"mode는 ichimoku|stage|cross 중 하나여야 합니다.\n\n{USAGE}")
+        return
+
+    from datetime import date as _date
+    try:
+        start = _date.fromisoformat(start_str)
+        end   = _date.fromisoformat(end_str)
+    except ValueError:
+        await _send_plain(http, chat_id, f"날짜 형식 오류 (YYYY-MM-DD): {start_str}, {end_str}")
+        return
+
+    if start >= end:
+        await _send_plain(http, chat_id, "start는 end보다 이전이어야 합니다.")
+        return
+
+    if (end - start).days > 10 * 365:
+        await _send_plain(http, chat_id, "백테스트 기간은 최대 10년입니다.")
+        return
+
+    # 선택적 인수 파싱
+    remaining = args[3:]
+    market    = "ALL"
+    max_tickers = 200
+    tx_cost   = None
+
+    i = 0
+    while i < len(remaining):
+        tok = remaining[i]
+        if tok.upper() in ("KOSPI", "KOSDAQ", "ALL"):
+            market = tok.upper()
+        elif tok == "--max" and i + 1 < len(remaining):
+            try:
+                max_tickers = int(remaining[i + 1])
+                i += 1
+            except ValueError:
+                pass
+        elif tok == "--tx-cost" and i + 1 < len(remaining):
+            try:
+                v = float(remaining[i + 1])
+                tx_cost = max(0.0, min(v, 0.10))  # 0% ~ 10% 범위 강제
+                i += 1
+            except ValueError:
+                pass
+        i += 1
+
+    from backtest_engine import BacktestConfig, TX_COST_DEFAULT, MODE_KOR, run_backtest
+
+    try:
+        from db import get_dsn as _get_dsn
+        _dsn: str | None = _get_dsn()
+    except Exception:
+        _dsn = None
+
+    config = BacktestConfig(
+        mode=mode,
+        start=start,
+        end=end,
+        market=market,
+        tx_cost_rt=tx_cost if tx_cost is not None else TX_COST_DEFAULT,
+        max_tickers=max_tickers,
+        dsn=_dsn,
+    )
+
+    mode_kor = MODE_KOR.get(mode, mode)
+    eta_min  = max(2, max_tickers // 50) if max_tickers > 0 else 20
+    await _send_plain(http, chat_id,
+        f"📊 백테스트 시작 — {mode_kor}\n"
+        f"📅 {start} ~ {end}  {market}  티커 최대 {max_tickers or '전종목'}개\n"
+        f"⏳ 예상 소요: {eta_min}~{eta_min * 3}분 (데이터 다운로드 포함)\n"
+        "완료되면 결과를 전송합니다."
+    )
+
+    async with _backtest2_lock:
+        try:
+            loop   = asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, run_backtest, config)
+            report = result.to_telegram_report()
+            # Telegram 4096자 제한 처리
+            if len(report) > 4090:
+                report = report[:4087] + "..."
+            await _send_plain(http, chat_id, report)
+        except Exception as e:
+            logger.warning("[봇/backtest2] 실행 실패: %s", e)
+            await _send_plain(http, chat_id, f"백테스트 실행 중 오류: {e}")
+
+
 async def _handle_volume(http: httpx.AsyncClient, chat_id: str, args: list[str]) -> None:
     """/volume <종목명|티커> — 시간대별 거래량 패턴 분석"""
     import functools
@@ -386,6 +513,9 @@ async def _handle_help(http: httpx.AsyncClient, chat_id: str) -> None:
         "/signals watch — WATCH 신호만 조회",
         "/today — 오늘 수집 현황 \\+ 최신 기사",
         "/backtest — 교차분석 백테스팅 리포트",
+        "/backtest2 \\<mode\\> \\<start\\> \\<end\\> — 통합 백테스트 \\(이치모쿠/3단계/교차\\)",
+        "  예\\) /backtest2 ichimoku 2025\\-01\\-01 2026\\-01\\-01",
+        "  모드\\: ichimoku \\| stage \\| cross",
         "/volume \\<종목명\\|티커\\> — 시간대별 거래량 패턴 분석",
         "/screener — 최신 주봉 차트 스크리닝 결과 \\(DB 조회\\)",
         "/scan — 주봉 스크리닝 즉시 실행 \\(전 종목 실시간 스캔, 약 10\\~20분\\)",
@@ -441,6 +571,8 @@ async def _process_update(http: httpx.AsyncClient, update: dict, pool) -> None:
         await _handle_today(http, chat_id, pool)
     elif cmd == "/backtest":
         await _handle_backtest(http, chat_id, pool)
+    elif cmd == "/backtest2":
+        await _handle_backtest2(http, chat_id, args)
     elif cmd == "/volume":
         await _handle_volume(http, chat_id, args)
     elif cmd == "/screener":
@@ -463,8 +595,9 @@ async def _register_commands(http: httpx.AsyncClient) -> None:
         {"command": "status",   "description": "크롤러 상태 (업타임, 수집 건수)"},
         {"command": "signals",  "description": "최근 매매 신호 10건"},
         {"command": "today",    "description": "오늘 수집 현황 + 최신 기사"},
-        {"command": "backtest", "description": "교차분석 백테스팅 리포트"},
-        {"command": "volume",   "description": "시간대별 거래량 패턴 분석"},
+        {"command": "backtest",  "description": "교차분석 백테스팅 리포트"},
+        {"command": "backtest2", "description": "통합 백테스트 (이치모쿠/3단계/교차) — /backtest2 ichimoku 2025-01-01 2026-01-01"},
+        {"command": "volume",    "description": "시간대별 거래량 패턴 분석"},
         {"command": "screener", "description": "최신 주봉 차트 스크리닝 결과 (DB 조회)"},
         {"command": "scan",     "description": "주봉 스크리닝 즉시 실행 (전 종목 실시간 스캔)"},
         {"command": "help",     "description": "명령어 목록"},
