@@ -116,19 +116,43 @@ def fetch_kind_sector_map() -> dict[str, str]:
 
 # ── 티커 목록 ──────────────────────────────────────────────────
 def get_all_tickers(sector_map: dict[str, str] | None = None) -> list[tuple[str, str, str]]:
-    """
-    FinanceDataReader에서 KOSPI + KOSDAQ 전 종목 티커 조회.
+    """KOSPI + KOSDAQ 전 종목 티커 조회.
+
+    1순위: KRX Open API (KRX_OPENAPI_KEY 환경변수 설정 시)
+    2순위: FinanceDataReader (fallback)
+
     반환: [(yfinance_symbol, name, sector), ...]
     예: [('005930.KS', '삼성전자', '전자부품'), ('035720.KQ', '카카오', '소프트웨어'), ...]
     """
+    from datetime import date as _date
+
+    # 1순위: KRX Open API
+    import os
+    if os.environ.get("KRX_OPENAPI_KEY"):
+        try:
+            from krx_openapi import KRXOpenAPIClient
+            bas_dd = (_date.today() - _date.resolution).strftime("%Y%m%d")
+            client = KRXOpenAPIClient()
+            tickers = client.get_all_tickers(bas_dd)
+            # sector 정보는 KRX Open API에 없음 — sector_map으로 보완
+            results = [
+                (sym, name, (sector_map or {}).get(sym.split(".")[0], ""))
+                for sym, name, _ in tickers
+            ]
+            if results:
+                logger.info("[스크리너] KRX Open API 종목 %d개 로드", len(results))
+                return results
+        except Exception as e:
+            logger.warning("[스크리너] KRX Open API 조회 실패, FDR 폴백: %s", e)
+
+    # 2순위: FinanceDataReader
     try:
         import FinanceDataReader as fdr
     except ImportError:
         logger.error("[스크리너] finance-datareader 미설치 — pip install finance-datareader")
         return []
 
-    results: list[tuple[str, str, str]] = []
-
+    results = []
     for market, suffix in [("KOSPI", ".KS"), ("KOSDAQ", ".KQ")]:
         try:
             df = fdr.StockListing(market)
@@ -141,7 +165,7 @@ def get_all_tickers(sector_map: dict[str, str] | None = None) -> list[tuple[str,
         except Exception as e:
             logger.warning("[스크리너] %s 티커 목록 조회 실패: %s", market, e)
 
-    logger.info("[스크리너] 전체 종목 %d개", len(results))
+    logger.info("[스크리너] 전체 종목 %d개 (FinanceDataReader)", len(results))
     return results
 
 
