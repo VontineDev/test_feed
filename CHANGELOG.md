@@ -10,23 +10,17 @@ All notable changes to this project will be documented in this file.
 - **수급 데이터 파이프라인** (`krx_flow_sync.py`): data.krx.co.kr에서 외국인·기관 순매수 이력을 `daily_flow` 테이블에 적재. krx-direct / pykrx / CSV 백엔드 지원. KRX 계정(KRX_ID/KRX_PW) 필요.
 - **백테스트 조건 5 수급 연결** (`backtest_engine.py`): `BacktestConfig.dsn` 설정 시 `daily_flow`에서 수급 데이터 사전 로드 후 `_replay_stage()` 조건 5(외국인·기관 순매수 > 0)에 적용. DSN 없으면 수급 조건 자동 생략(하위 호환).
 - **`run_backtest.py` DSN 플래그**: `--dsn` CLI 옵션 추가. 미설정 시 `DATABASE_URL` 환경변수 자동 로드.
+- **샤프비율 7d·91d 추가** (`backtest_engine.py`): 기존 28d 연환산 샤프비율에 더해 7일·91일 보유 기준 샤프비율(`sharpe_7d`, `sharpe_91d`)도 함께 산출.
+- **`_replay_ichimoku` 단위 테스트** (`test_backtest_engine.py`): 데이터 부족·횡보·기간 외·구름 돌파·연속 신호 방지 5개 케이스 추가. 총 65개.
 
 ### Changed
 - **`krx_sync.py` KRX OpenAPI 전환**: 기존 data.krx.co.kr HTTP 스크래핑을 KRX 공식 REST API로 대체. 스크래핑 없이 `ISU_CD`, `ISU_NM` 등 정식 필드 사용.
 - **`chart_screener.py` 종목 조회 1순위**: `KRX_OPENAPI_KEY` 설정 시 KRX OpenAPI가 FinanceDataReader보다 먼저 사용됨.
+- **`MODE_KOR` 상수 분리** (`backtest_engine.py`): 모드별 한국어 표시 문자열을 모듈 수준 상수로 추출. 리포트 메서드와 텔레그램 봇에서 재사용.
 
 ### Fixed
 - **`.env.example` 키 이름**: `KRX_API_KEY` → `KRX_OPENAPI_KEY` (코드와 불일치 수정).
 - **`backtest_engine.py:723` 빈 dict 판정**: `if flow_lookup:` → `if flow_lookup is not None:` (수급 데이터 0건일 때 note 문구 오표시 수정).
-
-## [0.7.1.0] - 2026-05-02
-
-### Added
-- **샤프비율 7d·91d 추가** (`backtest_engine.py`): 기존 28d 연환산 샤프비율에 더해 7일·91일 보유 기준 샤프비율(`sharpe_7d`, `sharpe_91d`)도 함께 산출. 수익률 기간(7d/28d/91d)과 샤프비율 기간이 일치해 지표 일관성 확보.
-- **`_replay_ichimoku` 단위 테스트** (`test_backtest_engine.py`): 데이터 부족(< 62주), 횡보 가격(신호 없음), 기간 외(신호 없음), 구름 돌파 신호 감지, 연속 신호 방지(Condition B) 5개 케이스 추가. 네트워크 없이 합성 데이터로 실행.
-
-### Changed
-- **`MODE_KOR` 상수 분리** (`backtest_engine.py`): 모드별 한국어 표시 문자열(`이치모쿠(주봉)` 등)을 모듈 수준 상수 `MODE_KOR`로 추출. `BacktestResult` 리포트 메서드 2곳·텔레그램 봇 1곳에서 재사용.
 
 ### Technical
 - `backtest_engine.py`, `run_backtest.py`, `test_backtest_engine.py` 코드베이스 실제 반영 (v0.7.0.0은 설계 문서 선반영 버전).
