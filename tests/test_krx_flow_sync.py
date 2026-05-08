@@ -309,10 +309,8 @@ class TestFetchRaw:
 
 class TestFetchRecords:
     def _rows(self, date_str: str, foreign: str, inst: str) -> list[dict]:
-        return [
-            {"TDD_STR_DD": date_str, "INVST_TP_NM": "외국인합계", "NETBID_TRDVOL": foreign},
-            {"TDD_STR_DD": date_str, "INVST_TP_NM": "기관합계",   "NETBID_TRDVOL": inst},
-        ]
+        # 신API 포맷: 날짜당 1행, TRDVAL1=외국인합계, TRDVAL2=기관합계
+        return [{"TRD_DD": date_str, "TRDVAL1": foreign, "TRDVAL2": inst}]
 
     def test_parses_foreign_and_inst(self):
         fetcher = _bare_fetcher()
@@ -349,12 +347,9 @@ class TestFetchRecords:
         assert records == []
 
     def test_alternative_date_key_trd_dd(self):
-        """fetch_records handles TRD_DD as fallback date field."""
+        """fetch_records handles slash-formatted TRD_DD from KRX API."""
         fetcher = _bare_fetcher()
-        rows = [
-            {"TRD_DD": "20250103", "INVST_TP_NM": "외국인합계", "NETBID_TRDVOL": "300"},
-            {"TRD_DD": "20250103", "INVST_TP_NM": "기관합계",   "NETBID_TRDVOL": "100"},
-        ]
+        rows = [{"TRD_DD": "2025/01/03", "TRDVAL1": "300", "TRDVAL2": "100"}]
         with patch.object(fetcher, "fetch_raw", return_value=rows):
             records = fetcher.fetch_records(
                 "005930.KS", date(2025, 1, 1), date(2025, 1, 5),
@@ -383,7 +378,7 @@ class TestFetchRecords:
         fetcher = _bare_fetcher()
         captured = {}
 
-        def capture(krx_code, start, end):
+        def capture(krx_code, start, end, isuCd):
             captured["krx_code"] = krx_code
             return []
 

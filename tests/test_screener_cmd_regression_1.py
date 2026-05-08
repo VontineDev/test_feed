@@ -11,7 +11,7 @@ import pathlib
 
 def test_screener_cmd_has_main_guard():
     """Importing test_screener_cmd must not trigger asyncio.run at module level."""
-    src = pathlib.Path("test_screener_cmd.py").read_text(encoding="utf-8")
+    src = (pathlib.Path(__file__).parent / "test_screener_cmd.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
 
     # Collect all top-level Call nodes — asyncio.run() at module level would appear here
