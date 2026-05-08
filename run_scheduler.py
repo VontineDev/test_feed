@@ -1159,41 +1159,6 @@ async def main(interval: int, enable_summary: bool) -> None:
         except Exception as _html_e:
             logger.warning("[차트스크리너] HTML 생성 실패 (비중요): %s", _html_e)
 
-        try:
-            from chart_backtest import incremental_update, fetch_kospi_weekly, build_summary, save_summary_json, load_signals_json, BACKTEST_DIR
-            from generate_backtest_html import generate_backtest_html
-            from pathlib import Path as _Path
-
-            # 미확정 결과가 있는 신호의 ticker만 OHLCV 재조회 (이번 주 통과 여부 무관)
-            from chart_screener import fetch_weekly_ohlcv as _fwohlcv
-            _pending = load_signals_json()
-            _pending_tickers = {
-                s.ticker for s in _pending
-                if s.return_1w is None or s.return_4w is None or s.return_13w is None
-            }
-            def _fetch_pending_ohlcv():
-                m = {}
-                for t in _pending_tickers:
-                    df = _fwohlcv(t)
-                    if df is not None:
-                        m[t] = df
-                return m
-            _ohlcv_map = await loop.run_in_executor(None, _fetch_pending_ohlcv)
-
-            _kospi_df = await loop.run_in_executor(None, fetch_kospi_weekly)
-            await loop.run_in_executor(None, incremental_update, _ohlcv_map, _kospi_df)
-
-            _signals = load_signals_json()
-            if _signals:
-                _summary = build_summary(_signals)
-                save_summary_json(_summary)
-                _bt_dir = _Path(str(BACKTEST_DIR))
-                _bt_dir.mkdir(parents=True, exist_ok=True)
-                _bt_html = generate_backtest_html(_summary)
-                (_bt_dir / "chart_backtest_latest.html").write_text(_bt_html, encoding="utf-8")
-                logger.info("[백테스트] 증분 업데이트 완료 — HTML 재생성")
-        except Exception as _bt_e:
-            logger.warning("[백테스트] 증분 업데이트 실패 (비중요): %s", _bt_e)
 
     scheduler.add_job(
         _weekly_screener_job,

@@ -62,7 +62,6 @@ RSS 피드 수집 → 기사 본문 크롤링 → LLM 한글 요약
 
 ```
 run_scheduler.py      # 메인 실행 — RSS 루프 + 봇 병렬 실행 / --once watchlist|stage 지원
-run_backtest.py       # 백테스트 CLI — python run_backtest.py --mode ichimoku --start 2025-01-01
 article_fetcher.py    # 기사 본문 크롤링
 summarizer.py         # 로컬 LLM 한글 요약
 signal_detector.py    # LLM 매매 신호 감지
@@ -70,7 +69,6 @@ market_data.py        # yfinance 시세 조회 + 교차분석
 backtest.py           # 판정 정확도 추적 + 백테스팅 리포트
 backtest_engine.py    # 통합 백테스트 엔진 — ichimoku / stage / cross 3모드, Sharpe·MDD·거래비용
 chart_screener.py     # 주봉 차트 스크리너 (Ichimoku + MA, KOSPI/KOSDAQ 전종목)
-chart_backtest.py     # 차트 백테스트 (Ichimoku 누적 리포트)
 screener_filters.py   # 스크리너 필터 프리셋
 stage_classifier.py   # 일봉 3단계 분류기 — Stage 1/2/3 분류 + 피크아웃 신호
 batch_run.py          # 배치 OHLCV 내보내기 + 분석
@@ -125,13 +123,9 @@ KRX_PW=your_krx_password
 ## 테스트 실행
 
 ```bash
-# 전체 테스트
 pytest -v
-
-# 개별 파일
-pytest tests/test_backtest.py -v
-pytest tests/test_watchlist_brief.py -v
 pytest tests/test_backtest_engine.py -v
+pytest tests/test_watchlist_brief.py -v
 ```
 
 ## 문서
