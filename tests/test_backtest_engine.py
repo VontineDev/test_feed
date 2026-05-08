@@ -22,12 +22,14 @@ from backtest_engine import (
     _STOP_LOSS_PCT,
     _apply_cross_filter,
     _build_price_lookup,
+    _build_weekly_ichimoku,
     _compute_group_metrics,
     _compute_mdd,
     _compute_rsi,
     _compute_sell_signals_and_s2,
     _compute_sharpe,
     _fill_returns,
+    _find_ichimoku_sell,
     _nearest_price,
     _replay_ichimoku,
     _replay_stage,
@@ -1138,3 +1140,234 @@ class TestReplayIchimoku:
                 f"Consecutive signals {sigs[i-1].signal_date} → {sigs[i].signal_date} "
                 f"({gap} days apart) — condition B should prevent this"
             )
+
+
+# ── _build_weekly_ichimoku ────────────────────────────────────────
+
+def _make_daily_for_weekly(
+    n_days: int = 450,
+    price: float = 10_000.0,
+    start_date: date = date(2020, 1, 6),
+) -> pd.DataFrame:
+    """Flat daily OHLCV for weekly ichimoku tests."""
+    current = start_date
+    dates, opens, highs, lows, closes, vols = [], [], [], [], [], []
+    for _ in range(n_days):
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        dates.append(pd.Timestamp(current, tz="UTC"))
+        opens.append(price * 0.999); highs.append(price * 1.001)
+        lows.append(price * 0.999);  closes.append(price); vols.append(100_000)
+        current += timedelta(days=1)
+    return pd.DataFrame(
+        {"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": vols},
+        index=dates,
+    )
+
+
+class TestBuildWeeklyIchimoku:
+    def test_returns_dataframe_for_sufficient_data(self):
+        """≥ 62 weeks of daily data → returns DataFrame with expected columns."""
+        df = _make_daily_for_weekly(n_days=500)
+        weekly = _build_weekly_ichimoku(df)
+        assert weekly is not None
+        for col in ("cloud_top", "cloud_bottom", "tenkan", "kijun"):
+            assert col in weekly.columns, f"Missing column: {col}"
+
+    def test_returns_none_for_insufficient_data(self):
+        """< 62 weeks (< 434 days) → None."""
+        df = _make_daily_for_weekly(n_days=300)   # ≈ 43 weeks
+        result = _build_weekly_ichimoku(df)
+        assert result is None
+
+    def test_weekly_rows_are_fridays(self):
+        """W-FRI resample → all index timestamps are Friday."""
+        df = _make_daily_for_weekly(n_days=500)
+        weekly = _build_weekly_ichimoku(df)
+        assert weekly is not None
+        for ts in weekly.index:
+            d = ts.date() if hasattr(ts, "date") else ts
+            assert d.weekday() == 4, f"Expected Friday, got {d} (weekday={d.weekday()})"
+
+    def test_cloud_top_ge_cloud_bottom(self):
+        """cloud_top ≥ cloud_bottom for all valid rows."""
+        df = _make_daily_for_weekly(n_days=500)
+        weekly = _build_weekly_ichimoku(df)
+        assert weekly is not None
+        valid = weekly.dropna(subset=["cloud_top", "cloud_bottom"])
+        assert (valid["cloud_top"] >= valid["cloud_bottom"]).all()
+
+
+# ── _find_ichimoku_sell ───────────────────────────────────────────
+
+def _make_weekly_ichi_df(
+    n_weeks: int = 100,
+    price: float = 10_000.0,
+    start_date: date = date(2020, 1, 3),
+) -> pd.DataFrame:
+    """Minimal weekly DataFrame with ichimoku columns for sell tests.
+
+    All prices flat → cloud_top=cloud_bottom=price, tenkan=kijun=price.
+    """
+    # Find first Friday >= start_date
+    current = start_date
+    while current.weekday() != 4:
+        current += timedelta(days=1)
+
+    dates, closes, cloud_tops, cloud_bottoms, tenkans, kijuns = [], [], [], [], [], []
+    for _ in range(n_weeks):
+        dates.append(pd.Timestamp(current, tz="UTC"))
+        closes.append(price)
+        cloud_tops.append(price)
+        cloud_bottoms.append(price)
+        tenkans.append(price)
+        kijuns.append(price)
+        current += timedelta(weeks=1)
+
+    return pd.DataFrame(
+        {
+            "Close": closes,
+            "cloud_top": cloud_tops,
+            "cloud_bottom": cloud_bottoms,
+            "tenkan": tenkans,
+            "kijun": kijuns,
+        },
+        index=dates,
+    )
+
+
+class TestFindIchimokuSell:
+    def test_stop_loss_detected(self):
+        """Close ≤ entry × 0.92 → sell_reason contains '손절'."""
+        entry = 10_000.0
+        stop_price = entry * 0.92  # 9_200
+        signal_date = date(2020, 1, 10)  # a Friday
+
+        df = _make_weekly_ichi_df(n_weeks=80, price=entry)
+        # Override 3rd weekly bar after signal to be below stop
+        target_row = 3
+        after_signal = [i for i, ts in enumerate(df.index) if ts.date() > signal_date]
+        assert len(after_signal) >= target_row
+        idx = after_signal[target_row - 1]
+        df.iloc[idx, df.columns.get_loc("Close")] = stop_price - 100.0
+
+        sell_date, sell_reason, sell_ret, hold_days = _find_ichimoku_sell(
+            signal_date, entry, df, tx_cost_rt=0.0, stop_loss_pct=0.08,
+        )
+        assert sell_date is not None
+        assert "손절" in sell_reason
+        assert sell_ret is not None and sell_ret < 0
+
+    def test_cloud_breakdown_detected(self):
+        """Close < cloud_bottom → '구름 이탈' (stop loss not triggered)."""
+        entry = 10_000.0
+        signal_date = date(2020, 1, 10)
+
+        # Price slightly below cloud_bottom but above stop
+        df = _make_weekly_ichi_df(n_weeks=80, price=entry)
+        after_signal = [i for i, ts in enumerate(df.index) if ts.date() > signal_date]
+        idx = after_signal[1]  # 2nd bar after signal
+        close_below_cloud = entry * 0.95   # 9_500 — below cloud (10_000) but above stop (9_200)
+        df.iloc[idx, df.columns.get_loc("Close")] = close_below_cloud
+        # cloud_bottom stays at 10_000 (above close) → breakdown triggered
+
+        sell_date, sell_reason, sell_ret, hold_days = _find_ichimoku_sell(
+            signal_date, entry, df, tx_cost_rt=0.0, stop_loss_pct=0.08,
+        )
+        assert sell_date is not None
+        assert sell_reason == "구름 이탈"
+        assert hold_days > 0
+
+    def test_dead_cross_detected(self):
+        """tenkan crosses below kijun (prev: tenkan≥kijun, curr: tenkan<kijun) → '전환<기준 DC'."""
+        entry = 10_000.0
+        signal_date = date(2020, 1, 10)
+
+        df = _make_weekly_ichi_df(n_weeks=80, price=entry)
+        after_signal = [i for i, ts in enumerate(df.index) if ts.date() > signal_date]
+
+        # Bar 1: tenkan=kijun (prev equal → no DC yet)
+        # Bar 2: tenkan < kijun (DC fires) — close stays well above stop & cloud
+        idx1 = after_signal[0]
+        idx2 = after_signal[1]
+        df.iloc[idx1, df.columns.get_loc("tenkan")] = entry          # prev_tenkan == kijun
+        df.iloc[idx1, df.columns.get_loc("kijun")]  = entry
+        df.iloc[idx2, df.columns.get_loc("tenkan")] = entry * 0.97   # tenkan < kijun
+        df.iloc[idx2, df.columns.get_loc("kijun")]  = entry          # kijun stays
+        # Keep close > stop (entry * 0.92) and above cloud_bottom (entry)
+        # Close must NOT fall below cloud_bottom to avoid prior trigger
+        df.iloc[idx2, df.columns.get_loc("Close")]       = entry * 1.01  # above cloud
+        df.iloc[idx2, df.columns.get_loc("cloud_bottom")] = entry * 0.50  # lower cloud
+
+        sell_date, sell_reason, sell_ret, hold_days = _find_ichimoku_sell(
+            signal_date, entry, df, tx_cost_rt=0.0, stop_loss_pct=0.08,
+        )
+        assert sell_date is not None
+        assert sell_reason == "전환<기준 DC"
+
+    def test_stop_loss_priority_over_cloud_breakdown(self):
+        """Same bar: both stop loss and cloud breakdown → stop loss takes priority."""
+        entry = 10_000.0
+        signal_date = date(2020, 1, 10)
+
+        df = _make_weekly_ichi_df(n_weeks=80, price=entry)
+        after_signal = [i for i, ts in enumerate(df.index) if ts.date() > signal_date]
+        idx = after_signal[0]
+        below_stop = entry * 0.90  # < stop(9_200) AND < cloud_bottom(10_000)
+        df.iloc[idx, df.columns.get_loc("Close")] = below_stop
+
+        _, sell_reason, _, _ = _find_ichimoku_sell(
+            signal_date, entry, df, tx_cost_rt=0.0, stop_loss_pct=0.08,
+        )
+        assert "손절" in sell_reason
+
+    def test_no_signal_returns_holding(self):
+        """No sell condition ever met → (None, '보유 중', None, None)."""
+        entry = 10_000.0
+        signal_date = date(2020, 1, 10)
+        df = _make_weekly_ichi_df(n_weeks=20, price=entry)  # all flat above cloud
+
+        sell_date, sell_reason, sell_ret, hold_days = _find_ichimoku_sell(
+            signal_date, entry, df, tx_cost_rt=0.0, stop_loss_pct=0.08,
+        )
+        assert sell_date is None
+        assert sell_reason == "보유 중"
+        assert sell_ret is None
+        assert hold_days is None
+
+    def test_tx_cost_deducted(self):
+        """sell_return = (close/entry - 1) - tx_cost_rt."""
+        entry = 10_000.0
+        tx = 0.005
+        signal_date = date(2020, 1, 10)
+
+        df = _make_weekly_ichi_df(n_weeks=80, price=entry)
+        after_signal = [i for i, ts in enumerate(df.index) if ts.date() > signal_date]
+        idx = after_signal[0]
+        close_val = entry * 0.90  # triggers stop
+        df.iloc[idx, df.columns.get_loc("Close")] = close_val
+
+        _, _, sell_ret, _ = _find_ichimoku_sell(
+            signal_date, entry, df, tx_cost_rt=tx, stop_loss_pct=0.08,
+        )
+        expected = (close_val / entry - 1.0) - tx
+        assert sell_ret == pytest.approx(expected, abs=0.0001)
+
+    def test_bars_before_signal_date_are_skipped(self):
+        """signal_date bars are excluded — sell only triggers on strictly later bars."""
+        entry = 10_000.0
+        signal_date = date(2020, 1, 10)
+
+        df = _make_weekly_ichi_df(n_weeks=80, price=entry)
+        # Inject stop-loss price on the bar AT signal_date (should be skipped)
+        for i, ts in enumerate(df.index):
+            if ts.date() == signal_date:
+                df.iloc[i, df.columns.get_loc("Close")] = entry * 0.80
+                break
+
+        sell_date, sell_reason, _, _ = _find_ichimoku_sell(
+            signal_date, entry, df, tx_cost_rt=0.0, stop_loss_pct=0.08,
+        )
+        # The signal_date bar must have been skipped; no other bars trigger
+        assert sell_date is None
+        assert sell_reason == "보유 중"

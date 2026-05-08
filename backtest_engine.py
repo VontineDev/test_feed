@@ -346,7 +346,12 @@ class BacktestResult:
 
         _STAGE_LABEL = {"stage": ("S1", "s1"), "stage2": ("S2", "s2"),
                         "cross": ("교차", "cross"), "ichimoku": ("이치", "ichi")}
-        _SELL_CLS    = {"MA20 이탈": "sell-ma", "손절": "sell-sl"}
+        _SELL_CLS    = {
+            "MA20 이탈": "sell-ma",
+            "손절":      "sell-sl",
+            "구름 이탈": "sell-cloud",
+            "전환<기준": "sell-dc",
+        }
 
         def _mdd_td(v: Optional[float]) -> str:
             if v is None:
@@ -444,6 +449,7 @@ th:hover{{color:var(--accent)}} th.num,td.num{{text-align:right}}
 .s1{{color:#58a6ff;border-color:#58a6ff}} .s2{{color:#3fb950;border-color:#3fb950}}
 .cross{{color:#d29922;border-color:#d29922}} .ichi{{color:#a371f7;border-color:#a371f7}}
 .sell-ma{{color:#f85149;border-color:#f85149}} .sell-sl{{color:#b03060;border-color:#b03060}}
+.sell-cloud{{color:#79c0ff;border-color:#79c0ff}} .sell-dc{{color:#d29922;border-color:#d29922}}
 .tbl-wrap{{overflow-x:auto}}
 footer{{margin-top:24px;padding-top:12px;border-top:1px solid var(--border);color:var(--muted);font-size:11px}}
 </style>
@@ -594,6 +600,97 @@ def _compute_mdd(returns: list[float]) -> Optional[float]:
         if dd > max_dd:
             max_dd = dd
     return -max_dd
+
+
+def _build_weekly_ichimoku(daily_df: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """일봉 → 주봉 리샘플 후 이치모쿠 지표(구름+전환선+기준선) 계산.
+
+    반환 컬럼: cloud_top, cloud_bottom, tenkan(전환선), kijun(기준선).
+    데이터 부족(< 62주)이면 None.
+    """
+    from ta.trend import IchimokuIndicator
+
+    weekly = daily_df.resample("W-FRI", closed="right", label="right").agg({
+        "Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum",
+    }).dropna(subset=["Close"])
+    if len(weekly) < 62:
+        return None
+
+    ind = IchimokuIndicator(high=weekly["High"], low=weekly["Low"], visual=False)
+    weekly = weekly.copy()
+    weekly["senkou_a"]    = ind.ichimoku_a()
+    weekly["senkou_b"]    = ind.ichimoku_b()
+    weekly["cloud_top"]   = weekly[["senkou_a", "senkou_b"]].max(axis=1)
+    weekly["cloud_bottom"]= weekly[["senkou_a", "senkou_b"]].min(axis=1)
+    weekly["tenkan"]      = ind.ichimoku_conversion_line()  # 전환선
+    weekly["kijun"]       = ind.ichimoku_base_line()        # 기준선
+    return weekly
+
+
+def _find_ichimoku_sell(
+    signal_date: date,
+    entry_price: float,
+    weekly_df: pd.DataFrame,
+    tx_cost_rt: float,
+    stop_loss_pct: float,
+) -> tuple[Optional[date], str, Optional[float], Optional[int]]:
+    """주봉 이치모쿠 기반 매도 신호 탐지.
+
+    우선순위 (먼저 발생한 조건 채택):
+      1. 손절: 주봉 종가 ≤ 진입가 × (1 − stop_loss_pct)
+      2. 구름 이탈: 주봉 종가 < cloud_bottom (구름 하향 이탈)
+      3. 데드크로스: 전환선이 기준선 아래로 하향 돌파
+
+    반환: (sell_date, sell_reason, sell_return, hold_days)
+    """
+    stop_price   = entry_price * (1 - stop_loss_pct)
+    prev_tenkan: Optional[float] = None
+    prev_kijun:  Optional[float] = None
+
+    for i in range(len(weekly_df)):
+        ts       = weekly_df.index[i]
+        row_date = ts.date() if hasattr(ts, "date") else ts
+        row      = weekly_df.iloc[i]
+
+        tenkan = float(row["tenkan"]) if not pd.isna(row["tenkan"]) else None
+        kijun  = float(row["kijun"])  if not pd.isna(row["kijun"])  else None
+
+        if row_date <= signal_date:
+            prev_tenkan = tenkan
+            prev_kijun  = kijun
+            continue
+
+        close = float(row["Close"]) if not pd.isna(row["Close"]) else None
+        if close is None:
+            prev_tenkan = tenkan
+            prev_kijun  = kijun
+            continue
+
+        hd  = (row_date - signal_date).days
+
+        def _ret(p: float) -> float:
+            return (p / entry_price - 1.0) - tx_cost_rt
+
+        # 1순위: 손절
+        if close <= stop_price:
+            return row_date, f"손절 -{stop_loss_pct * 100:.0f}%", _ret(close), hd
+
+        # 2순위: 구름 하향 이탈
+        cloud_bottom = row.get("cloud_bottom")
+        if cloud_bottom is not None and not pd.isna(cloud_bottom):
+            if close < float(cloud_bottom):
+                return row_date, "구름 이탈", _ret(close), hd
+
+        # 3순위: 전환선 < 기준선 데드크로스
+        if (tenkan is not None and kijun is not None and
+                prev_tenkan is not None and prev_kijun is not None):
+            if tenkan < kijun and prev_tenkan >= prev_kijun:
+                return row_date, "전환<기준 DC", _ret(close), hd
+
+        prev_tenkan = tenkan
+        prev_kijun  = kijun
+
+    return None, "보유 중", None, None
 
 
 def _compute_rsi(closes: pd.Series, period: int = 14) -> pd.Series:
@@ -1097,6 +1194,10 @@ def _compute_sell_signals_and_s2(
         df["high_10d"]  = df["High"].shift(1).rolling(10, min_periods=10).max()
         df["pct_chg"]   = df["Close"].pct_change(fill_method=None)
 
+        # 이치모쿠 주봉 사전 계산 (ichimoku 모드 신호가 있을 때만)
+        has_ichi    = any(s.mode == "ichimoku" for s in sigs)
+        weekly_ichi = _build_weekly_ichimoku(raw_df) if has_ichi else None
+
         idx_map: dict[date, int] = {}
         for i, ts in enumerate(df.index):
             d = ts.date() if hasattr(ts, "date") else ts
@@ -1169,8 +1270,8 @@ def _compute_sell_signals_and_s2(
                             and vol >= 1.5 * avg30):                     # C4: 1.5× vol30
                         sig.s3_date = row_date
 
-                # 매도 신호 (손절 > MA20 이탈)
-                if sig.sell_date is None:
+                # 매도 신호 — ichimoku는 주봉 스캔으로 별도 처리
+                if sig.mode != "ichimoku" and sig.sell_date is None:
                     if close <= stop_price:
                         sig.sell_date   = row_date
                         sig.sell_reason = f"손절 -{stop_loss_pct * 100:.0f}%"
@@ -1182,15 +1283,31 @@ def _compute_sell_signals_and_s2(
                         sig.sell_return = (close / entry_price - 1.0) - tx_cost_rt
                         sig.hold_days   = (row_date - sig.signal_date).days
 
-                # 조기 종료: 매도 완료 + S2 윈도우 만료 + S3 완료(또는 S2 없음)
+                # 조기 종료
                 past_s2_window = s2_found or row_date > s2_cutoff
                 s3_done        = not s2_found or sig.s3_date is not None
-                if sig.sell_date is not None and past_s2_window and s3_done:
-                    break
+                mdd_done       = row_date > mdd_window_end
+                if mdd_done and past_s2_window and s3_done:
+                    if sig.mode == "ichimoku" or sig.sell_date is not None:
+                        break
 
-            if sig.sell_date is None:
-                sig.sell_reason = "보유 중"
             sig.mdd_91d = -max_dd_frac  # 음수 표기 (0이면 낙폭 없음)
+
+            # ── 이치모쿠 주봉 매도 신호 (구름 이탈 / 데드크로스 / 손절) ──
+            if sig.mode == "ichimoku":
+                if weekly_ichi is not None:
+                    sd, sr, sret, hd = _find_ichimoku_sell(
+                        sig.signal_date, sig.close_at_signal,
+                        weekly_ichi, tx_cost_rt, stop_loss_pct,
+                    )
+                    sig.sell_date   = sd
+                    sig.sell_reason = sr
+                    sig.sell_return = sret
+                    sig.hold_days   = hd
+                else:
+                    sig.sell_reason = "보유 중"
+            elif sig.sell_date is None:
+                sig.sell_reason = "보유 중"
 
 
 def _fill_returns(
