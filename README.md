@@ -123,6 +123,10 @@ ALLOWED_CHAT_IDS=123456789,987654321
 KRX_OPENAPI_KEY=your_krx_openapi_key
 
 # (선택) KRX 포털 계정 — 수급 데이터 수집 (krx_flow_sync.py)
+# data.krx.co.kr 브라우저 로그인 후 DevTools > Cookies에서 복사
+KRX_SESSION=your_jsessionid_cookie   # JSESSIONID (필수)
+KRX_VISITOR=your_smvisitorid_cookie  # __smVisitorID (선택)
+# 구버전 ID/PW 로그인은 사이트 정책상 차단됨 (KRX_SESSION 방식 권장)
 KRX_ID=your_krx_id
 KRX_PW=your_krx_password
 ```
@@ -160,4 +164,4 @@ pytest test_backtest_engine.py -v               # 통합 백테스트 엔진 (65
 
 ## 버전
 
-현재 버전: `0.7.1.0` — [CHANGELOG](CHANGELOG.md) 참고
+현재 버전: `0.7.2.0` — [CHANGELOG](CHANGELOG.md) 참고

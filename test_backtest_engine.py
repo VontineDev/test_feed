@@ -217,26 +217,26 @@ class TestComputeMdd:
         # equity: 1.0 → 1.1 → 0.55 → 0.605
         returns = [0.10, -0.50, 0.10]
         mdd = _compute_mdd(returns)
-        # peak=1.10, valley=0.55 → MDD = (1.10 - 0.55) / 1.10 ≈ 0.50
-        assert mdd == pytest.approx(0.50, abs=0.001)
+        # peak=1.10, valley=0.55 → MDD = -(1.10 - 0.55) / 1.10 ≈ -0.50
+        assert mdd == pytest.approx(-0.50, abs=0.001)
 
     def test_partial_recovery(self):
         # equity: 1.0 → 1.20 → 1.08 → 1.134 → 1.191
         returns = [0.20, -0.10, 0.05, 0.05]
         mdd = _compute_mdd(returns)
-        # peak=1.20, valley=1.08 → MDD = 0.12/1.20 = 0.10
-        assert mdd == pytest.approx(0.10, abs=0.001)
+        # peak=1.20, valley=1.08 → MDD = -0.12/1.20 = -0.10
+        assert mdd == pytest.approx(-0.10, abs=0.001)
 
     def test_monotone_decline(self):
         returns = [-0.05] * 5
         mdd = _compute_mdd(returns)
-        # equity goes 1.0 → 0.95^5 ≈ 0.7738; MDD ≈ 1 - 0.7738 = 0.2262
-        assert mdd == pytest.approx(1 - 0.95**5, abs=0.001)
+        # equity goes 1.0 → 0.95^5 ≈ 0.7738; MDD ≈ -(1 - 0.7738) = -0.2262
+        assert mdd == pytest.approx(-(1 - 0.95**5), abs=0.001)
 
-    def test_mdd_not_negative(self):
+    def test_mdd_not_positive(self):
         returns = [0.03, -0.01, 0.02, -0.02, 0.04]
         mdd = _compute_mdd(returns)
-        assert mdd >= 0.0
+        assert mdd <= 0.0
 
 
 # ── _compute_group_metrics ────────────────────────────────────────

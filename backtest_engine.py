@@ -253,7 +253,7 @@ def _compute_mdd(returns: list[float]) -> Optional[float]:
         dd = (peak - equity) / peak
         if dd > max_dd:
             max_dd = dd
-    return max_dd
+    return -max_dd
 
 
 def _compute_group_metrics(

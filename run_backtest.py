@@ -23,8 +23,11 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 from datetime import date
 
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 

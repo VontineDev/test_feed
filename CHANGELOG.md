@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.2.0] - 2026-05-08
+
+### Added
+- **KRX 수급 세션 자동 갱신** (`krx_flow_sync.py`): 연속 빈 응답 5건 감지 → Samsung 프로브로 세션 만료 확인 → `.env`의 `KRX_SESSION` 갱신 감지(30초 폴링) → 프로세스 재시작 없이 자동 재개. `_handle_possible_expiry()` 추가.
+- **ISIN 자동 계산** (`krx_flow_sync.py`): `_isin_from_krx_code()` — ISO 6166 Luhn 체크디짓으로 6자리 KRX 코드에서 12자리 ISIN 자동 생성 (KOSPI `KR7`, KOSDAQ `KR8`).
+- **브라우저 세션 쿠키 우회** (`krx_flow_sync.py`): `KRX_SESSION`(JSESSIONID), `KRX_VISITOR`(`__smVisitorID`) 환경변수 지원. `inject_session()`이 `domain=.krx.co.kr` + `mdc.client_session=true` 자동 주입. data.krx.co.kr 브라우저 전용 로그인 정책 우회.
+
+### Changed
+- **`fetch_raw` ISIN 필수화** (`krx_flow_sync.py`): MDCSTAT02302 엔드포인트는 `isuSrtCd`(6자리) 단독 시 `output:[]` 반환. `isuCd`(ISIN) 병행 전송 필수.
+- **`fetch_records` 응답 포맷 전환** (`krx_flow_sync.py`): 투자자유형별 행 구조(`INVST_TP_NM`/`NETBID_TRDVOL`) → 날짜별 1행 구조(`TRDVAL1`=외국인합계, `TRDVAL2`=기관합계). 날짜 키 `TRD_DD` (`YYYY/MM/DD`).
+- **날짜 범위 청킹** (`krx_flow_sync.py`): MDCSTAT02302는 장기 범위(약 4개월 초과) 시 HTTP 400 반환. `_CHUNK_DAYS=90` 단위 분할 요청 자동 적용.
+- **Windows UTF-8 출력** (`krx_flow_sync.py`, `run_backtest.py`): `sys.stdout/stderr.reconfigure(encoding="utf-8")` 추가. cp949 콘솔 환경 한글·특수문자 인코딩 오류 해결.
+- **Karpathy 리팩터** (`krx_flow_sync.py`): `_filter_tickers()`, `_already_loaded()` 헬퍼 추출(중복 8줄×2 제거), `from collections import defaultdict`·`from dataclasses import dataclass` 모듈 수준 이동, 인라인 `_to_int` → `_parse_int` 교체.
+
+### Fixed
+- **MDD 부호 오류** (`backtest_engine.py`): `_compute_mdd()`가 양수 낙폭 비율을 반환하여 리포트에 `+65.42%`로 표시. `-max_dd` 반환으로 수정 (`-65.42%`).
+- **`asyncpg` DATE 타입 오류** (`krx_flow_sync.py`): `_save_batch()`에서 `rec.trade_date.isoformat()`(str) 전달 시 `DataError: str object has no attribute toordinal`. `rec.trade_date`(date 객체) 직접 전달로 수정. bare `except`에 의해 DEBUG 레벨로 묵살되어 0건 저장 오류로 나타남.
+
+### Technical
+- KOSPI 788종목 2025-01-01~2026-05-03 수급 데이터 248,999건 적재 완료.
+- Cross 모드 백테스트(KOSPI 200종목): 146 신호, 승률28d 53.5%, 승률91d 65.8%, 평균91d +28.21%, MDD -65.42%.
+
+### Tests
+- `test_backtest_engine.py` MDD 테스트 5개 부호 수정 (`>= 0` → `<= 0`, approx 값 음수 전환).
+
 ## [0.7.1.0] - 2026-05-05
 
 ### Added
