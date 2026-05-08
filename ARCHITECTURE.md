@@ -18,6 +18,7 @@
 > v0.6.0.0부터 일봉 3단계 분류기(`stage_classifier.py`)가 추가되었습니다. 매일 16:30 KST에 KOSPI + KOSDAQ 전 종목을 Stage 1(랠리 초입) / Stage 2(중간 조정) / Stage 3(과열 재가속)으로 분류하고 `stage_classifications` 테이블에 저장합니다. 주봉 Ichimoku 결과와 교차 비교한 결과를 텔레그램으로 자동 발송합니다.
 > v0.7.0.0부터 통합 백테스트 엔진(`backtest_engine.py`)이 추가되었습니다. 이치모쿠(주봉) / 3단계 Stage 1(일봉) / 교차(두 신호 동일 주 발동) 3개 모드로 과거 구간 백테스트를 실행합니다. 지표: 승률(7d/28d/91d), 평균·중앙값 수익률, KOSPI 초과수익률, 샤프비율(연환산), MDD. KRX 왕복 거래비용(기본 0.21%) 반영. `/backtest2 ichimoku 2025-01-01 2026-01-01` 텔레그램 명령어로 온디맨드 실행 가능.
 > v0.7.1.0부터 데이터 인프라 레이어가 추가되었습니다. **KRX OpenAPI 클라이언트**(`krx_openapi.py`): `data-dbg.krx.co.kr` 공식 REST API로 종목 마스터·OHLCV·지수 시세 수집(Bearer 토큰). **OHLCV DB 캐시**(`ohlcv_cache.py`): psycopg2 기반 캐시 레이어, yfinance 반복 다운로드 감소. **수급 데이터 파이프라인**(`krx_flow_sync.py`): `data.krx.co.kr`에서 외국인·기관 순매수 이력을 `daily_flow` 테이블에 적재, 백테스트 조건 5(외국인·기관 순매수 > 0) 연결. 샤프비율 7d·91d 추가(`sharpe_7d`·`sharpe_91d`). 단위 테스트 총 65개.
+> v0.7.3.0부터 **거래대금 워치리스트 일보**(Layer 6)가 추가되었습니다. Stage 1 진입 종목을 14캘린더일 동안 매일 17:00 KST에 추적합니다. 거래대금 건강도(vol_ratio = 오늘거래량/진입거래량), 외국인·기관 스트릭, Ichimoku 주봉 통과 여부를 통합하여 Telegram 일보를 발송합니다. Stage 1→2 전환 시 즉시 알림, vol_ratio < 0.6 3거래일 연속 시 랠리 소멸 경고. `watchlist_vol_log` 테이블로 일별 vol_ratio 이력 유지. `python run_scheduler.py --once watchlist|stage`로 즉시 실행 가능.
 
 ---
 
@@ -324,6 +325,38 @@ CREATE TABLE chart_signals (
     UNIQUE(ticker, week_of)
 );
 
+-- 일별 외국인·기관 순매수 + 스트릭 (v0.5.0.0~)
+CREATE TABLE daily_flow (
+    ticker          TEXT NOT NULL,
+    trade_date      DATE NOT NULL,
+    foreign_net     BIGINT,                  -- 외국인 순매수(주), 양수=순매수
+    inst_net        BIGINT,                  -- 기관 순매수(주)
+    foreign_streak  SMALLINT,               -- 연속 순매수일(음수=순매도)
+    inst_streak     SMALLINT,
+    PRIMARY KEY (ticker, trade_date)
+);
+
+-- 일봉 3단계 분류 결과 (v0.6.0.0~)
+CREATE TABLE stage_classifications (
+    ticker          TEXT NOT NULL,
+    classified_date DATE NOT NULL,
+    stage           SMALLINT NOT NULL,       -- 1(랠리초입) | 2(중간조정) | 3(과열재가속)
+    s1_entry_date   DATE,
+    s1_high         NUMERIC,                 -- Stage 1 당일 고가
+    s1_volume       BIGINT,                  -- Stage 1 당일 거래량 (vol_ratio 기준)
+    peakout_flag    BOOLEAN DEFAULT false,
+    PRIMARY KEY (ticker, classified_date)
+);
+
+-- 워치리스트 일별 거래대금 비율 이력 (v0.7.3.0~)
+CREATE TABLE watchlist_vol_log (
+    ticker      TEXT NOT NULL,
+    trade_date  DATE NOT NULL,
+    vol_ratio   FLOAT,                       -- today_vol / s1_vol
+    s1_vol      BIGINT,
+    PRIMARY KEY (ticker, trade_date)
+);
+
 -- KRX 전체 종목 디렉토리 (v0.3.0.0~)
 CREATE TABLE krx_listings (
     isin_code       TEXT PRIMARY KEY,
@@ -358,6 +391,13 @@ CREATE TABLE krx_listings (
 | `load_seen_hashes()` | 재시작 시 중복 해시 복원 |
 | `save_chart_signals()` | 스크리닝 결과 저장 (`chart_signals`, sector/ma_120w 포함, ON CONFLICT DO UPDATE) |
 | `load_chart_signals_latest()` | 가장 최근 주차 스크리닝 결과 전체 조회 (sector/ma_120w 포함) |
+| `save_daily_flow()` | daily_flow upsert (ticker, trade_date, foreign_net, inst_net, streak) |
+| `get_prev_streak()` | 전일 foreign_streak·inst_streak 조회 (streak 누적 계산용) |
+| `save_stage_classifications()` | stage_classifications 일괄 upsert |
+| `get_stage1_history()` | Stage 1 이력 배치 조회 (stage_classifier Stage 2 판단용) |
+| `get_stage1_watchlist()` | 최근 N일 이내 Stage 1 종목 1건씩 반환 (워치리스트 일보용, v0.7.3.0~) |
+| `upsert_watchlist_vol_log()` | 일별 vol_ratio 이력 upsert (랠리 소멸 3거래일 판정용, v0.7.3.0~) |
+| `get_watchlist_vol_log()` | 최근 N거래일 vol_ratio 조회 (LIMIT N ORDER BY trade_date DESC, v0.7.3.0~) |
 
 **DSN 설정 우선순위**:
 ```
@@ -492,6 +532,8 @@ class ScreenResult:
 
 **역할**: 유효 신호 감지 시 즉시 텔레그램 전송. 주봉 스크리닝 결과는 DM + 채널 동시 발송 (v0.2.7.0~: 섹터별 그룹 포맷 — 상위 5개 섹터 × 섹터당 상위 3종목).
 
+**v0.7.3.0 추가 함수 `send_watchlist_brief(entries, http)`**: 거래대금 워치리스트 일보 전송. plain text 모드(`parse_mode=None`). 확신도 순 정렬된 종목별 4줄 포맷 — 거래대금 비율(✅⚠️❌❓), 외국인/기관 스트릭(🔵🔴❓), Ichimoku 상태(☁️✅/❌/N/A). 워치리스트 없음 시 "워치리스트 없음" 발송.
+
 **알림 메시지 형식**:
 ```
 📈 [BUY] 연준 금리 인하 발표
@@ -512,7 +554,7 @@ class ScreenResult:
 ```
 test_feed/
 │
-├── run_scheduler.py               # 메인 실행 — RSS 피드 루프 + 봇 병렬 실행
+├── run_scheduler.py               # 메인 실행 — RSS 피드 루프 + 봇 병렬 실행 / --once watchlist|stage 즉시 실행 지원
 │
 ├── article_fetcher.py             # 기사 본문 크롤링 (멀티소스 + fallback)
 ├── summarizer.py                  # 로컬 LLM 한글 요약 (Ollama → LM Studio)
@@ -553,6 +595,7 @@ test_feed/
 ├── test_generate_html_report.py   # pytest — HTML 리포트 생성 (10개)
 ├── test_stage_classifier.py       # pytest — 일봉 3단계 분류기 전 코드패스 (29개)
 ├── test_backtest_engine.py        # pytest — 통합 백테스트 엔진 (65개)
+├── test_watchlist_brief.py        # pytest — 워치리스트 일보 포맷 + DB 헬퍼 (22개) (v0.7.3.0~)
 │
 ├── VERSION                        # 현재 버전 (SemVer 4자리)
 ├── CHANGELOG.md                   # 변경 이력
