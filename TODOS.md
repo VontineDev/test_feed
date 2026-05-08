@@ -318,3 +318,67 @@ Stage 2 conditions to replay:
 **Effort:** S (human: ~1 day / CC: ~20 min)
 **Priority:** P3
 **Blocked by:** Nothing. `compare_tx_amt.py` validation complete (2026-04-27).
+
+---
+
+## P3: /watchlist bot command — on-demand watchlist view
+
+**What:** Add `/watchlist` to `telegram_bot.py` as an on-demand command. Calls `_watchlist_brief_job()` logic and sends the result to the requesting chat.
+
+**Why:** The 17:00 KST brief is scheduled, but if you want to check the watchlist at 10:00 or after a news event, you have to wait. On-demand access makes the system interactive.
+
+**Context:** `_watchlist_brief_job()` is module-level and uses `_db_pool` global. The bot command would need to call the core query/format logic without the scheduler context. Best approach: extract a `get_watchlist_entries(pool)` helper from `_watchlist_brief_job` and call it from both the scheduler job and the bot command handler.
+
+**How to apply:**
+1. Extract the data assembly logic (Steps 2-7 in `_watchlist_brief_job`) into `async def _build_watchlist_entries(pool)` in `run_scheduler.py` or a new `watchlist.py`.
+2. In `telegram_bot.py`, add `/watchlist` handler that calls `_build_watchlist_entries` and sends the brief to the requesting `chat_id`.
+3. Register the command in `init_bot()`.
+
+**Pros:** Makes the system interactive — user can check status anytime. Enables manual refresh after a Stage 1 signal fires during the day.
+**Cons:** Requires refactoring `_watchlist_brief_job` to extract the data logic into a reusable function. Adds one bot command to maintain.
+**Effort:** XS→S (human: ~1h / CC: ~15 min after the refactor)
+**Priority:** P3
+**Depends on:** Watchlist brief being stable with real `stage_classifications` data (2-3 weeks post-launch).
+
+---
+
+## P3: Vol ratio delta (∆ vs yesterday) in watchlist brief
+
+**What:** Show "+5%" or "-12%" change vs yesterday's vol ratio in each ticker line of the daily brief.
+
+**Why:** Trend matters more than absolute ratio. A ratio of 0.8 falling from 1.2 is very different from a ratio of 0.8 rising from 0.5. The delta tells you which direction the rally is heading.
+
+**Context:** `watchlist_vol_log` table is now created and populated by `_watchlist_brief_job`. Yesterday's ratio is available via `get_watchlist_vol_log(pool, tickers, lookback=2)`. The delta is `today_ratio - yesterday_ratio`.
+
+**How to apply:**
+1. In `_watchlist_brief_job`, load `lookback=2` from `watchlist_vol_log` to get yesterday's ratio.
+2. Compute `delta = today_ratio - yesterday_ratio` (None if no prior entry).
+3. Pass `vol_ratio_delta` to each entry dict.
+4. In `send_watchlist_brief`, format as `+5%▲` or `-12%▼` after the ratio line.
+
+**Pros:** Trend visibility with near-zero extra cost (one query already done). Makes the brief more actionable.
+**Cons:** First day of tracking has no delta. Minor display change.
+**Effort:** XS (human: ~30 min / CC: ~10 min)
+**Priority:** P3
+**Depends on:** `watchlist_vol_log` populated for at least 1 trading day (now being built).
+
+---
+
+## P3: D+10 retirement notice in watchlist brief
+
+**What:** When a ticker's `days_since == 10` (its last tracking day), add a "[마지막 추적일]" marker in the brief and a closing line summarizing the final status.
+
+**Why:** Currently tickers just disappear from the next brief. A retirement notice closes the loop — user knows the 10-day period ended and can make a final decision on the position.
+
+**Context:** `days_since = (today - s1_date).days` is already computed in `_watchlist_brief_job`. When `days_since >= 10`, add a retirement marker to the entry dict and format it in `send_watchlist_brief`.
+
+**How to apply:**
+1. In `entries` assembly, add `"retiring": days_since >= 10`.
+2. In `send_watchlist_brief`, when `e.get("retiring")`, append `" [마지막 추적일]"` to the ticker line.
+3. Optionally send a separate "퇴장" message for retiring tickers.
+
+**Pros:** User clarity. Prevents confusion about why a ticker disappeared.
+**Cons:** `get_stage1_watchlist(days=14)` would still include it for 4 more days after D+10. Need to cap at `days <= 10` or display as "retired."
+**Effort:** XS (human: ~20 min / CC: ~5 min)
+**Priority:** P3
+**Depends on:** Watchlist brief stable with real data.

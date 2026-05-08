@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.3.0] - 2026-05-08
+
+### Added
+- **Layer 6: 거래대금 워치리스트 일보** (`run_scheduler.py`): Stage 1 진입 종목을 최대 14캘린더일 추적하는 일별 Telegram 요약 메시지. 평일 17:00 KST(08:00 UTC) APScheduler CronJob. `python run_scheduler.py --once watchlist`로 즉시 실행 가능.
+- **`get_stage1_watchlist()`** (`db.py`): 최근 N일 이내 Stage 1로 분류된 종목을 종목당 최신 1건만 반환하는 DB 헬퍼.
+- **`send_watchlist_brief()`** (`telegram_notify.py`): 거래대금 비율(✅⚠️❌), 외국인/기관 스트릭(🔵🔴❓), Ichimoku 상태(☁️), 확신도 순 정렬 포함. plain text 전송(MarkdownV2 이스케이프 없음).
+- **Stage 2 전환 알림**: 워치리스트 종목이 Stage 1→2로 전환될 때 별도 Telegram 알림("🟢 Stage 2 전환 확인") 발송.
+- **랠리 소멸 경고**: vol_ratio < 0.6 3거래일 연속 시 별도 Telegram 경고("❌ 랠리 소멸 경고") 발송.
+- **`watchlist_vol_log` 테이블** (`db.py`): 일별 vol_ratio 이력 저장. 랠리 소멸 3거래일 판정 및 향후 vol delta 추적 기반.
+- **`upsert_watchlist_vol_log()` / `get_watchlist_vol_log()`** (`db.py`): vol_ratio 이력 upsert·조회 헬퍼.
+- **`--once watchlist` CLI** (`run_scheduler.py`): 스케줄러 없이 워치리스트 일보 1회 즉시 실행 후 종료.
+
+### Changed
+- **N+1 → 5개 벌크 쿼리** (`run_scheduler.py`): 기존 종목당 3 DB roundtrip → 1 connection acquire 내 5개 벌크 쿼리로 전환.
+- **yfinance 병렬 fetch** (`run_scheduler.py`): `ThreadPoolExecutor(max_workers=4)`로 종목별 거래량 병렬 수집.
+- **확신도 순 정렬**: vol_ratio × 스트릭 composite 점수 기준 내림차순 정렬 후 Telegram 전송.
+- **스트릭 None 표시 개선** (`telegram_notify.py`): daily_flow 데이터 없는 종목을 🔴(+0일) 대신 ❓ N/A로 표시.
+- **`_post_message()` `parse_mode` 파라미터화** (`telegram_notify.py`): 기본값 `"MarkdownV2"` 유지, `parse_mode=None` 시 plain text 전송.
+- **`sys.stdout/stderr.reconfigure(encoding="utf-8")`** (`run_scheduler.py`): Windows cp949 환경 한글 로그 출력 오류 해결.
+
+### Tests
+- `test_watchlist_brief.py` 신규 22개: `send_watchlist_brief` 포맷(vol_ratio 전 분기, 경계값, 스트릭 None, Ichimoku 상태), `get_stage1_watchlist` DB 헬퍼(정상·빈 결과·DB 오류).
+
 ## [0.7.2.0] - 2026-05-08
 
 ### Added

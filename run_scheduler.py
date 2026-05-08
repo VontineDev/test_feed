@@ -24,6 +24,9 @@ from logging.handlers import TimedRotatingFileHandler
 import os
 import sys
 import time
+
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
@@ -45,11 +48,13 @@ from db import (
     create_pool, get_dsn, init_db, save_article, save_signal, save_cross_analysis,
     load_seen_hashes, save_chart_signals, load_chart_signals_latest,
     get_stage1_history, save_stage_classifications, save_daily_flow, get_prev_streak,
+    get_stage1_watchlist, upsert_watchlist_vol_log, get_watchlist_vol_log,
 )
 from telegram_notify import (
     send_signal as tg_send_signal,
     send_weekly_screener as tg_send_weekly_screener,
     send_screener_comparison as tg_send_screener_comparison,
+    send_watchlist_brief as tg_send_watchlist_brief,
 )
 from signal_detector import detect_signal
 from article_fetcher import fetch_article_body
@@ -491,6 +496,234 @@ async def summary_worker() -> None:
                 logger.warning("[요약 워커] 처리 오류: %s", e)
             finally:
                 _summary_queue.task_done()
+
+
+# ── 거래대금 워치리스트 일보 (평일 17:00 KST = 08:00 UTC) ────
+async def _watchlist_brief_job() -> None:
+    """Stage 1 진입 후 추적 중인 종목의 거래대금 건강도·수급 스트릭·Ichimoku를 요약해 전송.
+
+    확장 기능:
+    - Stage 1→2 전환 감지 시 별도 알림 전송
+    - vol_ratio < 0.6 3거래일 연속 시 랠리 소멸 경고 전송
+    - 확신도 순 정렬 (vol_ratio × 스트릭 composite)
+    """
+    if not _db_pool:
+        logger.warning("[워치리스트] DB 풀 없음 — 스킵")
+        return
+
+    import yfinance as _yf
+    from datetime import date as _date
+    from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _as_completed
+
+    logger.info("[워치리스트] 거래대금 워치리스트 일보 시작")
+    today = _date.today()
+    loop  = asyncio.get_running_loop()
+
+    # Step 1: Stage 1 워치리스트 조회 (최근 14 캘린더일)
+    watchlist = await get_stage1_watchlist(_db_pool, days=14)
+    if not watchlist:
+        logger.info("[워치리스트] 워치리스트 없음")
+        async with httpx.AsyncClient() as http:
+            await tg_send_watchlist_brief([], http=http)
+        return
+
+    logger.info("[워치리스트] %d종목 추적", len(watchlist))
+
+    tickers     = [r["ticker"]   for r in watchlist]
+    s1_vol_map  = {r["ticker"]: r["s1_volume"]   for r in watchlist}
+    s1_date_map = {r["ticker"]: r["s1_date"]     for r in watchlist}
+
+    # Step 2: 5개 벌크 쿼리 (1 connection acquire)
+    flow_map: dict[str, dict]         = {}
+    ichimoku_set: set[str]            = set()
+    stage_map: dict[str, int]         = {}
+    yesterday_stage_map: dict[str, int] = {}
+    latest_week: Optional[str]        = None
+
+    try:
+        from datetime import timedelta as _td
+        yesterday = today - _td(days=1)
+        async with _db_pool.acquire() as conn:
+            latest_week = await conn.fetchval(
+                "SELECT week_of FROM chart_signals ORDER BY screened_at DESC LIMIT 1"
+            )
+            flow_rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (ticker) ticker, foreign_streak, inst_streak
+                FROM   daily_flow
+                WHERE  ticker = ANY($1) AND trade_date <= $2
+                ORDER  BY ticker, trade_date DESC
+                """,
+                tickers, today,
+            )
+            for r in flow_rows:
+                flow_map[r["ticker"]] = {"f_streak": r["foreign_streak"], "i_streak": r["inst_streak"]}
+
+            if latest_week:
+                ichi_rows = await conn.fetch(
+                    "SELECT ticker FROM chart_signals WHERE ticker = ANY($1) AND week_of = $2",
+                    tickers, latest_week,
+                )
+                ichimoku_set = {r["ticker"] for r in ichi_rows}
+
+            stage_rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (ticker) ticker, stage
+                FROM   stage_classifications
+                WHERE  ticker = ANY($1)
+                ORDER  BY ticker, classified_date DESC
+                """,
+                tickers,
+            )
+            for r in stage_rows:
+                stage_map[r["ticker"]] = r["stage"]
+
+            # 전일 Stage (Stage 1→2 전환 감지용)
+            prev_stage_rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (ticker) ticker, stage
+                FROM   stage_classifications
+                WHERE  ticker = ANY($1) AND classified_date <= $2
+                ORDER  BY ticker, classified_date DESC
+                """,
+                tickers, yesterday,
+            )
+            for r in prev_stage_rows:
+                yesterday_stage_map[r["ticker"]] = r["stage"]
+    except Exception as e:
+        logger.warning("[워치리스트] 벌크 DB 조회 실패: %s", e)
+
+    # Step 3: 이전 vol_ratio 이력 조회 (랠리 소멸 3거래일 감지)
+    vol_log_map: dict[str, list[float]] = await get_watchlist_vol_log(_db_pool, tickers, lookback=3)
+
+    # Step 4: yfinance 병렬 거래량 fetch
+    def _fetch_vol(t: str) -> tuple[str, Optional[float]]:
+        try:
+            df = _yf.Ticker(t).history(period="2d", interval="1d", auto_adjust=True)
+            return t, float(df["Volume"].iloc[-1]) if not df.empty else None
+        except Exception:
+            return t, None
+
+    vol_today: dict[str, Optional[float]] = {}
+    with _TPE(max_workers=4) as pool_ex:
+        futures = {pool_ex.submit(_fetch_vol, t): t for t in tickers if s1_vol_map.get(t)}
+        for fut in _as_completed(futures):
+            t, v = fut.result()
+            vol_today[t] = v
+
+    # Step 5: 결과 조합
+    entries: list[dict] = []
+    vol_log_rows: list[dict] = []
+
+    for ticker in tickers:
+        s1_vol    = s1_vol_map.get(ticker)
+        s1_date   = s1_date_map[ticker]
+        days_since = (today - s1_date).days
+
+        today_vol  = vol_today.get(ticker)
+        vol_ratio  = (today_vol / s1_vol) if (s1_vol and s1_vol > 0 and today_vol is not None) else None
+
+        flow       = flow_map.get(ticker, {})
+        ichimoku_ok = (ticker in ichimoku_set) if latest_week else None
+        current_stage = stage_map.get(ticker)
+
+        logger.debug(
+            "[워치리스트] %s vol_ratio=%.2f stage=%s streak=(%s,%s)",
+            ticker, vol_ratio or 0, current_stage,
+            flow.get("f_streak"), flow.get("i_streak"),
+        )
+
+        entries.append({
+            "ticker":        ticker,
+            "days_since":    days_since,
+            "vol_ratio":     vol_ratio,
+            "f_streak":      flow.get("f_streak"),
+            "i_streak":      flow.get("i_streak"),
+            "ichimoku_ok":   ichimoku_ok,
+            "current_stage": current_stage,
+        })
+
+        if vol_ratio is not None:
+            vol_log_rows.append({"ticker": ticker, "trade_date": today, "vol_ratio": vol_ratio, "s1_vol": s1_vol})
+
+    # Step 6: vol_ratio 로그 upsert (향후 랠리 소멸 / vol delta 추적용)
+    await upsert_watchlist_vol_log(_db_pool, vol_log_rows)
+
+    # Step 7: 확신도 순 정렬 (vol_ratio × 스트릭 composite — 높을수록 먼저)
+    def _conviction(e: dict) -> float:
+        vr = e.get("vol_ratio") or 0.0
+        fs = e.get("f_streak") or 0
+        is_ = e.get("i_streak") or 0
+        streak_bonus = (1 if fs > 0 else 0) + (1 if is_ > 0 else 0)
+        return vr + streak_bonus * 0.1
+
+    entries.sort(key=_conviction, reverse=True)
+
+    # Step 8: 단독 알림 — Stage 2 전환 감지
+    stage2_alerts: list[str] = []
+    for e in entries:
+        ticker = e["ticker"]
+        today_stage = e.get("current_stage")
+        prev_stage  = yesterday_stage_map.get(ticker)
+        if today_stage == 2 and prev_stage == 1:
+            stage2_alerts.append(ticker)
+
+    if stage2_alerts:
+        try:
+            from datetime import date as _d
+            today_str = _d.today().strftime("%Y-%m-%d")
+            alert_lines = [f"🟢 Stage 2 전환 확인 ({today_str})", ""]
+            for t in stage2_alerts:
+                code = t.split(".")[0]
+                days_d = (today - s1_date_map[t]).days
+                alert_lines.append(f"  {code} — D+{days_d} → Stage 2 진입")
+            alert_msg = "\n".join(alert_lines)
+            async with httpx.AsyncClient() as http:
+                from telegram_notify import _get_token, _get_chat_id, _post_message
+                token   = _get_token()
+                chat_id = _get_chat_id()
+                await _post_message(http, token, chat_id, alert_msg, label="Stage2알림", parse_mode=None)
+            logger.info("[워치리스트] Stage 2 전환 알림 — %d종목", len(stage2_alerts))
+        except Exception as e:
+            logger.warning("[워치리스트] Stage 2 알림 전송 실패: %s", e)
+
+    # Step 9: 단독 알림 — 랠리 소멸 감지 (최근 3거래일 연속 vol_ratio < 0.6)
+    rally_death_alerts: list[str] = []
+    for e in entries:
+        ticker    = e["ticker"]
+        vol_ratio = e.get("vol_ratio")
+        history   = vol_log_map.get(ticker, [])
+        all_three = ([vol_ratio] + history)[:3]
+        if len(all_three) == 3 and all(r is not None and r < 0.6 for r in all_three):
+            rally_death_alerts.append(ticker)
+
+    if rally_death_alerts:
+        try:
+            from datetime import date as _d
+            today_str = _d.today().strftime("%Y-%m-%d")
+            death_lines = [f"❌ 랠리 소멸 경고 ({today_str})", "3거래일 연속 진입비 -40% 이상", ""]
+            for t in rally_death_alerts:
+                code  = t.split(".")[0]
+                ratio = next((e["vol_ratio"] for e in entries if e["ticker"] == t), None)
+                pct   = f"{(ratio - 1) * 100:.0f}%" if ratio is not None else "N/A"
+                death_lines.append(f"  {code} 오늘 비율 {pct}")
+            death_msg = "\n".join(death_lines)
+            async with httpx.AsyncClient() as http:
+                from telegram_notify import _get_token, _get_chat_id, _post_message
+                token   = _get_token()
+                chat_id = _get_chat_id()
+                await _post_message(http, token, chat_id, death_msg, label="랠리소멸알림", parse_mode=None)
+            logger.info("[워치리스트] 랠리 소멸 경고 — %d종목", len(rally_death_alerts))
+        except Exception as e:
+            logger.warning("[워치리스트] 랠리 소멸 알림 전송 실패: %s", e)
+
+    # Step 10: 일보 전송
+    try:
+        async with httpx.AsyncClient() as http:
+            await tg_send_watchlist_brief(entries, http=http)
+        logger.info("[워치리스트] 일보 전송 완료 — %d종목", len(entries))
+    except Exception as e:
+        logger.warning("[워치리스트] 전송 실패: %s", e)
 
 
 # ── 스케줄러 진입점 ───────────────────────────────────────────
@@ -1044,6 +1277,16 @@ async def main(interval: int, enable_summary: bool) -> None:
         replace_existing=True,
     )
 
+    # ── 거래대금 워치리스트 일보 (평일 17:00 KST = 08:00 UTC) ──
+    scheduler.add_job(
+        _watchlist_brief_job,
+        CronTrigger(day_of_week="mon-fri", hour=8, minute=0, timezone="UTC"),
+        id="daily_watchlist_brief",
+        max_instances=1,
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+
     scheduler.start()
 
     try:
@@ -1071,6 +1314,22 @@ async def main(interval: int, enable_summary: bool) -> None:
         logger.info("종료 — 누적 수집 %d건", len(_seen_hashes))
 
 
+async def _run_once_watchlist() -> None:
+    """--once watchlist: DB 연결 후 _watchlist_brief_job() 즉시 실행."""
+    global _db_pool
+    try:
+        _db_pool = await create_pool()
+        await init_db(_db_pool)
+    except Exception as e:
+        logger.error("DB 연결 실패: %s", e)
+        return
+    try:
+        await _watchlist_brief_job()
+    finally:
+        if _db_pool:
+            await _db_pool.close()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="뉴스 크롤러 스케줄러")
     parser.add_argument(
@@ -1081,5 +1340,13 @@ if __name__ == "__main__":
         "--no-summary", action="store_true",
         help="한글 요약 비활성화 (수집만)"
     )
+    parser.add_argument(
+        "--once", type=str, default=None, metavar="JOB",
+        help="즉시 실행 후 종료 (watchlist)"
+    )
     args = parser.parse_args()
-    asyncio.run(main(args.interval, enable_summary=not args.no_summary))
+
+    if args.once == "watchlist":
+        asyncio.run(_run_once_watchlist())
+    else:
+        asyncio.run(main(args.interval, enable_summary=not args.no_summary))

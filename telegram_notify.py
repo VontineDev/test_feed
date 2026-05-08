@@ -101,15 +101,17 @@ async def _post_message(
     chat_id: str,
     text: str,
     label: str = "",
+    parse_mode: Optional[str] = "MarkdownV2",
 ) -> bool:
     """단일 대상(chat_id 또는 channel_id)에 메시지 발송. 재시도 포함."""
     url = TELEGRAM_API.format(token=token, method="sendMessage")
-    payload = {
+    payload: dict = {
         "chat_id":    chat_id,
         "text":       text,
-        "parse_mode": "MarkdownV2",
         "disable_web_page_preview": True,
     }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
     for attempt in range(1, _SEND_MAX_RETRIES + 1):
         try:
             resp = await http.post(url, json=payload, timeout=10)
@@ -486,6 +488,91 @@ async def send_screener_comparison(
         if channel_id:
             await _post_message(http, token, channel_id, message, label="교차비교(채널)")
         return ok
+    finally:
+        if _own_client:
+            await http.aclose()
+
+
+async def send_watchlist_brief(
+    entries: list[dict],
+    http: Optional[httpx.AsyncClient] = None,
+) -> bool:
+    """
+    거래대금 워치리스트 일보 전송 (plain text).
+    entries: list of {ticker, days_since, vol_ratio, f_streak, i_streak, ichimoku_ok, current_stage}
+    """
+    try:
+        token   = _get_token()
+        chat_id = _get_chat_id()
+    except ValueError as e:
+        logger.warning("[Telegram] 설정 오류: %s", e)
+        return False
+
+    from datetime import date as _date
+    today_str = _date.today().strftime("%Y-%m-%d")
+
+    if not entries:
+        message = f"📊 거래대금 워치리스트 ({today_str}, 장 마감)\n\n워치리스트 없음"
+    else:
+        lines = [f"📊 거래대금 워치리스트 ({today_str}, 장 마감)", ""]
+        for e in entries:
+            code  = e["ticker"].split(".")[0]
+            stage = e.get("current_stage") or "?"
+            days_d = e.get("days_since", 0)
+
+            vol_ratio = e.get("vol_ratio")
+            if vol_ratio is None:
+                vol_icon = "❓"
+                vol_line = "  거래대금 비율 N/A"
+            elif vol_ratio >= 1.0:
+                vol_icon = "✅"
+                vol_line = f"  거래대금 비율 +{(vol_ratio - 1) * 100:.0f}% {vol_icon}"
+            elif vol_ratio >= 0.6:
+                vol_icon = "⚠️"
+                vol_line = f"  거래대금 비율 {(vol_ratio - 1) * 100:.0f}% {vol_icon}"
+            else:
+                vol_icon = "❌"
+                vol_line = f"  거래대금 비율 {(vol_ratio - 1) * 100:.0f}% 소멸 {vol_icon}"
+
+            f_streak = e.get("f_streak")
+            i_streak = e.get("i_streak")
+
+            if f_streak is None:
+                f_part = "❓ 외국인 N/A"
+            else:
+                f_icon = "🔵" if f_streak > 0 else "🔴"
+                f_part = f"{f_icon} 외국인 {f_streak:+d}일"
+
+            if i_streak is None:
+                i_part = "❓ 기관 N/A"
+            else:
+                i_icon = "🔵" if i_streak > 0 else "🔴"
+                i_part = f"{i_icon} 기관 {i_streak:+d}일"
+
+            ichimoku_ok = e.get("ichimoku_ok")
+            if ichimoku_ok is True:
+                ichi_line = "  ☁️ 일목: 구름 상단 ✅"
+            elif ichimoku_ok is False:
+                ichi_line = "  ☁️ 일목: 통과 ❌"
+            else:
+                ichi_line = "  ☁️ 일목: N/A"
+
+            lines.append(f"{code} — Stage {stage}, D+{days_d}")
+            lines.append(vol_line)
+            lines.append(f"  {f_part} / {i_part}")
+            lines.append(ichi_line)
+            lines.append("")
+
+        message = "\n".join(lines)
+
+    _own_client = http is None
+    if _own_client:
+        http = httpx.AsyncClient()
+    try:
+        return await _post_message(
+            http, token, chat_id, message,
+            label="워치리스트", parse_mode=None,
+        )
     finally:
         if _own_client:
             await http.aclose()

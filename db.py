@@ -196,6 +196,16 @@ CREATE TABLE IF NOT EXISTS stage_classifications (
 CREATE INDEX IF NOT EXISTS idx_stage_class_date ON stage_classifications (classified_date DESC);
 CREATE INDEX IF NOT EXISTS idx_stage_class_ticker ON stage_classifications (ticker, classified_date DESC);
 
+-- ── 워치리스트 일별 거래대금 비율 로그 (rally death / vol delta용) ──
+CREATE TABLE IF NOT EXISTS watchlist_vol_log (
+    ticker          TEXT        NOT NULL,
+    trade_date      DATE        NOT NULL,
+    vol_ratio       FLOAT,                   -- today_vol / s1_vol
+    s1_vol          BIGINT,                  -- Stage 1 진입 거래량 스냅샷
+    PRIMARY KEY (ticker, trade_date)
+);
+CREATE INDEX IF NOT EXISTS idx_watchlist_vol_ticker ON watchlist_vol_log (ticker, trade_date DESC);
+
 -- ── 분봉 거래량 데이터 (StockData.org / yfinance) ────────────
 CREATE TABLE IF NOT EXISTS intraday_volumes (
     id              BIGSERIAL       PRIMARY KEY,
@@ -273,6 +283,7 @@ _ENABLE_RLS = "\n".join(
         "daily_flow",
         "chart_signals",
         "stage_classifications",
+        "watchlist_vol_log",
         "intraday_volumes",
         "krx_listings",
     ]
@@ -1027,6 +1038,102 @@ async def save_stage_classifications(
     except Exception as e:
         logger.error("[stage] save_stage_classifications 실패: %s", e)
     return count
+
+
+async def get_stage1_watchlist(
+    pool: asyncpg.Pool,
+    days: int = 14,
+) -> list[dict]:
+    """
+    최근 `days` 캘린더일 이내에 Stage 1로 분류된 종목의 최신 기록 조회.
+    종목당 가장 최근 Stage 1 날짜 1건만 반환.
+    반환: [{ticker, s1_date, s1_volume}]
+    """
+    from datetime import date as _date, timedelta as _td
+    cutoff = _date.today() - _td(days=days)
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (ticker)
+                       ticker,
+                       classified_date AS s1_date,
+                       s1_volume
+                FROM   stage_classifications
+                WHERE  stage = 1
+                  AND  classified_date >= $1
+                ORDER  BY ticker, classified_date DESC
+                """,
+                cutoff,
+            )
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.error("[watchlist] get_stage1_watchlist 실패: %s", e)
+        return []
+
+
+async def upsert_watchlist_vol_log(
+    pool: asyncpg.Pool,
+    rows: list[dict],
+) -> None:
+    """Upsert daily vol_ratio for watchlist tickers. rows: [{ticker, trade_date, vol_ratio, s1_vol}]."""
+    if not rows:
+        return
+    try:
+        async with pool.acquire() as conn:
+            for r in rows:
+                await conn.execute(
+                    """
+                    INSERT INTO watchlist_vol_log (ticker, trade_date, vol_ratio, s1_vol)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (ticker, trade_date)
+                    DO UPDATE SET vol_ratio = EXCLUDED.vol_ratio, s1_vol = EXCLUDED.s1_vol
+                    """,
+                    r["ticker"],
+                    r["trade_date"],
+                    r.get("vol_ratio"),
+                    r.get("s1_vol"),
+                )
+    except Exception as e:
+        logger.warning("[watchlist_vol_log] upsert 실패: %s", e)
+
+
+async def get_watchlist_vol_log(
+    pool: asyncpg.Pool,
+    tickers: list[str],
+    lookback: int = 3,
+) -> dict[str, list[float]]:
+    """
+    Return last `lookback` vol_ratios per ticker (most-recent first).
+    Used for rally death detection: if all lookback entries < 0.6, alert.
+    """
+    if not tickers:
+        return {}
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (ticker, rn)
+                       ticker, vol_ratio
+                FROM (
+                    SELECT ticker, vol_ratio,
+                           ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY trade_date DESC) AS rn
+                    FROM   watchlist_vol_log
+                    WHERE  ticker = ANY($1)
+                ) sub
+                WHERE rn <= $2
+                ORDER BY ticker, rn
+                """,
+                tickers,
+                lookback,
+            )
+        result: dict[str, list[float]] = {}
+        for r in rows:
+            result.setdefault(r["ticker"], []).append(r["vol_ratio"])
+        return result
+    except Exception as e:
+        logger.warning("[watchlist_vol_log] 조회 실패: %s", e)
+        return {}
 
 
 async def get_prev_streak(

@@ -41,6 +41,7 @@ python run_scheduler.py
 | `/today` | 오늘 카테고리별 수집 건수 + 최신 기사 5건 |
 | `/backtest` | 판정별·유형별·종목별 적중률 백테스팅 리포트 |
 | `/backtest2 <mode> <start> <end>` | 통합 백테스트 — ichimoku / stage / cross 모드, 기간 지정 가능 |
+| `/watchlist` | 거래대금 워치리스트 현황 (Stage 1 추적 종목, 거래대금 비율·수급·Ichimoku) |
 | `/screener` | 최신 주봉 차트 스크리닝 결과 (DM + 채널) |
 | `/scan` | 주봉 스크리닝 즉시 실행 (전 종목 실시간 스캔, 약 10~20분) |
 | `/volume <종목명\|티커>` | 시간대별 거래량 패턴 분석 |
@@ -60,7 +61,7 @@ RSS 피드 수집 → 기사 본문 크롤링 → LLM 한글 요약
 ## 프로젝트 구조
 
 ```
-run_scheduler.py      # 메인 실행 — RSS 루프 + 봇 병렬 실행
+run_scheduler.py      # 메인 실행 — RSS 루프 + 봇 병렬 실행 / --once watchlist 즉시 실행 지원
 article_fetcher.py    # 기사 본문 크롤링
 summarizer.py         # 로컬 LLM 한글 요약
 signal_detector.py    # LLM 매매 신호 감지
@@ -164,4 +165,4 @@ pytest test_backtest_engine.py -v               # 통합 백테스트 엔진 (65
 
 ## 버전
 
-현재 버전: `0.7.2.0` — [CHANGELOG](CHANGELOG.md) 참고
+현재 버전: `0.7.3.0` — [CHANGELOG](CHANGELOG.md) 참고
