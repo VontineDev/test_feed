@@ -61,44 +61,35 @@ RSS 피드 수집 → 기사 본문 크롤링 → LLM 한글 요약
 ## 프로젝트 구조
 
 ```
-run_scheduler.py      # 메인 실행 — RSS 루프 + 봇 병렬 실행 / --once watchlist 즉시 실행 지원
+run_scheduler.py      # 메인 실행 — RSS 루프 + 봇 병렬 실행 / --once watchlist|stage 지원
+run_backtest.py       # 백테스트 CLI — python run_backtest.py --mode ichimoku --start 2025-01-01
 article_fetcher.py    # 기사 본문 크롤링
 summarizer.py         # 로컬 LLM 한글 요약
 signal_detector.py    # LLM 매매 신호 감지
 market_data.py        # yfinance 시세 조회 + 교차분석
 backtest.py           # 판정 정확도 추적 + 백테스팅 리포트
+backtest_engine.py    # 통합 백테스트 엔진 — ichimoku / stage / cross 3모드, Sharpe·MDD·거래비용
 chart_screener.py     # 주봉 차트 스크리너 (Ichimoku + MA, KOSPI/KOSDAQ 전종목)
-stage_classifier.py   # 일봉 3단계 분류기 — Stage 1/2/3 분류 + 피크아웃 신호 (v0.6.0.0~)
-backtest_engine.py    # 통합 백테스트 엔진 — ichimoku / stage / cross 3모드, Sharpe·MDD·거래비용 (v0.7.0.0~)
-run_backtest.py       # 백테스트 CLI — python run_backtest.py --mode ichimoku --start 2025-01-01 --end 2026-01-01
-compare_tx_amt.py     # 거래대금 근사 오차 검증 — Naver 실제값 vs yfinance Vol×Close 비교 (개발·검증용)
-generate_report.py    # 차트 스크리닝 결과를 UTF-8 파일로 저장 (CLI 스크립트)
-generate_html_report.py # 차트 스크리닝 결과를 HTML 파일로 저장 — 정배열/일반 섹션, 인라인 CSS
+chart_backtest.py     # 차트 백테스트 (Ichimoku 누적 리포트)
+screener_filters.py   # 스크리너 필터 프리셋
+stage_classifier.py   # 일봉 3단계 분류기 — Stage 1/2/3 분류 + 피크아웃 신호
+batch_run.py          # 배치 OHLCV 내보내기 + 분석
 db.py                 # PostgreSQL 연동 (asyncpg)
 telegram_bot.py       # 봇 명령어 처리
 telegram_notify.py    # 신호 알림 전송 + Ichimoku/Stage 비교 메시지
 volume_pattern.py     # 거래량 패턴 분석
 krx_sync.py           # KRX 전체 종목 DB 동기화 (KOSPI+KOSDAQ ~2500종목)
-krx_openapi.py        # KRX Open API REST 클라이언트 — OHLCV·종목마스터·지수 시세 (v0.7.1.0~)
-ohlcv_cache.py        # OHLCV DB 캐시 레이어 (psycopg2, daily_ohlcv 테이블) (v0.7.1.0~)
-krx_flow_sync.py      # 외국인·기관 순매수 파이프라인 → daily_flow 테이블 (v0.7.1.0~)
-ticker_cache.py       # 종목명→yfinance 심볼 인메모리 캐시 (startup 로드, 20:00 KST 갱신)
-batch_run.py          # 배치 OHLCV 내보내기 + 분석 스크립트
-test_backtest.py                   # pytest — 백테스팅 로직 (23개)
-test_telegram_routing.py           # pytest — 텔레그램 신호 라우팅 회귀 (4개)
-test_summarizer_regression_1.py    # pytest — LLM 헬스체크·Qwen3 thinking 회귀
-test_krx_sync.py                   # pytest — KRX 동기화 + 티커 캐시 (31개)
-test_ticker_cache_integration.py   # pytest — market_data·volume_pattern 캐시 통합 (7개)
-test_article_type.py               # pytest — 기사 유형 분류 (17개)
-test_db_dsn.py                     # pytest — DB DSN 설정 회귀 (7개)
-test_macro_signal.py               # pytest — MACD/BB/MA 교차분석 스코어링 (29개)
-test_signal_prompt.py              # pytest — 신호 감지 프롬프트 · WATCH 임계값 회귀 (10개)
-test_chart_screener.py             # pytest — 주봉 스크리너 조건 + KIND 섹터 (26개)
-test_screener_telegram_regression_1.py  # pytest — 스크리너 텔레그램 포맷 회귀 (14개)
-test_fundamental.py                # pytest — PER/PBR/EPS 펀더멘털 레이어 (41개)
-test_generate_html_report.py       # pytest — HTML 리포트 생성 (10개)
-test_stage_classifier.py           # pytest — 일봉 3단계 분류기 전 코드패스 (29개)
-test_backtest_engine.py            # pytest — 통합 백테스트 엔진 (65개 — Sharpe·MDD·cross filter·stage replay)
+krx_openapi.py        # KRX Open API REST 클라이언트 — OHLCV·종목마스터·지수 시세
+ohlcv_cache.py        # OHLCV DB 캐시 레이어
+krx_flow_sync.py      # 외국인·기관 순매수 파이프라인 → daily_flow 테이블
+ticker_cache.py       # 종목명→yfinance 심볼 인메모리 캐시
+
+tests/                # pytest 테스트 (27개 파일)
+docs/                 # 문서 (ARCHITECTURE.md, USER_MANUAL.md, TODOS.md, HowToBacktest.md)
+scripts/              # 운영·개발 보조 스크립트 (generate_*.py, register_task.ps1 등)
+logs/                 # 로그 파일
+reports/              # 스크리닝 리포트 출력물
+sql/                  # DB 스키마 마이그레이션
 ```
 
 ## 환경변수
@@ -127,7 +118,6 @@ KRX_OPENAPI_KEY=your_krx_openapi_key
 # data.krx.co.kr 브라우저 로그인 후 DevTools > Cookies에서 복사
 KRX_SESSION=your_jsessionid_cookie   # JSESSIONID (필수)
 KRX_VISITOR=your_smvisitorid_cookie  # __smVisitorID (선택)
-# 구버전 ID/PW 로그인은 사이트 정책상 차단됨 (KRX_SESSION 방식 권장)
 KRX_ID=your_krx_id
 KRX_PW=your_krx_password
 ```
@@ -139,29 +129,17 @@ KRX_PW=your_krx_password
 pytest -v
 
 # 개별 파일
-pytest test_backtest.py -v                    # 백테스팅 로직 (23개)
-pytest test_telegram_routing.py -v            # 텔레그램 라우팅 신호 게이팅 (4개)
-pytest test_summarizer_regression_1.py -v     # LLM 헬스체크·Qwen3 thinking (회귀)
-pytest test_krx_sync.py -v                    # KRX 동기화 + 티커 캐시 (31개)
-pytest test_ticker_cache_integration.py -v    # market_data·volume_pattern 캐시 통합 (7개)
-pytest test_article_type.py -v               # 기사 유형 분류 (17개)
-pytest test_db_dsn.py -v                     # DB DSN 설정 (7개)
-pytest test_macro_signal.py -v                # MACD/BB/MA 교차분석 스코어링 (29개)
-pytest test_signal_prompt.py -v               # 신호 프롬프트 · WATCH 임계값 회귀 (10개)
-pytest test_chart_screener.py -v              # 주봉 스크리너 + KIND 섹터 (26개)
-pytest test_screener_telegram_regression_1.py -v  # 스크리너 텔레그램 포맷 회귀 (14개)
-pytest test_fundamental.py -v                     # PER/PBR/EPS 펀더멘털 레이어 (41개)
-pytest test_generate_html_report.py -v            # HTML 리포트 생성 (10개)
-pytest test_stage_classifier.py -v               # 일봉 3단계 분류기 전 코드패스 (29개)
-pytest test_backtest_engine.py -v               # 통합 백테스트 엔진 (65개)
+pytest tests/test_backtest.py -v
+pytest tests/test_watchlist_brief.py -v
+pytest tests/test_backtest_engine.py -v
 ```
 
 ## 문서
 
-- [USER_MANUAL.md](USER_MANUAL.md) — 설치부터 첫 텔레그램 알림까지 전체 가이드 (처음 설치하는 분은 여기서 시작)
-- [ARCHITECTURE.md](ARCHITECTURE.md) — 시스템 아키텍처, 모듈 상세, 데이터 흐름
+- [docs/USER_MANUAL.md](docs/USER_MANUAL.md) — 설치부터 첫 텔레그램 알림까지 전체 가이드 (처음 설치하는 분은 여기서 시작)
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 시스템 아키텍처, 모듈 상세, 데이터 흐름
 - [CHANGELOG.md](CHANGELOG.md) — 버전별 변경 이력
-- [docs/HowToBacktest.md](docs/HowToBacktest.md) — 통합 백테스트 엔진 사용 가이드 (backtest_engine.py CLI)
+- [docs/HowToBacktest.md](docs/HowToBacktest.md) — 통합 백테스트 엔진 사용 가이드
 
 ## 버전
 

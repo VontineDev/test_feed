@@ -6,6 +6,10 @@ Output: complete HTML string  (caller writes to file)
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import base64
 import html as _html
 import logging

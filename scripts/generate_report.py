@@ -1,6 +1,10 @@
 """
 generate_report.py — 차트 스크리닝 결과를 UTF-8 파일로 저장
 """
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
