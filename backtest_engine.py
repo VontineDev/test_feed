@@ -1,10 +1,11 @@
 """
 backtest_engine.py  —  통합 백테스트 엔진 (Sprint 3)
 ────────────────────────────────────────────────────────────
-3개 모드:
+4개 모드:
   ichimoku — 주봉 이치모쿠 7조건 walk-forward 재현
   stage    — 일봉 Stage 1 가격 조건 재현 (5/5 조건, 수급은 daily_flow 있을 때)
   cross    — 이치모쿠 + Stage 1 동일 ISO 주 교차
+  stage2   — Stage 1 신호 후 14일 이내 Stage 2 재진입 조건 재현
 
 지표:
   승률 (7d/28d/91d), 평균/중앙값 수익률, KOSPI 초과수익률,
@@ -26,7 +27,7 @@ import logging
 import math
 import statistics
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as _dc_replace
 from datetime import date, datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -49,6 +50,7 @@ MODE_KOR: dict[str, str] = {
     "ichimoku": "이치모쿠(주봉)",
     "stage":    "3단계(일봉)",
     "cross":    "이치모쿠×3단계",
+    "stage2":   "Stage 2(일봉)",
 }
 
 
@@ -68,8 +70,8 @@ class BacktestConfig:
     hold_weeks: Optional[int] = None  # None = 표준 1/4/13w; N = N주 보유 수익률 추가 계산
 
     def __post_init__(self) -> None:
-        if self.mode not in ("ichimoku", "stage", "cross"):
-            raise ValueError(f"mode는 ichimoku|stage|cross 중 하나여야 합니다: {self.mode!r}")
+        if self.mode not in ("ichimoku", "stage", "cross", "stage2"):
+            raise ValueError(f"mode는 ichimoku|stage|cross|stage2 중 하나여야 합니다: {self.mode!r}")
         if self.start >= self.end:
             raise ValueError("start는 end보다 이전이어야 합니다")
         if self.market not in ("KOSPI", "KOSDAQ", "ALL"):
@@ -832,6 +834,103 @@ def _apply_cross_filter(signals: list[SignalRecord]) -> list[SignalRecord]:
     return cross
 
 
+def _replay_stage2(
+    ticker: str,
+    name: str,
+    daily_df: pd.DataFrame,
+    market: str,
+    config: BacktestConfig,
+) -> list[SignalRecord]:
+    """Stage 1 신호 후 14 캘린더일 이내 Stage 2 조건 walk-forward 재현.
+
+    Stage 2 조건 (S1 신호일 다음날부터 14일 이내 매일 검사):
+      C1: close가 S1 종가 대비 −5% ~ −20% 되돌림 (0.80 ≤ close/s1_close ≤ 0.95)
+      C2: close ≥ MA20 × 0.95
+      C3: 거래량 비율(vol_today / vol_s1) ∈ [0.30, 0.60]  — 조용한 눌림목
+      C4: 기관 연속 매수 — 과거 데이터 없음, 건너뜀 (3/4 조건 재현)
+
+    S1 1건당 S2 최대 1건(첫 번째 충족일). 같은 날짜에 복수의 S1이 S2를 가리키면
+    가장 이른 S1 기준 신호만 유지.
+    """
+    # S1 재현: S2 윈도우 확보를 위해 start를 21일 앞으로 확장
+    s1_cfg = _dc_replace(config, mode="stage", start=config.start - timedelta(days=21))
+    s1_signals = _replay_stage(ticker, name, daily_df, market, s1_cfg)
+    if not s1_signals:
+        return []
+
+    # 날짜 → 행 인덱스 매핑
+    idx_map: dict[date, int] = {}
+    for i, ts in enumerate(daily_df.index):
+        d = ts.date() if hasattr(ts, "date") else ts
+        idx_map[d] = i
+
+    df = daily_df.copy()
+    df["ma_20"] = df["Close"].rolling(20, min_periods=20).mean()
+
+    s2_signals: list[SignalRecord] = []
+    seen_dates: set[date] = set()  # 동일 날짜 중복 신호 방지
+
+    for s1 in s1_signals:
+        s1_idx = idx_map.get(s1.signal_date)
+        if s1_idx is None:
+            continue
+
+        s1_close = s1.close_at_signal
+        if s1_close <= 0:
+            continue
+
+        s1_row = df.iloc[s1_idx]
+        if pd.isna(s1_row["Volume"]):
+            continue
+        vol_s1 = float(s1_row["Volume"])
+        if vol_s1 <= 0:
+            continue
+
+        cutoff = s1.signal_date + timedelta(days=14)
+
+        for j in range(s1_idx + 1, len(df)):
+            ts = df.index[j]
+            row_date = ts.date() if hasattr(ts, "date") else ts
+            if row_date > cutoff:
+                break
+            if row_date < config.start or row_date > config.end:
+                continue
+            if row_date in seen_dates:
+                continue
+
+            cur = df.iloc[j]
+            if pd.isna(cur["Close"]) or pd.isna(cur["Volume"]):
+                continue
+
+            c_today = float(cur["Close"])
+            v_today = float(cur["Volume"])
+            ma20    = cur["ma_20"]
+
+            # C1: -5% ~ -20% 되돌림
+            if not (0.80 <= c_today / s1_close <= 0.95):
+                continue
+            # C2: close ≥ MA20 × 0.95
+            if pd.isna(ma20) or c_today < float(ma20) * 0.95:
+                continue
+            # C3: 거래량 비율 [0.30, 0.60]
+            if not (0.30 <= v_today / vol_s1 <= 0.60):
+                continue
+            # C4: 건너뜀
+
+            seen_dates.add(row_date)
+            s2_signals.append(SignalRecord(
+                ticker=ticker,
+                name=name,
+                signal_date=row_date,
+                close_at_signal=c_today,
+                mode="stage2",
+                market=market,
+            ))
+            break  # S1 1건당 S2 최대 1건
+
+    return s2_signals
+
+
 def _fill_returns(
     sig: SignalRecord,
     stock_lookup: dict[date, float],
@@ -961,6 +1060,8 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
             all_signals.extend(_replay_ichimoku(ticker, name, df, mkt, config))
         if config.mode in ("stage", "cross"):
             all_signals.extend(_replay_stage(ticker, name, df, mkt, config, flow_lookup))
+        if config.mode == "stage2":
+            all_signals.extend(_replay_stage2(ticker, name, df, mkt, config))
 
     # 7. Cross 필터
     if config.mode == "cross":
@@ -988,6 +1089,8 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
             note = f"Stage 1: 수급 조건(외국인·기관 순매수) 적용 — {len(flow_lookup)}건 기준"
         else:
             note = "Stage 1: 수급 조건(외국인·기관 순매수) 제외 — daily_flow 데이터 없음"
+    elif config.mode == "stage2":
+        note = "Stage 2: 기관 연속 매수(C4) 제외 — 과거 수급 데이터 없음 (3/4 조건 재현)"
 
     logger.info(
         "[백테스트] 완료 — 신호:%d 승률28d:%s",

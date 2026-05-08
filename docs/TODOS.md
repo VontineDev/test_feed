@@ -320,6 +320,7 @@ Stage 2 conditions to replay:
 **Effort:** S (human: ~1 day / CC: ~20 min)
 **Priority:** P3
 **Blocked by:** Nothing. `compare_tx_amt.py` validation complete (2026-04-27).
+**Completed:** v0.7.3.2 (2026-05-09) — `_replay_stage2`, `mode="stage2"`, `tests/test_replay_stage2.py` (25 tests).
 
 ---
 
