@@ -1019,6 +1019,201 @@ class TestComputeSellSignalsAndS2:
         assert sig.s2_date is None
         assert sig.s3_date is None
 
+    def test_s3_blocked_by_flow_condition(self):
+        """flow_lookup 제공 + 외인·기관 중 하나가 순매도 → S3 미감지."""
+        n_up = 50
+        base = 10_000.0
+        current = date(2021, 1, 4)
+        dates_, opens_, highs_, lows_, closes_, vols_ = [], [], [], [], [], []
+
+        p = base
+        for _ in range(n_up):
+            while current.weekday() >= 5:
+                current += timedelta(days=1)
+            next_p = p * 1.01
+            dates_.append(pd.Timestamp(current, tz="UTC"))
+            opens_.append(p * 0.999); highs_.append(next_p * 1.001)
+            lows_.append(p * 0.999);  closes_.append(next_p); vols_.append(100_000)
+            p = next_p
+            current += timedelta(days=1)
+
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s1_price = p * 1.08
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(p); highs_.append(s1_price * 1.001)
+        lows_.append(p);  closes_.append(s1_price); vols_.append(300_000)
+        s1_date = current
+        current += timedelta(days=1)
+
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s2_price = s1_price * 0.90
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(s2_price); highs_.append(s2_price * 1.001)
+        lows_.append(s2_price);  closes_.append(s2_price); vols_.append(int(300_000 * 0.40))
+        current += timedelta(days=1)
+
+        for _ in range(12):
+            while current.weekday() >= 5:
+                current += timedelta(days=1)
+            dates_.append(pd.Timestamp(current, tz="UTC"))
+            opens_.append(s2_price); highs_.append(s2_price * 1.001)
+            lows_.append(s2_price);  closes_.append(s2_price); vols_.append(100_000)
+            current += timedelta(days=1)
+
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s3_price = s2_price * 1.05
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(s2_price); highs_.append(s3_price * 1.001)
+        lows_.append(s2_price);  closes_.append(s3_price); vols_.append(200_000)
+        s3_day = current
+
+        df = pd.DataFrame(
+            {"Open": opens_, "High": highs_, "Low": lows_,
+             "Close": closes_, "Volume": vols_},
+            index=dates_,
+        )
+        sig = self._make_sig("T.KS", s1_date, s1_price, mode="stage")
+
+        # Case A: 외인 순매도 → S3 차단
+        flow_blocked = {("T.KS", s3_day): (-1_000, 500)}
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0,
+                                     flow_lookup=flow_blocked)
+        assert sig.s2_date is not None
+        assert sig.s3_date is None, "외인 순매도 시 S3 차단되어야 함"
+
+    def test_s3_allowed_by_flow_condition(self):
+        """flow_lookup 제공 + 외인·기관 모두 순매수 → S3 감지."""
+        n_up = 50
+        base = 10_000.0
+        current = date(2021, 6, 1)
+        dates_, opens_, highs_, lows_, closes_, vols_ = [], [], [], [], [], []
+
+        p = base
+        for _ in range(n_up):
+            while current.weekday() >= 5:
+                current += timedelta(days=1)
+            next_p = p * 1.01
+            dates_.append(pd.Timestamp(current, tz="UTC"))
+            opens_.append(p * 0.999); highs_.append(next_p * 1.001)
+            lows_.append(p * 0.999);  closes_.append(next_p); vols_.append(100_000)
+            p = next_p
+            current += timedelta(days=1)
+
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s1_price = p * 1.08
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(p); highs_.append(s1_price * 1.001)
+        lows_.append(p);  closes_.append(s1_price); vols_.append(300_000)
+        s1_date = current
+        current += timedelta(days=1)
+
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s2_price = s1_price * 0.90
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(s2_price); highs_.append(s2_price * 1.001)
+        lows_.append(s2_price);  closes_.append(s2_price); vols_.append(int(300_000 * 0.40))
+        current += timedelta(days=1)
+
+        for _ in range(12):
+            while current.weekday() >= 5:
+                current += timedelta(days=1)
+            dates_.append(pd.Timestamp(current, tz="UTC"))
+            opens_.append(s2_price); highs_.append(s2_price * 1.001)
+            lows_.append(s2_price);  closes_.append(s2_price); vols_.append(100_000)
+            current += timedelta(days=1)
+
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s3_price = s2_price * 1.05
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(s2_price); highs_.append(s3_price * 1.001)
+        lows_.append(s2_price);  closes_.append(s3_price); vols_.append(200_000)
+        s3_day = current
+
+        df = pd.DataFrame(
+            {"Open": opens_, "High": highs_, "Low": lows_,
+             "Close": closes_, "Volume": vols_},
+            index=dates_,
+        )
+        sig = self._make_sig("T.KS", s1_date, s1_price, mode="stage")
+
+        # 외인+기관 모두 순매수
+        flow_ok = {("T.KS", s3_day): (5_000, 3_000)}
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0,
+                                     flow_lookup=flow_ok)
+        assert sig.s2_date is not None
+        assert sig.s3_date == s3_day, "외인+기관 모두 순매수 시 S3 감지되어야 함"
+
+    def test_s3_passes_when_flow_date_missing(self):
+        """flow_lookup 있지만 해당 날짜 데이터 없음 → 조건 5 생략, S3 감지."""
+        n_up = 50
+        base = 10_000.0
+        current = date(2021, 9, 1)
+        dates_, opens_, highs_, lows_, closes_, vols_ = [], [], [], [], [], []
+
+        p = base
+        for _ in range(n_up):
+            while current.weekday() >= 5:
+                current += timedelta(days=1)
+            next_p = p * 1.01
+            dates_.append(pd.Timestamp(current, tz="UTC"))
+            opens_.append(p * 0.999); highs_.append(next_p * 1.001)
+            lows_.append(p * 0.999);  closes_.append(next_p); vols_.append(100_000)
+            p = next_p
+            current += timedelta(days=1)
+
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s1_price = p * 1.08
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(p); highs_.append(s1_price * 1.001)
+        lows_.append(p);  closes_.append(s1_price); vols_.append(300_000)
+        s1_date = current
+        current += timedelta(days=1)
+
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s2_price = s1_price * 0.90
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(s2_price); highs_.append(s2_price * 1.001)
+        lows_.append(s2_price);  closes_.append(s2_price); vols_.append(int(300_000 * 0.40))
+        current += timedelta(days=1)
+
+        for _ in range(12):
+            while current.weekday() >= 5:
+                current += timedelta(days=1)
+            dates_.append(pd.Timestamp(current, tz="UTC"))
+            opens_.append(s2_price); highs_.append(s2_price * 1.001)
+            lows_.append(s2_price);  closes_.append(s2_price); vols_.append(100_000)
+            current += timedelta(days=1)
+
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s3_price = s2_price * 1.05
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(s2_price); highs_.append(s3_price * 1.001)
+        lows_.append(s2_price);  closes_.append(s3_price); vols_.append(200_000)
+        s3_day = current
+
+        df = pd.DataFrame(
+            {"Open": opens_, "High": highs_, "Low": lows_,
+             "Close": closes_, "Volume": vols_},
+            index=dates_,
+        )
+        sig = self._make_sig("T.KS", s1_date, s1_price, mode="stage")
+
+        # flow_lookup은 있지만 s3_day 데이터가 없음 → 조건 5 생략 → 통과
+        flow_no_s3_day: dict = {}
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0,
+                                     flow_lookup=flow_no_s3_day)
+        assert sig.s2_date is not None
+        assert sig.s3_date == s3_day, "flow 데이터 없는 날짜는 조건 5 생략 → S3 감지"
+
     def test_group_metrics_s3_fields(self):
         """_compute_group_metrics populates s3_progression_rate when s3_date present."""
         sig1 = _make_signal(r7=0.01, r28=0.03, r91=0.08)

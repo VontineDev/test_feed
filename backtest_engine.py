@@ -1169,12 +1169,14 @@ def _compute_sell_signals_and_s2(
     ohlcv_map: dict[str, "pd.DataFrame"],
     tx_cost_rt: float,
     stop_loss_pct: float = _STOP_LOSS_PCT,
+    flow_lookup: Optional[dict] = None,
 ) -> None:
     """매도 신호(MA20 이탈 / 손절) 및 S1→S2 진행일 인-플레이스 계산.
 
     매도 우선순위: 손절(close ≤ entry×(1−stop_loss_pct)) > MA20 이탈(close < MA20).
     같은 날에 두 조건이 동시에 충족되면 손절을 기록.
     S2 감지는 Stage 1(mode="stage") 신호에만 적용.
+    S3 조건 5(외인+기관 동시 순매수): flow_lookup 제공 + 해당 날짜 데이터 있을 때만 적용.
     """
     from collections import defaultdict
 
@@ -1259,16 +1261,26 @@ def _compute_sell_signals_and_s2(
                             sig.s2_date = row_date
                             s2_found    = True
 
-                # S3 감지 (S2 이후, 조정 고점 돌파 + RSI≥70 + 거래량)
-                # 조건 5(외인+기관 동시 순매수)는 과거 데이터 없어 건너뜀
+                # S3 감지 (S2 이후, 조정 고점 돌파 + RSI≥70 + 거래량 + 외인·기관 동시 순매수)
                 if (s2_found and sig.s3_date is None
                         and sig.s2_date is not None and row_date > sig.s2_date):
-                    if (pct_chg  is not None and pct_chg  >= 0.05   # C2: +5%
-                            and rsi14   is not None and rsi14   >= 70    # C3: RSI≥70
-                            and high10d is not None and close > high10d  # C1: 10일 고가 돌파
+                    if (pct_chg  is not None and pct_chg  >= 0.05   # C1: +5%
+                            and rsi14   is not None and rsi14   >= 70    # C2: RSI≥70
+                            and high10d is not None and close > high10d  # C3: 10일 고가 돌파
                             and avg30   is not None and avg30   >  0
                             and vol >= 1.5 * avg30):                     # C4: 1.5× vol30
-                        sig.s3_date = row_date
+                        # C5: 외인+기관 동시 순매수 (flow_lookup 있고 해당 날짜 데이터 있을 때만 적용)
+                        s3_flow_ok = True
+                        if flow_lookup is not None:
+                            flow = flow_lookup.get((ticker, row_date))
+                            if flow is not None:
+                                f_net, i_net = flow
+                                s3_flow_ok = (
+                                    f_net is not None and f_net > 0
+                                    and i_net is not None and i_net > 0
+                                )
+                        if s3_flow_ok:
+                            sig.s3_date = row_date
 
                 # 매도 신호 — ichimoku는 주봉 스캔으로 별도 처리
                 if sig.mode != "ichimoku" and sig.sell_date is None:
@@ -1417,13 +1429,14 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
     # 4. KOSPI 벤치마크 조회
     kospi_lookup = _build_price_lookup(kospi_df) if kospi_df is not None else {}
 
-    # 5. 수급 데이터 사전 로드 (stage/cross 모드 + DSN 있을 때)
+    # 5. 수급 데이터 사전 로드 (DSN 있을 때 전 모드 공통 — S1 조건 5 + S3 조건 5 공용)
+    #    S3 감지는 신호일 이후 최대 91일까지 스캔 → fetch_end까지 로드
     flow_lookup: Optional[dict] = None
-    if config.dsn and config.mode in ("stage", "cross"):
+    if config.dsn:
         try:
             from ohlcv_cache import load_flow_data
             ticker_syms = [t for t, _, _ in tickers]
-            flow_lookup = load_flow_data(config.dsn, ticker_syms, config.start, config.end)
+            flow_lookup = load_flow_data(config.dsn, ticker_syms, config.start, fetch_end)
             logger.info("[백테스트] 수급 데이터 로드: %d건", len(flow_lookup))
         except Exception as e:
             logger.warning("[백테스트] 수급 데이터 로드 실패 (조건 5 생략): %s", e)
@@ -1464,7 +1477,7 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
         sig.sector = ticker_sector.get(sig.ticker, "")
 
     # 8.6. 매도 신호·MDD·S2/S3 진행일 계산
-    _compute_sell_signals_and_s2(all_signals, ohlcv_map, config.tx_cost_rt)
+    _compute_sell_signals_and_s2(all_signals, ohlcv_map, config.tx_cost_rt, flow_lookup=flow_lookup)
 
     # 9. 날짜 순 정렬 → MDD equity curve가 시간 순서대로 누적
     all_signals.sort(key=lambda s: s.signal_date)
@@ -1473,13 +1486,17 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
     overall = _compute_group_metrics(all_signals, config.rf_rate_annual, config.hold_weeks)
 
     note = ""
-    if config.mode in ("stage", "cross"):
-        if flow_lookup is not None:
-            note = f"Stage 1: 수급 조건(외국인·기관 순매수) 적용 — {len(flow_lookup)}건 기준"
+    if flow_lookup is not None:
+        notes = []
+        if config.mode in ("stage", "cross"):
+            notes.append(f"S1 조건 5(외·기관 순매수 OR) 적용")
+        notes.append(f"S3 조건 5(외·기관 동시 순매수 AND) 적용 — {len(flow_lookup)}건 기준")
+        note = " | ".join(notes)
+    else:
+        if config.mode in ("stage", "cross"):
+            note = "S1·S3 수급 조건 제외 — daily_flow 없음 (DSN 미설정)"
         else:
-            note = "Stage 1: 수급 조건(외국인·기관 순매수) 제외 — daily_flow 데이터 없음"
-    elif config.mode == "stage2":
-        note = "Stage 2: 기관 연속 매수(C4) 제외 — 과거 수급 데이터 없음 (3/4 조건 재현)"
+            note = "S3 수급 조건 제외 — daily_flow 없음 (DSN 미설정)"
 
     logger.info(
         "[백테스트] 완료 — 신호:%d 승률28d:%s",
