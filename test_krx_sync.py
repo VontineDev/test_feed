@@ -6,7 +6,7 @@ Covers:
 - _derive_yfinance_symbol: KOSPI vs KOSDAQ suffix
 - _parse_listed_at: valid/invalid/empty date strings
 - TickerCache: safe before load, load, resolve, atomic reload
-- sync_krx_listings: EUC-KR decode, iTotCnt mismatch warning, upsert flow
+- sync_krx_listings: KRXOpenAPIClient mock, upsert flow, error paths
 """
 from __future__ import annotations
 
@@ -229,28 +229,12 @@ class TestTickerCache:
 
 
 # ── sync_krx_listings integration ───────────────────────────────────────────
+# krx_sync.py now uses KRXOpenAPIClient (requests-based REST) rather than
+# httpx scraping. Mocks target krx_openapi.KRXOpenAPIClient.
 
 class TestSyncKrxListings:
-    @pytest.mark.asyncio
-    async def test_euc_kr_decoding(self):
-        """Response decoded as EUC-KR should produce valid Korean names."""
-        from krx_sync import sync_krx_listings
-
-        sample_row = {
-            "ISU_CD": "KR7005930003", "ISU_SRT_CD": "005930",
-            "ISU_NM": "삼성전자", "ISU_ABBRV": "삼성전자",
-            "ISU_ENG_NM": "Samsung Electronics", "LIST_DD": "19750611",
-            "MKT_NM": "KOSPI", "SECUGRP_NM": "주권",
-            "SECT_TP_NM": "대형주", "KIND_STKCERT_TP_NM": "보통주",
-            "PAR_VAL": "100", "LIST_SHRS": "5969782550",
-        }
-        payload = json.dumps({"OutBlock_1": [sample_row], "iTotCnt": "1"})
-        euc_kr_bytes = payload.encode("euc-kr")
-
-        mock_resp = MagicMock()
-        mock_resp.raise_for_status = MagicMock()
-        mock_resp.content = euc_kr_bytes
-
+    def _make_mock_pool(self):
+        """Return (pool, conn) mocks wired for executemany/execute/fetchval."""
         mock_tx = MagicMock()
         mock_tx.__aenter__ = AsyncMock(return_value=None)
         mock_tx.__aexit__ = AsyncMock(return_value=False)
@@ -259,112 +243,85 @@ class TestSyncKrxListings:
         mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
         mock_conn.__aexit__ = AsyncMock(return_value=False)
         mock_conn.transaction = MagicMock(return_value=mock_tx)
+        mock_conn.fetchval = AsyncMock(return_value="2025-01-01 00:00:00+00")
         mock_conn.execute = AsyncMock(return_value="DELETE 0")
         mock_conn.executemany = AsyncMock()
 
         mock_pool = AsyncMock()
         mock_pool.acquire = MagicMock(return_value=mock_conn)
-
-        with patch("httpx.AsyncClient") as mock_client_cls:
-            mock_http = AsyncMock()
-            mock_http.__aenter__ = AsyncMock(return_value=mock_http)
-            mock_http.__aexit__ = AsyncMock(return_value=False)
-            mock_http.post = AsyncMock(return_value=mock_resp)
-            mock_client_cls.return_value = mock_http
-
-            count = await sync_krx_listings(mock_pool)
-
-        assert count == 1
+        return mock_pool, mock_conn
 
     @pytest.mark.asyncio
-    async def test_empty_outblock_raises(self):
-        """Empty OutBlock_1 should raise ValueError, not silently return 0."""
-        from krx_sync import sync_krx_listings
-
-        mock_resp = MagicMock()
-        mock_resp.raise_for_status = MagicMock()
-        mock_resp.content = json.dumps({"OutBlock_1": []}).encode("utf-8")
-
-        mock_conn = AsyncMock()
-        mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
-        mock_conn.__aexit__ = AsyncMock(return_value=False)
-        mock_conn.execute = AsyncMock()
-
-        mock_pool = AsyncMock()
-        mock_pool.acquire = MagicMock(return_value=mock_conn)
-
-        with patch("httpx.AsyncClient") as mock_client_cls:
-            mock_http = AsyncMock()
-            mock_http.__aenter__ = AsyncMock(return_value=mock_http)
-            mock_http.__aexit__ = AsyncMock(return_value=False)
-            mock_http.post = AsyncMock(return_value=mock_resp)
-            mock_client_cls.return_value = mock_http
-
-            with pytest.raises(ValueError, match="OutBlock_1"):
-                await sync_krx_listings(mock_pool)
-
-    @pytest.mark.asyncio
-    async def test_all_konex_raises_before_delete(self):
-        """If all rows are KONEX (empty params_list), raise ValueError before the DELETE runs."""
-        from krx_sync import sync_krx_listings
-
-        konex_row = {
-            "ISU_CD": "KR7000000001", "ISU_SRT_CD": "000000",
-            "ISU_NM": "KONEX종목", "ISU_ABBRV": "KONEX종목",
-            "ISU_ENG_NM": "Konex Corp", "LIST_DD": "20200101",
-            "MKT_NM": "KONEX", "SECUGRP_NM": "주권",  # KONEX → filtered
-            "SECT_TP_NM": "", "KIND_STKCERT_TP_NM": "보통주",
-            "PAR_VAL": "500", "LIST_SHRS": "1000000",
-        }
-        payload = json.dumps({"OutBlock_1": [konex_row], "iTotCnt": "1"})
-
-        mock_resp = MagicMock()
-        mock_resp.raise_for_status = MagicMock()
-        mock_resp.content = payload.encode("utf-8")
-
-        mock_pool = AsyncMock()
-
-        with patch("httpx.AsyncClient") as mock_client_cls:
-            mock_http = AsyncMock()
-            mock_http.__aenter__ = AsyncMock(return_value=mock_http)
-            mock_http.__aexit__ = AsyncMock(return_value=False)
-            mock_http.post = AsyncMock(return_value=mock_resp)
-            mock_client_cls.return_value = mock_http
-
-            with pytest.raises(ValueError, match="유효한 종목이 없음"):
-                await sync_krx_listings(mock_pool)
-
-        # Pool.acquire should NEVER have been called — no transaction opened
-        mock_pool.acquire.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_itotcnt_mismatch_raises(self):
-        """iTotCnt mismatch should raise ValueError (possible pagination)."""
+    async def test_upsert_returns_row_count(self):
+        """Valid KOSPI row → upsert called, count == 1."""
         from krx_sync import sync_krx_listings
 
         sample_row = {
             "ISU_CD": "KR7005930003", "ISU_SRT_CD": "005930",
             "ISU_NM": "삼성전자", "ISU_ABBRV": "삼성전자",
-            "ISU_ENG_NM": "Samsung Electronics", "LIST_DD": "19750611",
-            "MKT_NM": "KOSPI", "SECUGRP_NM": "주권",
-            "SECT_TP_NM": "대형주", "KIND_STKCERT_TP_NM": "보통주",
-            "PAR_VAL": "100", "LIST_SHRS": "5969782550",
+            "ISU_ENG_NM": "Samsung Electronics Co., Ltd.",
+            "LIST_DD": "19750611",
         }
-        # iTotCnt claims 2 rows but only 1 delivered
-        payload = json.dumps({"OutBlock_1": [sample_row], "iTotCnt": "2"})
+        mock_pool, mock_conn = self._make_mock_pool()
 
-        mock_resp = MagicMock()
-        mock_resp.raise_for_status = MagicMock()
-        mock_resp.content = payload.encode("utf-8")
+        with patch("krx_openapi.KRXOpenAPIClient") as MockClient:
+            inst = MockClient.return_value
+            inst.get_kospi_tickers.return_value = [sample_row]
+            inst.get_kosdaq_tickers.return_value = []
+            count = await sync_krx_listings(mock_pool)
+
+        assert count == 1
+        mock_conn.executemany.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_api_response_raises(self):
+        """Both markets returning empty → ValueError mentioning KRX_OPENAPI_KEY."""
+        from krx_sync import sync_krx_listings
 
         mock_pool = AsyncMock()
 
-        with patch("httpx.AsyncClient") as mock_client_cls:
-            mock_http = AsyncMock()
-            mock_http.__aenter__ = AsyncMock(return_value=mock_http)
-            mock_http.__aexit__ = AsyncMock(return_value=False)
-            mock_http.post = AsyncMock(return_value=mock_resp)
-            mock_client_cls.return_value = mock_http
-
-            with pytest.raises(ValueError, match="iTotCnt"):
+        with patch("krx_openapi.KRXOpenAPIClient") as MockClient:
+            inst = MockClient.return_value
+            inst.get_kospi_tickers.return_value = []
+            inst.get_kosdaq_tickers.return_value = []
+            with pytest.raises(ValueError, match="KRX_OPENAPI_KEY"):
                 await sync_krx_listings(mock_pool)
+
+        mock_pool.acquire.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_all_invalid_rows_raises_before_delete(self):
+        """Rows missing required fields → ValueError before DB is touched."""
+        from krx_sync import sync_krx_listings
+
+        invalid_row = {"ISU_CD": "", "ISU_SRT_CD": "", "ISU_NM": ""}
+        mock_pool = AsyncMock()
+
+        with patch("krx_openapi.KRXOpenAPIClient") as MockClient:
+            inst = MockClient.return_value
+            inst.get_kospi_tickers.return_value = [invalid_row]
+            inst.get_kosdaq_tickers.return_value = []
+            with pytest.raises(ValueError, match="유효한 종목이 없음"):
+                await sync_krx_listings(mock_pool)
+
+        mock_pool.acquire.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_kospi_and_kosdaq_both_upserted(self):
+        """Rows from KOSPI and KOSDAQ are both processed → count == 2."""
+        from krx_sync import sync_krx_listings
+
+        kospi_row  = {"ISU_CD": "KR7005930003", "ISU_SRT_CD": "005930", "ISU_NM": "삼성전자",  "LIST_DD": "19750611"}
+        kosdaq_row = {"ISU_CD": "KR7086520006", "ISU_SRT_CD": "086520", "ISU_NM": "에코프로비엠", "LIST_DD": "20140425"}
+        mock_pool, mock_conn = self._make_mock_pool()
+
+        with patch("krx_openapi.KRXOpenAPIClient") as MockClient:
+            inst = MockClient.return_value
+            inst.get_kospi_tickers.return_value  = [kospi_row]
+            inst.get_kosdaq_tickers.return_value = [kosdaq_row]
+            count = await sync_krx_listings(mock_pool)
+
+        assert count == 2
+        # executemany called once with both rows in the params list
+        args = mock_conn.executemany.call_args
+        assert len(args[0][1]) == 2

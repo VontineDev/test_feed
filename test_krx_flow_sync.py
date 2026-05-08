@@ -1,0 +1,500 @@
+"""
+Unit tests for krx_flow_sync.py — _KrxDirectFetcher (login, warmup, fetch_raw,
+fetch_records), pure helpers (_parse_int, _next_streak), CSV import, and streak calc.
+
+No network calls: requests.Session is bypassed; _post is mocked at the method level.
+"""
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+from datetime import date
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from krx_flow_sync import (
+    FlowRecord,
+    _KrxDirectFetcher,
+    _compute_streaks,
+    _next_streak,
+    _parse_int,
+    load_csv_records,
+)
+
+
+# ── fixture helper ────────────────────────────────────────────────────────────
+
+def _bare_fetcher() -> _KrxDirectFetcher:
+    """Create _KrxDirectFetcher bypassing the `import requests` in __init__."""
+    fetcher = object.__new__(_KrxDirectFetcher)
+    fetcher._session = MagicMock()
+    fetcher._authenticated = False
+    return fetcher
+
+
+# ── _parse_int ────────────────────────────────────────────────────────────────
+
+class TestParseInt:
+    def test_plain_number(self):
+        assert _parse_int("12345") == 12345
+
+    def test_comma_separated(self):
+        assert _parse_int("1,234,567") == 1234567
+
+    def test_negative(self):
+        assert _parse_int("-5000") == -5000
+
+    def test_float_string_truncates(self):
+        assert _parse_int("123.0") == 123
+
+    def test_empty_returns_none(self):
+        assert _parse_int("") is None
+
+    def test_dash_returns_none(self):
+        assert _parse_int("-") is None
+
+    def test_na_returns_none(self):
+        assert _parse_int("N/A") is None
+
+    def test_nan_returns_none(self):
+        assert _parse_int("nan") is None
+
+    def test_zero(self):
+        assert _parse_int("0") == 0
+
+
+# ── _next_streak ──────────────────────────────────────────────────────────────
+
+class TestNextStreak:
+    def test_net_none_returns_zero(self):
+        assert _next_streak(5, None) == 0
+
+    def test_positive_from_zero(self):
+        assert _next_streak(0, 100) == 1
+
+    def test_positive_from_none(self):
+        assert _next_streak(None, 100) == 1
+
+    def test_positive_increments(self):
+        assert _next_streak(3, 100) == 4
+
+    def test_negative_from_zero(self):
+        assert _next_streak(0, -100) == -1
+
+    def test_negative_decrements(self):
+        assert _next_streak(-2, -500) == -3
+
+    def test_zero_net_resets(self):
+        assert _next_streak(5, 0) == 0
+
+    def test_buy_to_sell_reversal(self):
+        assert _next_streak(3, -100) == -1
+
+    def test_sell_to_buy_reversal(self):
+        assert _next_streak(-3, 100) == 1
+
+
+# ── warmup() ─────────────────────────────────────────────────────────────────
+
+class TestWarmup:
+    def test_returns_true_on_success(self):
+        fetcher = _bare_fetcher()
+        fetcher._session.get.return_value = MagicMock(status_code=200)
+        assert fetcher.warmup() is True
+
+    def test_returns_false_on_connection_error(self):
+        fetcher = _bare_fetcher()
+        fetcher._session.get.side_effect = ConnectionError("timeout")
+        assert fetcher.warmup() is False
+
+    def test_does_not_raise(self):
+        fetcher = _bare_fetcher()
+        fetcher._session.get.side_effect = RuntimeError("unexpected")
+        assert fetcher.warmup() is False  # swallowed, not raised
+
+
+# ── login() ───────────────────────────────────────────────────────────────────
+
+class TestLoginMethod:
+
+    def _run_login(self, response_bytes: bytes) -> tuple[bool, _KrxDirectFetcher]:
+        fetcher = _bare_fetcher()
+        with patch.object(fetcher, "_post", return_value=response_bytes):
+            result = fetcher.login("user", "pw")
+        return result, fetcher
+
+    # --- success paths -------------------------------------------------------
+
+    def test_success_on_json_with_success_key(self):
+        result, fetcher = self._run_login(b'{"result":"success","redirect":"/home"}')
+        assert result is True
+        assert fetcher._authenticated is True
+
+    def test_success_case_insensitive(self):
+        result, _ = self._run_login(b"SUCCESS")
+        assert result is True
+
+    def test_success_on_exact_ok_response(self):
+        result, fetcher = self._run_login(b"OK")
+        assert result is True
+        assert fetcher._authenticated is True
+
+    def test_success_on_ok_with_whitespace(self):
+        result, _ = self._run_login(b"  ok  ")
+        assert result is True
+
+    # --- failure paths -------------------------------------------------------
+
+    def test_failure_on_logout_response(self):
+        result, fetcher = self._run_login(b"LOGOUT")
+        assert result is False
+        assert fetcher._authenticated is False
+
+    def test_failure_on_empty_response(self):
+        result, fetcher = self._run_login(b"")
+        assert result is False
+        assert fetcher._authenticated is False
+
+    def test_failure_on_unrecognized_response(self):
+        result, fetcher = self._run_login(b"ERROR: invalid credentials")
+        assert result is False
+        assert fetcher._authenticated is False
+
+    def test_failure_does_not_set_authenticated(self):
+        _, fetcher = self._run_login(b"LOGOUT")
+        assert fetcher._authenticated is False
+
+    def test_failure_on_network_exception(self):
+        fetcher = _bare_fetcher()
+        with patch.object(fetcher, "_post", side_effect=ConnectionError("timeout")):
+            result = fetcher.login("user", "pw")
+        assert result is False
+        assert fetcher._authenticated is False
+
+    def test_not_ok_substring_rejected(self):
+        """'Not OK, retry' contains 'OK' — must NOT be treated as success."""
+        result, fetcher = self._run_login(b"Not OK, credentials invalid")
+        assert result is False, (
+            "login() must use exact 'OK' match, not substring — "
+            "'Not OK' should be rejected"
+        )
+        assert fetcher._authenticated is False
+
+    def test_login_does_not_raise_on_http_error(self):
+        """Any exception from _post is caught and returns False."""
+        import requests
+        fetcher = _bare_fetcher()
+        with patch.object(fetcher, "_post", side_effect=requests.HTTPError("401")):
+            result = fetcher.login("user", "pw")
+        assert result is False
+
+    # --- encoding fixes -------------------------------------------------------
+
+    def test_utf8_error_response_decoded_correctly(self):
+        """UTF-8 JSON error response must NOT be decoded as EUC-KR (mojibake)."""
+        # KRX login endpoint returns UTF-8 JSON, not EUC-KR.
+        # Before fix: raw.decode("euc-kr") → garbled Korean.
+        # After fix: _decode() tries UTF-8 first → clean message.
+        response = '{"_error_code":"CD004","_error_message":"아이디 또는 비밀번호가 잘못되었습니다"}'.encode("utf-8")
+        result, _ = self._run_login(response)
+        assert result is False  # error response correctly rejected
+
+    def test_cd003_returns_false_with_actionable_message(self):
+        """CD003 = KRX generic auth failure → False, no retry."""
+        cd003 = b'{"_error_code":"CD003","_error_message":"service error"}'
+        result, fetcher = self._run_login(cd003)
+        assert result is False
+        assert fetcher._authenticated is False
+
+    def test_cd003_single_post_call_no_retry(self):
+        """CD003 must NOT trigger a second _post call (retry logic removed)."""
+        cd003 = b'{"_error_code":"CD003"}'
+        fetcher = _bare_fetcher()
+        call_count = [0]
+        def capture(url, data, **kwargs):
+            call_count[0] += 1
+            return cd003
+        with patch.object(fetcher, "_post", side_effect=capture):
+            fetcher.login("user", "pw")
+        assert call_count[0] == 1  # only one attempt, no retry
+
+
+# ── _decode helper ────────────────────────────────────────────────────────────
+
+class TestDecodeHelper:
+    def test_utf8_bytes_decoded_as_utf8(self):
+        fetcher = _bare_fetcher()
+        korean = "외국인합계"
+        assert fetcher._decode(korean.encode("utf-8")) == korean
+
+    def test_euc_kr_bytes_fall_back_to_euc_kr(self):
+        fetcher = _bare_fetcher()
+        korean = "외국인합계"
+        assert fetcher._decode(korean.encode("euc-kr")) == korean
+
+    def test_ascii_bytes_decoded_as_utf8(self):
+        fetcher = _bare_fetcher()
+        assert fetcher._decode(b"LOGOUT") == "LOGOUT"
+
+
+# ── fetch_raw() ───────────────────────────────────────────────────────────────
+
+class TestFetchRaw:
+    def _json_bytes(self, rows: list, key: str = "output") -> bytes:
+        return json.dumps({key: rows}).encode("utf-8")
+
+    def test_returns_rows_from_output_key(self):
+        fetcher = _bare_fetcher()
+        rows = [{"INVST_TP_NM": "외국인합계", "TDD_STR_DD": "20250103", "NETBID_TRDVOL": "1000"}]
+        with patch.object(fetcher, "_post", return_value=self._json_bytes(rows, "output")):
+            result = fetcher.fetch_raw("005930", date(2025, 1, 1), date(2025, 1, 5))
+        assert result == rows
+
+    def test_returns_rows_from_outblock1_key(self):
+        fetcher = _bare_fetcher()
+        rows = [{"INVST_TP_NM": "기관합계", "TDD_STR_DD": "20250103", "NETBID_TRDVOL": "-500"}]
+        with patch.object(fetcher, "_post", return_value=self._json_bytes(rows, "OutBlock_1")):
+            result = fetcher.fetch_raw("005930", date(2025, 1, 1), date(2025, 1, 5))
+        assert result == rows
+
+    def test_returns_empty_on_logout(self):
+        fetcher = _bare_fetcher()
+        with patch.object(fetcher, "_post", return_value=b"LOGOUT"):
+            result = fetcher.fetch_raw("005930", date(2025, 1, 1), date(2025, 1, 5))
+        assert result == []
+
+    def test_returns_empty_on_empty_bytes(self):
+        fetcher = _bare_fetcher()
+        with patch.object(fetcher, "_post", return_value=b""):
+            result = fetcher.fetch_raw("005930", date(2025, 1, 1), date(2025, 1, 5))
+        assert result == []
+
+    def test_returns_empty_on_request_exception(self):
+        fetcher = _bare_fetcher()
+        with patch.object(fetcher, "_post", side_effect=ConnectionError("down")):
+            result = fetcher.fetch_raw("005930", date(2025, 1, 1), date(2025, 1, 5))
+        assert result == []
+
+    def test_returns_empty_on_invalid_json(self):
+        fetcher = _bare_fetcher()
+        with patch.object(fetcher, "_post", return_value=b"not json"):
+            result = fetcher.fetch_raw("005930", date(2025, 1, 1), date(2025, 1, 5))
+        assert result == []
+
+    def test_utf8_json_response_parsed_correctly(self):
+        """UTF-8 JSON (real KRX format) must be parsed, not garbled.
+
+        Before fix: raw.decode("euc-kr") garbled 외국인합계/기관합계 so
+        investor type names never matched → fetch_records() returned 0 records.
+        After fix: _decode() returns clean UTF-8 text.
+        """
+        rows = [
+            {"INVST_TP_NM": "외국인합계", "TDD_STR_DD": "20250103", "NETBID_TRDVOL": "1000"},
+            {"INVST_TP_NM": "기관합계",   "TDD_STR_DD": "20250103", "NETBID_TRDVOL": "-500"},
+        ]
+        # Encode as UTF-8 (what KRX actually sends)
+        utf8_response = json.dumps({"output": rows}).encode("utf-8")
+        fetcher = _bare_fetcher()
+        with patch.object(fetcher, "_post", return_value=utf8_response):
+            result = fetcher.fetch_raw("005930", date(2025, 1, 1), date(2025, 1, 5))
+        # Investor type names must survive the decode intact
+        assert len(result) == 2
+        assert result[0]["INVST_TP_NM"] == "외국인합계"
+        assert result[1]["INVST_TP_NM"] == "기관합계"
+
+
+# ── fetch_records() ───────────────────────────────────────────────────────────
+
+class TestFetchRecords:
+    def _rows(self, date_str: str, foreign: str, inst: str) -> list[dict]:
+        return [
+            {"TDD_STR_DD": date_str, "INVST_TP_NM": "외국인합계", "NETBID_TRDVOL": foreign},
+            {"TDD_STR_DD": date_str, "INVST_TP_NM": "기관합계",   "NETBID_TRDVOL": inst},
+        ]
+
+    def test_parses_foreign_and_inst(self):
+        fetcher = _bare_fetcher()
+        with patch.object(fetcher, "fetch_raw", return_value=self._rows("20250103", "1000", "-500")):
+            records = fetcher.fetch_records(
+                "005930.KS", date(2025, 1, 1), date(2025, 1, 5),
+                prev_f_streak=None, prev_i_streak=None, rate_delay=0,
+            )
+        assert len(records) == 1
+        rec = records[0]
+        assert rec.ticker == "005930.KS"
+        assert rec.trade_date == date(2025, 1, 3)
+        assert rec.foreign_net == 1000
+        assert rec.inst_net == -500
+
+    def test_streak_accumulates_across_days(self):
+        fetcher = _bare_fetcher()
+        rows = self._rows("20250103", "1000", "200") + self._rows("20250106", "500", "300")
+        with patch.object(fetcher, "fetch_raw", return_value=rows):
+            records = fetcher.fetch_records(
+                "005930.KS", date(2025, 1, 1), date(2025, 1, 10),
+                prev_f_streak=None, prev_i_streak=None, rate_delay=0,
+            )
+        assert records[0].foreign_streak == 1
+        assert records[1].foreign_streak == 2
+
+    def test_returns_empty_when_no_rows(self):
+        fetcher = _bare_fetcher()
+        with patch.object(fetcher, "fetch_raw", return_value=[]):
+            records = fetcher.fetch_records(
+                "005930.KS", date(2025, 1, 1), date(2025, 1, 5),
+                prev_f_streak=None, prev_i_streak=None, rate_delay=0,
+            )
+        assert records == []
+
+    def test_alternative_date_key_trd_dd(self):
+        """fetch_records handles TRD_DD as fallback date field."""
+        fetcher = _bare_fetcher()
+        rows = [
+            {"TRD_DD": "20250103", "INVST_TP_NM": "외국인합계", "NETBID_TRDVOL": "300"},
+            {"TRD_DD": "20250103", "INVST_TP_NM": "기관합계",   "NETBID_TRDVOL": "100"},
+        ]
+        with patch.object(fetcher, "fetch_raw", return_value=rows):
+            records = fetcher.fetch_records(
+                "005930.KS", date(2025, 1, 1), date(2025, 1, 5),
+                prev_f_streak=None, prev_i_streak=None, rate_delay=0,
+            )
+        assert len(records) == 1
+        assert records[0].foreign_net == 300
+
+    def test_rows_outside_date_range_excluded(self):
+        fetcher = _bare_fetcher()
+        rows = (
+            self._rows("20241231", "100", "50") +   # before start
+            self._rows("20250103", "200", "80") +   # in range
+            self._rows("20250201", "300", "60")     # after end
+        )
+        with patch.object(fetcher, "fetch_raw", return_value=rows):
+            records = fetcher.fetch_records(
+                "005930.KS", date(2025, 1, 1), date(2025, 1, 31),
+                prev_f_streak=None, prev_i_streak=None, rate_delay=0,
+            )
+        assert len(records) == 1
+        assert records[0].trade_date == date(2025, 1, 3)
+
+    def test_yfinance_suffix_stripped_for_fetch_raw(self):
+        """005930.KS → fetch_raw is called with '005930', not '005930.KS'."""
+        fetcher = _bare_fetcher()
+        captured = {}
+
+        def capture(krx_code, start, end):
+            captured["krx_code"] = krx_code
+            return []
+
+        with patch.object(fetcher, "fetch_raw", side_effect=capture):
+            fetcher.fetch_records(
+                "005930.KS", date(2025, 1, 1), date(2025, 1, 5),
+                prev_f_streak=None, prev_i_streak=None, rate_delay=0,
+            )
+
+        assert captured["krx_code"] == "005930"
+
+
+# ── load_csv_records() ────────────────────────────────────────────────────────
+
+class TestLoadCsvRecords:
+    def _tmp_csv(self, content: str) -> str:
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        with os.fdopen(fd, "w", encoding="utf-8-sig") as f:
+            f.write(content)
+        return path
+
+    def test_standard_format(self):
+        path = self._tmp_csv("date,ticker,foreign_net,inst_net\n2025-01-03,005930.KS,1000,-500\n")
+        try:
+            records = load_csv_records(path)
+        finally:
+            os.unlink(path)
+        assert len(records) == 1
+        rec = records[0]
+        assert rec.ticker == "005930.KS"
+        assert rec.trade_date == date(2025, 1, 3)
+        assert rec.foreign_net == 1000
+        assert rec.inst_net == -500
+
+    def test_standard_format_yyyymmdd(self):
+        path = self._tmp_csv("date,ticker,foreign_net,inst_net\n20250103,005930.KS,500,-200\n")
+        try:
+            records = load_csv_records(path)
+        finally:
+            os.unlink(path)
+        assert records[0].trade_date == date(2025, 1, 3)
+
+    def test_krx_style_format(self):
+        content = "날짜,종목코드,종목명,외국인순매수,기관합계\n20250103,005930,삼성전자,1234,-567\n"
+        path = self._tmp_csv(content)
+        try:
+            records = load_csv_records(path)
+        finally:
+            os.unlink(path)
+        assert len(records) == 1
+        rec = records[0]
+        assert rec.trade_date == date(2025, 1, 3)
+        assert rec.foreign_net == 1234
+        assert rec.inst_net == -567
+        assert rec.ticker == "005930.KS"
+
+    def test_skips_invalid_dates(self):
+        path = self._tmp_csv("date,ticker,foreign_net,inst_net\nBAD,005930.KS,100,50\n")
+        try:
+            records = load_csv_records(path)
+        finally:
+            os.unlink(path)
+        assert records == []
+
+    def test_multiple_rows(self):
+        content = (
+            "date,ticker,foreign_net,inst_net\n"
+            "2025-01-02,005930.KS,100,50\n"
+            "2025-01-03,005930.KS,200,-80\n"
+        )
+        path = self._tmp_csv(content)
+        try:
+            records = load_csv_records(path)
+        finally:
+            os.unlink(path)
+        assert len(records) == 2
+        assert records[0].trade_date == date(2025, 1, 2)
+        assert records[1].trade_date == date(2025, 1, 3)
+
+
+# ── _compute_streaks() ────────────────────────────────────────────────────────
+
+class TestComputeStreaks:
+    def test_ascending_streak(self):
+        records = [
+            FlowRecord("A.KS", date(2025, 1, 1), 100, 50),
+            FlowRecord("A.KS", date(2025, 1, 2), 200, 30),
+            FlowRecord("A.KS", date(2025, 1, 3), 150, 20),
+        ]
+        result = _compute_streaks(records)
+        f_streaks = [r.foreign_streak for r in result]
+        assert f_streaks == [1, 2, 3]
+
+    def test_streak_resets_on_reversal(self):
+        records = [
+            FlowRecord("A.KS", date(2025, 1, 1), 100, None),
+            FlowRecord("A.KS", date(2025, 1, 2), 200, None),
+            FlowRecord("A.KS", date(2025, 1, 3), -50, None),
+        ]
+        result = _compute_streaks(records)
+        assert result[2].foreign_streak == -1
+
+    def test_two_tickers_independent(self):
+        records = [
+            FlowRecord("A.KS", date(2025, 1, 1), 100, None),
+            FlowRecord("A.KS", date(2025, 1, 2), 200, None),
+            FlowRecord("B.KQ", date(2025, 1, 1), -50, None),
+            FlowRecord("B.KQ", date(2025, 1, 2), -100, None),
+        ]
+        result = _compute_streaks(records)
+        a = sorted([r for r in result if r.ticker == "A.KS"], key=lambda r: r.trade_date)
+        b = sorted([r for r in result if r.ticker == "B.KQ"], key=lambda r: r.trade_date)
+        assert a[1].foreign_streak == 2
+        assert b[1].foreign_streak == -2

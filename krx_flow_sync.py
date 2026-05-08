@@ -65,12 +65,16 @@ import logging
 import os
 import sys
 import time as _time
+from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Optional
 
 from dotenv import load_dotenv
 
 load_dotenv()
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -80,7 +84,6 @@ logger = logging.getLogger(__name__)
 
 
 # ── 수급 레코드 ────────────────────────────────────────────────
-from dataclasses import dataclass
 
 
 @dataclass
@@ -108,6 +111,27 @@ def _next_streak(prev: Optional[int], net: Optional[int]) -> Optional[int]:
     if net < 0:
         return min(-1, p - 1)
     return 0
+
+
+def _isin_from_krx_code(krx_code: str, suffix: str) -> str:
+    """KRX 6자리 코드 + yfinance 접미사 → 12자리 ISIN.
+
+    MDCSTAT02302는 isuSrtCd(6자리) 단독으로는 output=[] 반환.
+    isuCd(ISIN)가 반드시 필요. KOSPI→KR7, KOSDAQ→KR8.
+    체크디짓: ISO 6166 Luhn 알고리즘.
+    """
+    type_digit = "7" if suffix == ".KS" else "8"
+    body = f"KR{type_digit}{krx_code}00"  # 11자리
+    digits = "".join(str(ord(c) - 55) if c.isalpha() else c for c in body)
+    total = 0
+    for i, d in enumerate(reversed(digits)):
+        n = int(d)
+        if i % 2 == 0:
+            n = n * 2
+            if n > 9:
+                n -= 9
+        total += n
+    return body + str((10 - total % 10) % 10)
 
 
 # ── KRX Direct 백엔드 ─────────────────────────────────────────
@@ -149,9 +173,12 @@ class _KrxDirectFetcher:
         "Content-Type":    "application/x-www-form-urlencoded; charset=UTF-8",
     }
 
-    # 투자자 유형명 (EUC-KR 디코딩 후 정확한 문자열)
-    _FOREIGN_KEY = "외국인합계"
-    _INST_KEY    = "기관합계"
+    # isuCd 기반 쿼리의 TRDVAL 컬럼 인덱스 (실증 확인: 2026-04 tariff shock 기준)
+    # TRDVAL1=외국인합계, TRDVAL2=기관합계, TRDVAL3=기타법인, TRDVAL4=개인
+    _FOREIGN_COL = "TRDVAL1"
+    _INST_COL    = "TRDVAL2"
+    # KRX API 날짜 범위 상한 (초과 시 400). 30일은 OK, 실제 상한 미확인 → 보수적 90일.
+    _CHUNK_DAYS  = 90
 
     def __init__(self) -> None:
         import requests as _req
@@ -163,6 +190,14 @@ class _KrxDirectFetcher:
         resp.raise_for_status()
         return resp.content
 
+    @staticmethod
+    def _decode(raw: bytes) -> str:
+        """KRX 응답 디코딩. JSON API는 UTF-8, 구형 페이지는 EUC-KR."""
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return raw.decode("euc-kr", errors="replace")
+
     def warmup(self) -> bool:
         """KRX 세션 초기화 (JSESSIONID 쿠키 획득)."""
         try:
@@ -173,32 +208,73 @@ class _KrxDirectFetcher:
             return False
 
     def login(self, krx_id: str, krx_pw: str) -> bool:
-        """KRX 계정 로그인. 성공 시 True."""
+        """KRX 계정 로그인. 성공 시 True.
+
+        data.krx.co.kr 회원 자격증명 필요 (openapi.krx.co.kr과 별도 가입).
+        """
         try:
             raw = self._post(self._LOGIN, {"userId": krx_id, "userPw": krx_pw})
-            text = raw.decode("euc-kr", errors="replace")
-            # "LOGOUT" (6B) 등 짧은 오류 응답과 구분하기 위해 길이 조건 제거.
-            # KRX 로그인 성공 응답에는 "success" 또는 JSON redirect가 포함됨.
-            if "success" in text.lower() or ("OK" in text and "LOGOUT" not in text):
+            text = self._decode(raw)
+
+            # KRX 로그인 성공 응답: "success" 포함 또는 단독 "OK" 응답.
+            if "success" in text.lower() or text.strip().upper() == "OK":
                 self._authenticated = True
                 logger.info("[krx-direct] 로그인 성공")
                 return True
-            logger.warning("[krx-direct] 로그인 응답 (실패로 처리): %s", text[:80])
+
+            # 실패: KRX 실제 에러 메시지 추출해서 표시
+            err_code, err_msg = self._parse_krx_error(text)
+            # CD003("서비스 에러")은 KRX의 범용 인증 실패 코드
+            # (잘못된 자격증명, 미가입 계정 모두 동일 코드 반환)
+            if err_code == "CD003":
+                logger.warning(
+                    "[krx-direct] 로그인 실패 [CD003] — "
+                    "data.krx.co.kr에 직접 접속해서 KRX_ID/KRX_PW로 로그인 가능한지 확인하세요. "
+                    "openapi.krx.co.kr 계정과 data.krx.co.kr 계정은 별도 가입이 필요합니다."
+                )
+            else:
+                logger.warning("[krx-direct] 로그인 실패 [%s]: %s", err_code or "?", err_msg)
             return False
         except Exception as e:
             logger.warning("[krx-direct] 로그인 실패: %s", e)
             return False
+
+    def inject_session(self, jsessionid: str, visitor_id: Optional[str] = None) -> None:
+        """브라우저 쿠키 주입. login() 없이 인증 우회.
+
+        JSESSIONID는 .krx.co.kr(서브도메인 포함)으로 설정.
+        mdc.client_session은 항상 true로 설정 (서버 세션 활성 확인용).
+        """
+        self._session.cookies.set("JSESSIONID", jsessionid, domain=".krx.co.kr")
+        self._session.cookies.set("mdc.client_session", "true", domain="data.krx.co.kr")
+        if visitor_id:
+            self._session.cookies.set("__smVisitorID", visitor_id, domain="data.krx.co.kr")
+        self._authenticated = True
+        logger.info("[krx-direct] KRX_SESSION 쿠키 주입 완료")
+
+    @staticmethod
+    def _parse_krx_error(text: str) -> tuple[str, str]:
+        """KRX JSON 에러 응답에서 (_error_code, _error_message) 추출."""
+        try:
+            err = _json.loads(text)
+            return (
+                str(err.get("_error_code") or ""),
+                str(err.get("_error_message") or text[:120]),
+            )
+        except Exception:
+            return ("", text[:120])
 
     def fetch_raw(
         self,
         krx_code: str,
         start: date,
         end: date,
+        isuCd: Optional[str] = None,
     ) -> list[dict]:
         """단일 종목 투자자별 거래실적 원본 행 목록 반환.
 
-        반환 형식: [{"TDD_STR_DD": "20250102", "INVST_TP_NM": "외국인합계",
-                      "NETBID_TRDVOL": "12345", ...}, ...]
+        isuCd(ISIN) 필수: 없으면 output=[] 반환됨.
+        반환 형식: [{"TRD_DD": "2026/05/06", "TRDVAL1": "12345", "TRDVAL2": "-678", ...}, ...]
         """
         payload = {
             "bld":       self._BLD_DAILY,
@@ -210,6 +286,8 @@ class _KrxDirectFetcher:
             "askBid":   "3",
             "csvxls_isNo": "false",
         }
+        if isuCd:
+            payload["isuCd"] = isuCd
         try:
             raw = self._post(self._DATA, payload)
         except Exception as e:
@@ -222,7 +300,7 @@ class _KrxDirectFetcher:
             return []
 
         try:
-            text = raw.decode("euc-kr", errors="replace")
+            text = self._decode(raw)
             data = _json.loads(text)
         except Exception as e:
             logger.debug("[krx-direct] JSON 파싱 실패 (%s): %s", krx_code, e)
@@ -241,48 +319,38 @@ class _KrxDirectFetcher:
         prev_i_streak: Optional[int],
         rate_delay: float = 0.5,
     ) -> list[FlowRecord]:
-        """단일 종목 수급 FlowRecord 목록 반환."""
-        krx_code = yf_symbol.split(".")[0]
-        rows = self.fetch_raw(krx_code, start, end)
-        if not rows:
+        """단일 종목 수급 FlowRecord 목록 반환.
+
+        KRX API 날짜 범위 제한으로 _CHUNK_DAYS 단위로 분할 요청.
+        """
+        parts = yf_symbol.rsplit(".", 1)
+        krx_code = parts[0]
+        suffix   = "." + parts[1] if len(parts) == 2 else ".KS"
+        isuCd    = _isin_from_krx_code(krx_code, suffix)
+
+        # 날짜 범위를 청크로 분할 수집
+        all_rows: list[dict] = []
+        chunk_start = start
+        while chunk_start <= end:
+            chunk_end = min(chunk_start + timedelta(days=self._CHUNK_DAYS - 1), end)
+            chunk_rows = self.fetch_raw(krx_code, chunk_start, chunk_end, isuCd)
+            all_rows.extend(chunk_rows)
+            chunk_start = chunk_end + timedelta(days=1)
+            if rate_delay > 0 and chunk_start <= end:
+                _time.sleep(rate_delay)
+
+        if not all_rows:
             return []
-
-        # 날짜별로 외국인/기관 순매수 취합
-        # 행 구조: 날짜 × 투자자유형 (행이 (날짜, 유형) 조합이거나
-        #           날짜별로 그룹핑된 경우 모두 처리)
-        from collections import defaultdict
-        by_date: dict[str, dict[str, Optional[int]]] = defaultdict(dict)
-
-        for row in rows:
-            raw_date = (
-                row.get("TDD_STR_DD")
-                or row.get("TRD_DD")
-                or row.get("BAS_DD")
-                or ""
-            )
-            raw_date = raw_date.replace("-", "").replace("/", "").strip()
-            if len(raw_date) != 8 or not raw_date.isdigit():
-                continue
-
-            inv_type = row.get("INVST_TP_NM", "").strip()
-            raw_vol = (
-                row.get("NETBID_TRDVOL")
-                or row.get("NET_BID_TRDVOL")
-                or row.get("NETBIDVOL")
-                or ""
-            )
-            vol = _parse_int(raw_vol)
-
-            if inv_type == self._FOREIGN_KEY:
-                by_date[raw_date]["foreign"] = vol
-            elif inv_type == self._INST_KEY:
-                by_date[raw_date]["inst"] = vol
 
         records: list[FlowRecord] = []
         f_streak = prev_f_streak
         i_streak = prev_i_streak
 
-        for raw_date in sorted(by_date):
+        for row in sorted(all_rows, key=lambda r: r.get("TRD_DD", "")):
+            raw_date = (row.get("TRD_DD") or row.get("TDD_STR_DD") or row.get("BAS_DD") or "")
+            raw_date = raw_date.replace("/", "").replace("-", "").strip()
+            if len(raw_date) != 8 or not raw_date.isdigit():
+                continue
             try:
                 d = date(int(raw_date[:4]), int(raw_date[4:6]), int(raw_date[6:8]))
             except ValueError:
@@ -290,9 +358,8 @@ class _KrxDirectFetcher:
             if not (start <= d <= end):
                 continue
 
-            day = by_date[raw_date]
-            f_net = day.get("foreign")
-            i_net = day.get("inst")
+            f_net = _parse_int(row.get(self._FOREIGN_COL, ""))
+            i_net = _parse_int(row.get(self._INST_COL, ""))
             f_streak = _next_streak(f_streak, f_net)
             i_streak = _next_streak(i_streak, i_net)
 
@@ -305,6 +372,7 @@ class _KrxDirectFetcher:
                 inst_streak=i_streak,
             ))
 
+        # 마지막 청크 이후 딜레이
         if rate_delay > 0:
             _time.sleep(rate_delay)
 
@@ -324,16 +392,23 @@ def _parse_int(s: str) -> Optional[int]:
         return None
 
 
-def _make_krx_direct(krx_id: Optional[str], krx_pw: Optional[str]) -> "_KrxDirectFetcher":
-    """KrxDirectFetcher 초기화: warmup → login."""
+def _make_krx_direct(
+    krx_id: Optional[str],
+    krx_pw: Optional[str],
+    krx_session: Optional[str] = None,
+    krx_visitor: Optional[str] = None,
+) -> "_KrxDirectFetcher":
+    """KrxDirectFetcher 초기화: warmup → (세션 주입 또는 login)."""
     fetcher = _KrxDirectFetcher()
     fetcher.warmup()
-    if krx_id and krx_pw:
+    if krx_session:
+        fetcher.inject_session(krx_session, krx_visitor)
+    elif krx_id and krx_pw:
         fetcher.login(krx_id, krx_pw)
     else:
         logger.warning(
-            "[krx-direct] KRX_ID/KRX_PW 미설정 — 일부 엔드포인트는 인증 필요.\n"
-            "  data.krx.co.kr 회원가입 후 .env에 KRX_ID/KRX_PW 추가하세요."
+            "[krx-direct] KRX_SESSION/KRX_ID/KRX_PW 미설정 — 인증 없이 시도합니다.\n"
+            "  브라우저로 data.krx.co.kr 로그인 후 JSESSIONID 쿠키를 KRX_SESSION에 설정하세요."
         )
     return fetcher
 
@@ -506,15 +581,11 @@ def load_csv_records(csv_path: str) -> list[FlowRecord]:
                     continue
                 d = date(int(raw_date[:4]), int(raw_date[4:6]), int(raw_date[6:8]))
 
-                def _to_int(s: str) -> Optional[int]:
-                    s = s.replace(",", "").strip()
-                    return int(s) if s and s != "-" else None
-
                 records.append(FlowRecord(
                     ticker=ticker,
                     trade_date=d,
-                    foreign_net=_to_int(f_raw),
-                    inst_net=_to_int(i_raw),
+                    foreign_net=_parse_int(f_raw),
+                    inst_net=_parse_int(i_raw),
                 ))
             except Exception as e:
                 logger.warning("[csv] line %d 건너뜀: %s", i, e)
@@ -525,7 +596,6 @@ def load_csv_records(csv_path: str) -> list[FlowRecord]:
 
 def _compute_streaks(records: list[FlowRecord]) -> list[FlowRecord]:
     """레코드 목록에서 종목별 스트릭 계산 (날짜 오름차순 전제)."""
-    from collections import defaultdict
     f_streaks: dict[str, Optional[int]] = defaultdict(lambda: None)
     i_streaks: dict[str, Optional[int]] = defaultdict(lambda: None)
 
@@ -551,7 +621,7 @@ async def _save_batch(pool, records: list[FlowRecord]) -> int:
             await save_daily_flow(
                 pool,
                 ticker=rec.ticker,
-                trade_date=rec.trade_date.isoformat(),
+                trade_date=rec.trade_date,
                 foreign_net=rec.foreign_net,
                 inst_net=rec.inst_net,
                 foreign_streak=rec.foreign_streak,
@@ -581,6 +651,66 @@ async def _get_existing_dates(pool, ticker: str, start: date, end: date) -> set[
 
 # ── 메인 워크플로우 ───────────────────────────────────────────
 
+def _filter_tickers(all_tickers, market: str, max_tickers: int) -> list[tuple[str, str]]:
+    if market == "KOSPI":
+        tickers = [(t, n) for t, n, _ in all_tickers if t.endswith(".KS")]
+    elif market == "KOSDAQ":
+        tickers = [(t, n) for t, n, _ in all_tickers if t.endswith(".KQ")]
+    else:
+        tickers = [(t, n) for t, n, _ in all_tickers]
+    if max_tickers > 0:
+        tickers = tickers[:max_tickers]
+    return tickers
+
+
+def _already_loaded(existing: set, start: date, end: date) -> bool:
+    # 달력일 기준이 아닌 거래일 기준으로 비교 (KRX 연간 거래일 ≈ 250일).
+    # 달력일(~365) × 0.9 = 328 > 실제 저장 가능한 거래일(~250) 이므로
+    # 달력일 비교 시 증분 스킵이 절대 동작하지 않음.
+    expected = int((end - start).days * 250 / 365)
+    return len(existing) >= max(1, expected * 0.9)
+
+
+# 연속 빈 응답 N건 → 세션 만료 의심 → Samsung 프로브로 확인
+_SESSION_EXPIRY_THRESHOLD = 5
+
+
+async def _handle_possible_expiry(fetcher: "_KrxDirectFetcher", consecutive_empty: int) -> bool:
+    """연속 빈 응답 임계값 도달 시 세션 만료 여부 확인 후 갱신 대기.
+
+    Samsung(005930) 단기 프로브로 확인:
+      - 데이터 반환 → 세션 정상 (해당 종목에 데이터 없는 것) → False 반환
+      - 빈 응답 → 세션 만료 → .env 갱신 대기 후 True 반환 (카운터 리셋)
+    """
+    if consecutive_empty < _SESSION_EXPIRY_THRESHOLD:
+        return False
+
+    loop = asyncio.get_running_loop()
+    yesterday = date.today() - timedelta(days=1)
+    isuCd = _isin_from_krx_code("005930", ".KS")
+    probe_rows = await loop.run_in_executor(
+        None, lambda: fetcher.fetch_raw("005930", yesterday - timedelta(days=7), yesterday, isuCd)
+    )
+    if probe_rows:
+        return False  # 세션 정상
+
+    logger.warning(
+        "[flow] 세션 만료 감지 (연속 빈 응답 %d건) — "
+        ".env의 KRX_SESSION을 브라우저에서 새로 복사해 저장하세요. 30초마다 재확인합니다.",
+        consecutive_empty,
+    )
+    current_session = os.environ.get("KRX_SESSION", "")
+    while True:
+        await asyncio.sleep(30)
+        load_dotenv(override=True)
+        new_session = os.environ.get("KRX_SESSION", "")
+        if new_session and new_session != current_session:
+            fetcher.inject_session(new_session, os.environ.get("KRX_VISITOR"))
+            logger.info("[flow] KRX_SESSION 갱신 완료 — 수집을 재개합니다.")
+            return True
+        logger.info("[flow] KRX_SESSION 미갱신 — 30초 후 재확인...")
+
+
 async def run_pykrx(
     pool,
     start: date,
@@ -592,28 +722,14 @@ async def run_pykrx(
     from chart_screener import get_all_tickers
     from db import get_prev_streak
 
-    all_tickers = get_all_tickers()
-    if market == "KOSPI":
-        tickers = [(t, n) for t, n, _ in all_tickers if t.endswith(".KS")]
-    elif market == "KOSDAQ":
-        tickers = [(t, n) for t, n, _ in all_tickers if t.endswith(".KQ")]
-    else:
-        tickers = [(t, n) for t, n, _ in all_tickers]
-
-    if max_tickers > 0:
-        tickers = tickers[:max_tickers]
-
+    tickers = _filter_tickers(get_all_tickers(), market, max_tickers)
     logger.info("[flow] 대상 %d개 종목  %s ~ %s", len(tickers), start, end)
 
     total_saved = 0
     for i, (yf_sym, name) in enumerate(tickers, 1):
         # 이미 저장된 날짜 확인 (증분)
         existing = await _get_existing_dates(pool, yf_sym, start, end)
-        # 달력일 기준이 아닌 거래일 기준으로 비교 (KRX 연간 거래일 ≈ 250일).
-        # 달력일(~365) × 0.9 = 328 > 실제 저장 가능한 거래일(~250) 이므로
-        # 달력일 비교 시 증분 스킵이 절대 동작하지 않음.
-        expected_trading_days = int((end - start).days * 250 / 365)
-        if len(existing) >= max(1, expected_trading_days * 0.9):
+        if _already_loaded(existing, start, end):
             logger.debug("[flow] %s 이미 저장됨, 건너뜀", yf_sym)
             continue
 
@@ -647,34 +763,23 @@ async def run_krx_direct(
     max_tickers: int,
     krx_id: Optional[str],
     krx_pw: Optional[str],
+    krx_session: Optional[str] = None,
+    krx_visitor: Optional[str] = None,
 ) -> None:
     """krx-direct 백엔드: pykrx 없이 data.krx.co.kr 직접 호출."""
     from chart_screener import get_all_tickers
     from db import get_prev_streak
 
-    fetcher = _make_krx_direct(krx_id, krx_pw)
+    fetcher = _make_krx_direct(krx_id, krx_pw, krx_session, krx_visitor)
 
-    all_tickers = get_all_tickers()
-    if market == "KOSPI":
-        tickers = [(t, n) for t, n, _ in all_tickers if t.endswith(".KS")]
-    elif market == "KOSDAQ":
-        tickers = [(t, n) for t, n, _ in all_tickers if t.endswith(".KQ")]
-    else:
-        tickers = [(t, n) for t, n, _ in all_tickers]
-
-    if max_tickers > 0:
-        tickers = tickers[:max_tickers]
-
+    tickers = _filter_tickers(get_all_tickers(), market, max_tickers)
     logger.info("[flow] [krx-direct] 대상 %d개 종목  %s ~ %s", len(tickers), start, end)
 
     total_saved = 0
+    consecutive_empty = 0
     for i, (yf_sym, _name) in enumerate(tickers, 1):
         existing = await _get_existing_dates(pool, yf_sym, start, end)
-        # 달력일 기준이 아닌 거래일 기준으로 비교 (KRX 연간 거래일 ≈ 250일).
-        # 달력일(~365) × 0.9 = 328 > 실제 저장 가능한 거래일(~250) 이므로
-        # 달력일 비교 시 증분 스킵이 절대 동작하지 않음.
-        expected_trading_days = int((end - start).days * 250 / 365)
-        if len(existing) >= max(1, expected_trading_days * 0.9):
+        if _already_loaded(existing, start, end):
             logger.debug("[flow] %s 이미 저장됨, 건너뜀", yf_sym)
             continue
 
@@ -689,9 +794,13 @@ async def run_krx_direct(
         )
 
         if not records:
+            consecutive_empty += 1
+            if await _handle_possible_expiry(fetcher, consecutive_empty):
+                consecutive_empty = 0
             logger.debug("[flow] %s 데이터 없음", yf_sym)
             continue
 
+        consecutive_empty = 0
         saved = await _save_batch(pool, records)
         total_saved += saved
 
@@ -714,26 +823,59 @@ async def run_csv(pool, csv_path: str) -> None:
     logger.info("[csv] 완료 — 저장: %d/%d건", saved, len(records))
 
 
-def probe_raw_response(krx_code: str, krx_id: Optional[str], krx_pw: Optional[str]) -> None:
+def probe_raw_response(
+    krx_code: str,
+    krx_id: Optional[str],
+    krx_pw: Optional[str],
+    krx_session: Optional[str] = None,
+    krx_visitor: Optional[str] = None,
+) -> None:
     """--probe: 단일 종목 응답 구조를 JSON으로 출력 (필드명 확인용)."""
-    fetcher = _make_krx_direct(krx_id, krx_pw)
+    fetcher = _make_krx_direct(krx_id, krx_pw, krx_session, krx_visitor)
     yesterday = date.today() - timedelta(days=1)
-    start = yesterday - timedelta(days=5)
-    rows = fetcher.fetch_raw(krx_code.split(".")[0], start, yesterday)
+    start = yesterday - timedelta(days=30)
+    krx_code_6 = krx_code.split(".")[0]
+    isuCd = _isin_from_krx_code(krx_code_6, ".KS")  # probe는 KOSPI 기본값
+    rows = fetcher.fetch_raw(krx_code_6, start, yesterday, isuCd)
     if not rows:
         print(f"[probe] 응답 없음 — 인증 실패 또는 네트워크 차단")
-        print("  확인: KRX_ID/KRX_PW 설정, 한국 ISP 또는 VPN 사용 여부")
+        print("  확인: KRX_SESSION(브라우저 JSESSIONID) 또는 KRX_ID/KRX_PW 설정, 한국 ISP 또는 VPN 사용 여부")
         return
-    print(f"[probe] {len(rows)}행 수신. 첫 3행:")
-    import json
+    print(f"[probe] {len(rows)}행 수신 (ISIN={isuCd}). 첫 3행:")
     for row in rows[:3]:
-        print(json.dumps(row, ensure_ascii=False, indent=2))
-    print("\n[probe] 투자자 유형 목록:")
-    types = sorted({r.get("INVST_TP_NM", "?") for r in rows})
-    for t in types:
-        print(f"  {t}")
-    print("\n[probe] 날짜 키 후보:", [k for k in rows[0] if "DD" in k or "DT" in k or "DATE" in k])
-    print("[probe] 순매수 키 후보:", [k for k in rows[0] if "NET" in k or "NETBID" in k])
+        print(_json.dumps(row, ensure_ascii=False, indent=2))
+    print(f"\n[probe] 컬럼: {list(rows[0].keys())}")
+
+
+def _probe_login(krx_id: Optional[str], krx_pw: Optional[str]) -> None:
+    """--probe-login: 로그인 응답 원문 출력 (KRX_ID/KRX_PW 진단용)."""
+    import json as _json_diag
+    if not krx_id or not krx_pw:
+        print("[probe-login] KRX_ID 또는 KRX_PW가 .env에 설정되지 않았습니다.")
+        return
+
+    fetcher = _KrxDirectFetcher()
+    print(f"[probe-login] warmup ...")
+    fetcher.warmup()
+
+    print(f"[probe-login] 로그인 시도 (userId={krx_id[:2]}***) ...")
+    try:
+        raw = fetcher._post(fetcher._LOGIN, {"userId": krx_id, "userPw": krx_pw})
+        text = fetcher._decode(raw)
+        print(f"[probe-login] 응답 ({len(raw)}bytes):\n{text[:500]}")
+        try:
+            parsed = _json_diag.loads(text)
+            print(f"[probe-login] _error_code   : {parsed.get('_error_code')}")
+            print(f"[probe-login] _error_message: {parsed.get('_error_message')}")
+        except Exception:
+            pass
+
+        print(f"\n[probe-login] loginYn=Y 재시도 ...")
+        raw2 = fetcher._post(fetcher._LOGIN, {"userId": krx_id, "userPw": krx_pw, "loginYn": "Y"})
+        text2 = fetcher._decode(raw2)
+        print(f"[probe-login] 응답 ({len(raw2)}bytes):\n{text2[:500]}")
+    except Exception as e:
+        print(f"[probe-login] 요청 실패: {e}")
 
 
 # ── CLI ───────────────────────────────────────────────────────
@@ -754,8 +896,10 @@ def _parse_args() -> argparse.Namespace:
                         help="수집 백엔드 (기본: krx-direct)")
     parser.add_argument("--csv",     default=None, metavar="FILE",
                         help="CSV 파일 임포트 경로 (--backend csv 시 필수)")
-    parser.add_argument("--probe",   default=None, metavar="CODE",
+    parser.add_argument("--probe",       default=None, metavar="CODE",
                         help="응답 구조 확인용 단일 종목 테스트 (예: --probe 005930)")
+    parser.add_argument("--probe-login", action="store_true",
+                        help="로그인 응답 원문 출력 (KRX_ID/KRX_PW 진단용, DB 불필요)")
     return parser.parse_args()
 
 
@@ -764,10 +908,17 @@ async def main() -> None:
 
     krx_id = os.environ.get("KRX_ID")
     krx_pw = os.environ.get("KRX_PW")
+    krx_session = os.environ.get("KRX_SESSION")
+    krx_visitor = os.environ.get("KRX_VISITOR")
+
+    # --probe-login: DB 없이 로그인 응답 원문 출력
+    if args.probe_login:
+        _probe_login(krx_id, krx_pw)
+        return
 
     # --probe: DB 없이 응답 구조만 확인
     if args.probe:
-        probe_raw_response(args.probe, krx_id, krx_pw)
+        probe_raw_response(args.probe, krx_id, krx_pw, krx_session, krx_visitor)
         return
 
     yesterday = date.today() - timedelta(days=1)
@@ -810,7 +961,7 @@ async def main() -> None:
 
         else:  # krx-direct (기본)
             await run_krx_direct(
-                pool, start, end, args.market, args.max, krx_id, krx_pw
+                pool, start, end, args.market, args.max, krx_id, krx_pw, krx_session, krx_visitor
             )
     finally:
         await pool.close()

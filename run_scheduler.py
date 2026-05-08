@@ -57,6 +57,9 @@ from telegram_bot import bot_polling_loop, init_bot
 from market_data import cross_analyze, CrossAnalysis, MacroContext, get_macro_context, get_resolution_miss_report
 
 # ── 로깅 설정 ────────────────────────────────────────────────
+_LOG_DIR = Path(__file__).parent / "logs"
+_LOG_DIR.mkdir(exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-7s  %(message)s",
@@ -64,7 +67,7 @@ logging.basicConfig(
     handlers=[
         logging.StreamHandler(sys.stdout),
         TimedRotatingFileHandler(
-            "news_crawler.log",
+            str(_LOG_DIR / "news_crawler.log"),
             when="midnight",
             interval=1,
             backupCount=14,
