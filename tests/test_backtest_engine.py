@@ -19,10 +19,12 @@ from backtest_engine import (
     GroupMetrics,
     SignalRecord,
     TX_COST_DEFAULT,
+    _STOP_LOSS_PCT,
     _apply_cross_filter,
     _build_price_lookup,
     _compute_group_metrics,
     _compute_mdd,
+    _compute_sell_signals_and_s2,
     _compute_sharpe,
     _fill_returns,
     _nearest_price,
@@ -784,6 +786,153 @@ class TestToHtmlReport:
         out = str(tmp_path / "empty.html")
         result.to_html_report(out)
         assert (tmp_path / "empty.html").exists()
+
+
+# ── _compute_sell_signals_and_s2 ─────────────────────────────────
+
+def _make_ohlcv_for_sell(
+    n_flat: int = 60,
+    flat_price: float = 10_000.0,
+    flat_vol: int = 100_000,
+    spike_pct: float = 0.08,
+    spike_vol_mult: float = 3.0,
+    post: Optional[list[tuple[float, int]]] = None,
+    start_date: date = date(2022, 1, 3),
+) -> tuple[pd.DataFrame, date, date]:
+    """Returns (df, spike_date, first_post_date)."""
+    if post is None:
+        post = [(flat_price * (1 + spike_pct) * 0.85, flat_vol)]  # MA20 break day
+
+    current = start_date
+    dates, opens, highs, lows, closes, vols = [], [], [], [], [], []
+    all_prices = [flat_price] * n_flat + [flat_price * (1 + spike_pct)] + [p for p, _ in post]
+    all_vols   = [flat_vol] * n_flat + [int(flat_vol * spike_vol_mult)] + [v for _, v in post]
+
+    for p, v in zip(all_prices, all_vols):
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        dates.append(pd.Timestamp(current, tz="UTC"))
+        opens.append(p * 0.999); highs.append(p * 1.001)
+        lows.append(p * 0.999);  closes.append(p); vols.append(v)
+        current += timedelta(days=1)
+
+    df = pd.DataFrame({"Open": opens, "High": highs, "Low": lows,
+                       "Close": closes, "Volume": vols}, index=dates)
+    spike_date     = dates[n_flat].date()
+    first_post_date = dates[n_flat + 1].date() if post else spike_date
+    return df, spike_date, first_post_date
+
+
+class TestComputeSellSignalsAndS2:
+    def _make_sig(self, ticker: str, signal_date: date,
+                  close: float, mode: str = "stage") -> SignalRecord:
+        return SignalRecord(ticker=ticker, name="테스트", signal_date=signal_date,
+                            close_at_signal=close, mode=mode, market="KOSPI")
+
+    def test_ma20_break_detected(self):
+        """Price drops below MA20 but above stop loss → sell_reason = MA20 이탈.
+
+        MA20 at post day ≈ (18×10_000 + 10_800 + 9_950)/20 ≈ 10_037.
+        Stop price = 10_800 × 0.92 = 9_936.
+        9_950: below MA20 (break ✓) but above stop price (no stop loss ✓).
+        """
+        df, spike_date, post_date = _make_ohlcv_for_sell(
+            n_flat=60, flat_price=10_000.0, spike_pct=0.08,
+            post=[(9_950, 100_000)])   # 9_950 < MA20≈10_037 but > stop 9_936
+        sig = self._make_sig("T.KS", spike_date, 10_800.0)
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0)
+        assert sig.sell_date   == post_date
+        assert sig.sell_reason == "MA20 이탈"
+        assert sig.sell_return is not None
+        assert sig.sell_return == pytest.approx(9_950 / 10_800 - 1.0, abs=0.001)
+        assert sig.hold_days   == (post_date - spike_date).days
+
+    def test_stop_loss_detected(self):
+        """Price drops ≥ 8% → stop loss fires before MA20 break."""
+        # stop_price = 10_800 * 0.92 = 9_936
+        # post day close = 9_500 ≤ 9_936 → stop loss
+        df, spike_date, post_date = _make_ohlcv_for_sell(
+            n_flat=60, flat_price=10_000.0, spike_pct=0.08,
+            post=[(9_500, 100_000)])
+        sig = self._make_sig("T.KS", spike_date, 10_800.0)
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0)
+        assert sig.sell_date   == post_date
+        assert "손절" in sig.sell_reason
+        assert sig.sell_return == pytest.approx(9_500 / 10_800 - 1.0, abs=0.001)
+
+    def test_stop_loss_priority_over_ma20_same_day(self):
+        """Same day: both stop loss and MA20 break → stop loss reported."""
+        # MA20 ≈ 10_040; 9_000 < MA20 AND 9_000 < 10_800 * 0.92 = 9_936
+        df, spike_date, post_date = _make_ohlcv_for_sell(
+            n_flat=60, flat_price=10_000.0, spike_pct=0.08,
+            post=[(9_000, 100_000)])
+        sig = self._make_sig("T.KS", spike_date, 10_800.0)
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0)
+        assert "손절" in sig.sell_reason
+
+    def test_no_sell_signal_still_above_ma20(self):
+        """Price stays above MA20 and stop loss → sell_reason = 보유 중."""
+        # post day: same spike price (still high, no break)
+        df, spike_date, _ = _make_ohlcv_for_sell(
+            n_flat=60, flat_price=10_000.0, spike_pct=0.08,
+            post=[(10_800, 100_000)])
+        sig = self._make_sig("T.KS", spike_date, 10_800.0)
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0)
+        assert sig.sell_date   is None
+        assert sig.sell_reason == "보유 중"
+        assert sig.sell_return is None
+
+    def test_tx_cost_deducted_from_sell_return(self):
+        """Transaction cost subtracted from sell_return."""
+        df, spike_date, _ = _make_ohlcv_for_sell(
+            n_flat=60, flat_price=10_000.0, spike_pct=0.08,
+            post=[(9_000, 100_000)])
+        sig = self._make_sig("T.KS", spike_date, 10_800.0)
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.005)
+        expected = 9_000 / 10_800 - 1.0 - 0.005  # raw return - tx cost
+        assert sig.sell_return == pytest.approx(expected, abs=0.001)
+
+    def test_s2_date_detected_for_stage1(self):
+        """C1+C2+C3 met within 14 days of S1 → s2_date populated."""
+        # spike=+8%=10_800, post: 9_720 (−10%, C1 OK), vol=40% of spike (C3 OK)
+        # MA20 ≈ 10_040; 9_720 ≥ 10_040*0.95=9_538 (C2 OK)
+        spike_vol = int(100_000 * 3.0)
+        df, spike_date, post_date = _make_ohlcv_for_sell(
+            n_flat=60, flat_price=10_000.0, spike_pct=0.08, spike_vol_mult=3.0,
+            post=[(10_800 * 0.90, int(spike_vol * 0.40))])
+        sig = self._make_sig("T.KS", spike_date, 10_800.0, mode="stage")
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0)
+        assert sig.s2_date == post_date
+
+    def test_s2_date_not_set_for_stage2_mode(self):
+        """S2 detection only applies to stage-mode signals, not stage2."""
+        spike_vol = int(100_000 * 3.0)
+        df, spike_date, _ = _make_ohlcv_for_sell(
+            n_flat=60, flat_price=10_000.0, spike_pct=0.08, spike_vol_mult=3.0,
+            post=[(10_800 * 0.90, int(spike_vol * 0.40))])
+        sig = self._make_sig("T.KS", spike_date, 10_800.0, mode="stage2")
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0)
+        assert sig.s2_date is None
+
+    def test_missing_ticker_no_crash(self):
+        """Ticker not in ohlcv_map → signal unchanged (no crash)."""
+        sig = self._make_sig("MISSING.KS", date(2025, 1, 6), 10_000.0)
+        _compute_sell_signals_and_s2([sig], {}, tx_cost_rt=0.0)
+        assert sig.sell_date   is None
+        assert sig.sell_reason == ""
+
+    def test_group_metrics_sell_fields(self):
+        """_compute_group_metrics populates sell/S2 fields when data present."""
+        sig = _make_signal(r7=0.02, r28=0.05, r91=0.10)
+        sig.sell_return = 0.03
+        sig.hold_days   = 15
+        sig.mode        = "stage"
+        sig.s2_date     = date(2025, 1, 14)
+        m = _compute_group_metrics([sig], rf_annual=0.03)
+        assert m.win_rate_sell     == pytest.approx(1.0)
+        assert m.avg_return_sell   == pytest.approx(0.03)
+        assert m.avg_hold_days     == pytest.approx(15.0)
+        assert m.s2_progression_rate == pytest.approx(1.0)
 
 
 # ── _replay_ichimoku (합성 데이터) ────────────────────────────────

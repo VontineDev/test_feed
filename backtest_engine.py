@@ -96,6 +96,12 @@ class SignalRecord:
     excess_91d: Optional[float] = None
     return_custom: Optional[float] = None  # BacktestConfig.hold_weeks 지정 시 채워짐
     excess_custom: Optional[float] = None
+    # 매도 신호 및 S2 진행 (run_backtest에서 채워짐)
+    s2_date:     Optional[date]  = None  # S1 신호 후 14일 이내 S2 조건 충족일
+    sell_date:   Optional[date]  = None  # MA20 이탈 또는 손절 발생일
+    sell_reason: str             = ""    # "MA20 이탈" | "손절 -N%" | "보유 중"
+    sell_return: Optional[float] = None  # 매도 시점 수익률 (거래비용 차감)
+    hold_days:   Optional[int]   = None  # 신호일~매도일 달력일수
 
 
 @dataclass
@@ -120,6 +126,12 @@ class GroupMetrics:
     median_return_custom: Optional[float] = None
     avg_excess_custom:    Optional[float] = None
     sharpe_custom:        Optional[float] = None
+    # 매도 신호 기반 집계 (MA20 이탈 / 손절)
+    win_rate_sell:        Optional[float] = None
+    avg_return_sell:      Optional[float] = None
+    median_return_sell:   Optional[float] = None
+    avg_hold_days:        Optional[float] = None
+    s2_progression_rate:  Optional[float] = None  # S1→S2 진행 비율
 
 
 @dataclass
@@ -166,6 +178,14 @@ class BacktestResult:
                 f"  승률: {pct(m.win_rate_custom)}  평균: {pct(m.avg_return_custom)}  중앙값: {pct(m.median_return_custom)}",
                 f"  KOSPI 초과: {pct(m.avg_excess_custom)}  샤프비율: {val(m.sharpe_custom)}",
             ]
+        if m.win_rate_sell is not None:
+            lines += [
+                "",
+                "매도 신호 (MA20 이탈 / 손절 -8%)",
+                f"  승률: {pct(m.win_rate_sell)}  평균: {pct(m.avg_return_sell)}  보유: {val(m.avg_hold_days, 1)}d",
+            ]
+        if m.s2_progression_rate is not None:
+            lines.append(f"  S1→S2 진행: {pct(m.s2_progression_rate, 1)}")
         if self.note:
             lines += ["", f"⚠ {self.note}"]
         return "\n".join(lines)
@@ -217,6 +237,16 @@ class BacktestResult:
                 f"  KOSPI 초과: {pct(m.avg_excess_custom)}",
                 f"  샤프비율 연환산: {val(m.sharpe_custom)}",
             ]
+        if m.win_rate_sell is not None:
+            lines += [
+                "",
+                "[ 매도 신호 — MA20 이탈 / 손절 -8% ]",
+                f"  승률  : {pct(m.win_rate_sell, 1)}",
+                f"  평균  : {pct(m.avg_return_sell)}   중앙값: {pct(m.median_return_sell)}",
+                f"  평균 보유일: {val(m.avg_hold_days, 1)}일",
+            ]
+        if m.s2_progression_rate is not None:
+            lines.append(f"  S1→S2 진행률: {pct(m.s2_progression_rate, 1)}")
         lines += [
             "",
             f"  산출일시: {self.computed_at}",
@@ -301,25 +331,51 @@ class BacktestResult:
 
         # ── 종목 테이블 행 ────────────────────────────────────────
         def _ret_td(v: Optional[float]) -> str:
-            dv = v * 10000 if v is not None else -99999
+            dv  = v * 10000 if v is not None else -99999
             cls = "pos" if v is not None and v > 0 else ("neg" if v is not None else "")
-            txt = pct(v)
-            return f'<td class="num {cls}" data-v="{dv}">{txt}</td>'
+            return f'<td class="num {cls}" data-v="{dv}">{pct(v)}</td>'
+
+        _STAGE_LABEL = {"stage": ("S1", "s1"), "stage2": ("S2", "s2"),
+                        "cross": ("교차", "cross"), "ichimoku": ("이치", "ichi")}
+        _SELL_CLS    = {"MA20 이탈": "sell-ma", "손절": "sell-sl"}
 
         table_rows: list[str] = []
         for sig in self.signals:
             mkt_b = "KS" if sig.market == "KOSPI" else "KQ"
             ep    = f"{sig.close_at_signal:,.0f}"
+
+            stage_lbl, stage_cls = _STAGE_LABEL.get(sig.mode, (sig.mode, ""))
+            stage_td = f'<td><span class="badge {stage_cls}">{stage_lbl}</span></td>'
+
+            s2_td = (f'<td data-v="{sig.s2_date.isoformat()}">{sig.s2_date}</td>'
+                     if sig.s2_date else '<td class="muted" data-v="">—</td>')
+
+            sell_cls = next((v for k, v in _SELL_CLS.items() if sig.sell_reason.startswith(k)), "")
+            sell_td  = (f'<td><span class="badge {sell_cls}">{_html.escape(sig.sell_reason)}</span></td>'
+                        if sell_cls else f'<td class="muted">{_html.escape(sig.sell_reason)}</td>')
+
+            sd_td = (f'<td data-v="{sig.sell_date.isoformat()}">{sig.sell_date}</td>'
+                     if sig.sell_date else '<td class="muted" data-v="">—</td>')
+
+            hd_td = (f'<td class="num" data-v="{sig.hold_days}">{sig.hold_days}d</td>'
+                     if sig.hold_days is not None else '<td class="num muted" data-v="-1">—</td>')
+
             table_rows.append(
                 f"<tr>"
                 f'<td data-v="{sig.signal_date.isoformat()}">{sig.signal_date}</td>'
                 f'<td>{_html.escape(sig.name)}</td>'
                 f'<td class="muted">{sig.ticker} <span class="badge">{mkt_b}</span></td>'
-                f'<td class="num" data-v="{sig.close_at_signal}">{ep}</td>'
+                + stage_td
+                + f'<td class="num" data-v="{sig.close_at_signal}">{ep}</td>'
                 + _ret_td(sig.return_7d)
                 + _ret_td(sig.return_28d)
                 + _ret_td(sig.return_91d)
                 + _ret_td(sig.excess_28d)
+                + s2_td
+                + sell_td
+                + sd_td
+                + hd_td
+                + _ret_td(sig.sell_return)
                 + "</tr>"
             )
 
@@ -359,6 +415,10 @@ th,td{{padding:6px 10px;border-bottom:1px solid var(--border);white-space:nowrap
 th{{background:var(--bg-s);color:var(--muted);font-weight:500;cursor:pointer;user-select:none}}
 th:hover{{color:var(--accent)}} th.num,td.num{{text-align:right}}
 .badge{{font-size:10px;background:var(--bg-s);border:1px solid var(--border);border-radius:3px;padding:1px 4px}}
+.s1{{color:#58a6ff;border-color:#58a6ff}} .s2{{color:#3fb950;border-color:#3fb950}}
+.cross{{color:#d29922;border-color:#d29922}} .ichi{{color:#a371f7;border-color:#a371f7}}
+.sell-ma{{color:#f85149;border-color:#f85149}} .sell-sl{{color:#b03060;border-color:#b03060}}
+.tbl-wrap{{overflow-x:auto}}
 footer{{margin-top:24px;padding-top:12px;border-top:1px solid var(--border);color:var(--muted);font-size:11px}}
 </style>
 </head>
@@ -379,27 +439,39 @@ footer{{margin-top:24px;padding-top:12px;border-top:1px solid var(--border);colo
   <div class="card"><div class="lbl">KOSPI 초과 28d</div><div class="val {_cls(m.avg_excess_28d)}">{pct(m.avg_excess_28d)}</div></div>
   <div class="card"><div class="lbl">샤프비율 28d</div><div class="val">{fmt(m.sharpe_28d)}</div></div>
   <div class="card"><div class="lbl">MDD</div><div class="val neg">{pct(m.mdd)}</div></div>
+  {'<div class="card"><div class="lbl">MA20/손절 승률</div><div class="val ' + _cls(m.win_rate_sell, 0.5) + '">' + pct(m.win_rate_sell) + '</div></div>' if m.win_rate_sell is not None else ''}
+  {'<div class="card"><div class="lbl">평균 매도수익</div><div class="val ' + _cls(m.avg_return_sell) + '">' + pct(m.avg_return_sell) + '</div></div>' if m.avg_return_sell is not None else ''}
+  {'<div class="card"><div class="lbl">평균 보유일</div><div class="val">' + fmt(m.avg_hold_days, 1) + '일</div></div>' if m.avg_hold_days is not None else ''}
+  {'<div class="card"><div class="lbl">S1→S2 진행률</div><div class="val">' + pct(m.s2_progression_rate) + '</div></div>' if m.s2_progression_rate is not None else ''}
 </div>
 
 <h2>28d 수익률 분포</h2>
 <div style="margin-bottom:24px">{dist_svg}</div>
 
 <h2>종목별 결과 ({n_sigs}건)</h2>
+<div class="tbl-wrap">
 <table id="tbl" data-sc="-1" data-sd="asc">
 <thead><tr>
   <th onclick="sort(0,false)">신호일</th>
   <th onclick="sort(1,false)">종목명</th>
   <th onclick="sort(2,false)">티커</th>
-  <th class="num" onclick="sort(3,true)">진입가</th>
-  <th class="num" onclick="sort(4,true)">7d</th>
-  <th class="num" onclick="sort(5,true)">28d</th>
-  <th class="num" onclick="sort(6,true)">91d</th>
-  <th class="num" onclick="sort(7,true)">초과(28d)</th>
+  <th onclick="sort(3,false)">단계</th>
+  <th class="num" onclick="sort(4,true)">진입가</th>
+  <th class="num" onclick="sort(5,true)">7d</th>
+  <th class="num" onclick="sort(6,true)">28d</th>
+  <th class="num" onclick="sort(7,true)">91d</th>
+  <th class="num" onclick="sort(8,true)">초과(28d)</th>
+  <th onclick="sort(9,false)">S2진행일</th>
+  <th onclick="sort(10,false)">매도신호</th>
+  <th onclick="sort(11,false)">매도일</th>
+  <th class="num" onclick="sort(12,true)">보유일</th>
+  <th class="num" onclick="sort(13,true)">매도수익</th>
 </tr></thead>
 <tbody>
 {chr(10).join(table_rows)}
 </tbody>
 </table>
+</div>
 <footer>생성: {self.computed_at}{(' &nbsp;│&nbsp; ' + note_esc) if note_esc else ''}</footer>
 <script>
 function sort(col,num){{
@@ -539,6 +611,19 @@ def _compute_group_metrics(
         if excs:
             m.avg_excess_custom = statistics.mean(excs)
         m.sharpe_custom = _compute_sharpe(rcs, hold_days=hold_days, rf_annual=rf_annual)
+
+    # 매도 신호 기반 집계
+    sell_rets = [s.sell_return for s in signals if s.sell_return is not None]
+    if sell_rets:
+        m.win_rate_sell      = sum(1 for r in sell_rets if r > 0) / len(sell_rets)
+        m.avg_return_sell    = statistics.mean(sell_rets)
+        m.median_return_sell = statistics.median(sell_rets)
+    hold_days_list = [s.hold_days for s in signals if s.hold_days is not None]
+    if hold_days_list:
+        m.avg_hold_days = statistics.mean(hold_days_list)
+    s1_sigs = [s for s in signals if s.mode == "stage"]
+    if s1_sigs:
+        m.s2_progression_rate = sum(1 for s in s1_sigs if s.s2_date is not None) / len(s1_sigs)
 
     return m
 
@@ -931,6 +1016,103 @@ def _replay_stage2(
     return s2_signals
 
 
+_STOP_LOSS_PCT: float = 0.08  # 기본 손절 기준 (−8%)
+
+
+def _compute_sell_signals_and_s2(
+    signals: list[SignalRecord],
+    ohlcv_map: dict[str, "pd.DataFrame"],
+    tx_cost_rt: float,
+    stop_loss_pct: float = _STOP_LOSS_PCT,
+) -> None:
+    """매도 신호(MA20 이탈 / 손절) 및 S1→S2 진행일 인-플레이스 계산.
+
+    매도 우선순위: 손절(close ≤ entry×(1−stop_loss_pct)) > MA20 이탈(close < MA20).
+    같은 날에 두 조건이 동시에 충족되면 손절을 기록.
+    S2 감지는 Stage 1(mode="stage") 신호에만 적용.
+    """
+    from collections import defaultdict
+
+    by_ticker: dict[str, list[SignalRecord]] = defaultdict(list)
+    for sig in signals:
+        by_ticker[sig.ticker].append(sig)
+
+    for ticker, sigs in by_ticker.items():
+        raw_df = ohlcv_map.get(ticker)
+        if raw_df is None:
+            continue
+
+        df = raw_df.copy()
+        df["ma_20"] = df["Close"].rolling(20, min_periods=20).mean()
+
+        idx_map: dict[date, int] = {}
+        for i, ts in enumerate(df.index):
+            d = ts.date() if hasattr(ts, "date") else ts
+            idx_map[d] = i
+
+        for sig in sigs:
+            entry_idx = idx_map.get(sig.signal_date)
+            if entry_idx is None:
+                continue
+
+            entry_price = sig.close_at_signal
+            if entry_price <= 0:
+                continue
+            stop_price = entry_price * (1 - stop_loss_pct)
+
+            s1_vol: float = 0.0
+            if sig.mode == "stage":
+                v = df.iloc[entry_idx]["Volume"]
+                s1_vol = float(v) if not pd.isna(v) else 0.0
+
+            s2_cutoff = sig.signal_date + timedelta(days=14)
+            s2_found  = False
+
+            for j in range(entry_idx + 1, len(df)):
+                ts       = df.index[j]
+                row_date = ts.date() if hasattr(ts, "date") else ts
+                cur      = df.iloc[j]
+
+                if pd.isna(cur["Close"]):
+                    continue
+
+                close     = float(cur["Close"])
+                vol       = float(cur["Volume"]) if not pd.isna(cur["Volume"]) else 0.0
+                ma20_val  = cur["ma_20"]
+                ma20      = float(ma20_val) if not pd.isna(ma20_val) else None
+
+                # S2 진행 감지 (Stage 1 신호 × 14일 이내)
+                if sig.mode == "stage" and not s2_found and row_date <= s2_cutoff:
+                    if ma20 is not None and s1_vol > 0:
+                        ratio     = close / entry_price
+                        vol_ratio = vol / s1_vol
+                        if (0.80 <= ratio <= 0.95
+                                and close >= ma20 * 0.95
+                                and 0.30 <= vol_ratio <= 0.60):
+                            sig.s2_date = row_date
+                            s2_found    = True
+
+                # 매도 신호 (손절 > MA20 이탈)
+                if sig.sell_date is None:
+                    if close <= stop_price:
+                        sig.sell_date   = row_date
+                        sig.sell_reason = f"손절 -{stop_loss_pct * 100:.0f}%"
+                        sig.sell_return = (close / entry_price - 1.0) - tx_cost_rt
+                        sig.hold_days   = (row_date - sig.signal_date).days
+                    elif ma20 is not None and close < ma20:
+                        sig.sell_date   = row_date
+                        sig.sell_reason = "MA20 이탈"
+                        sig.sell_return = (close / entry_price - 1.0) - tx_cost_rt
+                        sig.hold_days   = (row_date - sig.signal_date).days
+
+                # S2 감지 완료 + 매도 완료 → 조기 종료
+                if sig.sell_date is not None and (s2_found or row_date > s2_cutoff):
+                    break
+
+            if sig.sell_date is None:
+                sig.sell_reason = "보유 중"
+
+
 def _fill_returns(
     sig: SignalRecord,
     stock_lookup: dict[date, float],
@@ -1076,6 +1258,9 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
         if sig.ticker not in stock_lookup_cache:
             stock_lookup_cache[sig.ticker] = _build_price_lookup(df)
         _fill_returns(sig, stock_lookup_cache[sig.ticker], kospi_lookup, config.tx_cost_rt, config.hold_weeks)
+
+    # 8.5. 매도 신호 및 S2 진행일 계산
+    _compute_sell_signals_and_s2(all_signals, ohlcv_map, config.tx_cost_rt)
 
     # 9. 날짜 순 정렬 → MDD equity curve가 시간 순서대로 누적
     all_signals.sort(key=lambda s: s.signal_date)
