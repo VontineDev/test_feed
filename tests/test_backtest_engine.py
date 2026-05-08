@@ -31,6 +31,137 @@ from backtest_engine import (
     _week_label,
 )
 
+# ── BacktestConfig.hold_weeks ─────────────────────────────────────
+
+class TestBacktestConfigHoldWeeks:
+    def test_none_by_default(self):
+        cfg = BacktestConfig("ichimoku", date(2025, 1, 1), date(2026, 1, 1))
+        assert cfg.hold_weeks is None
+
+    def test_valid_non_standard(self):
+        cfg = BacktestConfig("ichimoku", date(2025, 1, 1), date(2026, 1, 1), hold_weeks=8)
+        assert cfg.hold_weeks == 8
+
+    def test_valid_standard_weeks(self):
+        for w in (1, 4, 13):
+            cfg = BacktestConfig("stage", date(2025, 1, 1), date(2026, 1, 1), hold_weeks=w)
+            assert cfg.hold_weeks == w
+
+    def test_zero_raises(self):
+        with pytest.raises(ValueError, match="hold_weeks"):
+            BacktestConfig("ichimoku", date(2025, 1, 1), date(2026, 1, 1), hold_weeks=0)
+
+    def test_negative_raises(self):
+        with pytest.raises(ValueError, match="hold_weeks"):
+            BacktestConfig("ichimoku", date(2025, 1, 1), date(2026, 1, 1), hold_weeks=-3)
+
+
+# ── _fill_returns — custom hold period ───────────────────────────
+
+class TestFillReturnsCustomHold:
+    def test_non_standard_hold_populates_custom(self):
+        """hold_weeks=8 (56d) → return_custom computed from N*7 days offset."""
+        sig = _make_signal(close=10_000.0, signal_date=date(2025, 1, 6))
+        # 2025-01-06 + 56d = 2025-03-03
+        stock = {date(2025, 3, 3): 11_200.0}
+        _fill_returns(sig, stock, {}, tx_cost_rt=0.0, hold_weeks=8)
+        assert sig.return_custom == pytest.approx(0.12, abs=0.001)
+
+    def test_standard_4w_custom_matches_28d(self):
+        """hold_weeks=4 → return_custom == return_28d (same 28-day target)."""
+        sig = _make_signal(close=10_000.0, signal_date=date(2025, 1, 6))
+        # 2025-01-06 + 28d = 2025-02-03
+        stock = {date(2025, 2, 3): 10_800.0}
+        _fill_returns(sig, stock, {}, tx_cost_rt=0.0, hold_weeks=4)
+        assert sig.return_28d   == pytest.approx(0.08, abs=0.001)
+        assert sig.return_custom == pytest.approx(0.08, abs=0.001)
+
+    def test_no_hold_weeks_custom_stays_none(self):
+        """hold_weeks not set → return_custom/excess_custom remain None."""
+        sig = _make_signal(close=10_000.0, signal_date=date(2025, 1, 6))
+        stock = {date(2025, 1, 13): 10_500.0}
+        _fill_returns(sig, stock, {}, tx_cost_rt=0.0)
+        assert sig.return_custom is None
+        assert sig.excess_custom is None
+
+    def test_tx_cost_deducted_from_custom(self):
+        """Transaction cost subtracted from return_custom same as standard returns."""
+        sig = _make_signal(close=10_000.0, signal_date=date(2025, 1, 6))
+        # 2025-01-06 + 56d = 2025-03-03, flat price
+        stock = {date(2025, 3, 3): 10_000.0}
+        _fill_returns(sig, stock, {}, tx_cost_rt=0.005, hold_weeks=8)
+        assert sig.return_custom == pytest.approx(-0.005, abs=0.0001)
+
+    def test_missing_price_custom_is_none(self):
+        """No price data at custom hold target → return_custom is None."""
+        sig = _make_signal(close=10_000.0, signal_date=date(2025, 1, 6))
+        _fill_returns(sig, {}, {}, tx_cost_rt=0.0, hold_weeks=8)
+        assert sig.return_custom is None
+        assert sig.excess_custom is None
+
+    def test_custom_excess_uses_kospi(self):
+        """excess_custom = return_custom − KOSPI return over same period."""
+        sig = _make_signal(close=10_000.0, signal_date=date(2025, 1, 6))
+        # 2025-01-06 + 56d = 2025-03-03
+        stock = {date(2025, 3, 3): 11_200.0}   # +12%
+        kospi = {date(2025, 1, 6): 2_700.0, date(2025, 3, 3): 2_754.0}  # +2%
+        _fill_returns(sig, stock, kospi, tx_cost_rt=0.0, hold_weeks=8)
+        assert sig.return_custom == pytest.approx(0.12, abs=0.001)
+        assert sig.excess_custom == pytest.approx(0.10, abs=0.001)  # 0.12 − 0.02
+
+
+# ── _compute_group_metrics — custom hold ─────────────────────────
+
+class TestComputeGroupMetricsCustomHold:
+    def test_custom_metrics_populated(self):
+        """Signals with return_custom → GroupMetrics custom fields computed."""
+        sigs = [
+            _make_signal(r7=0.01, r28=0.03, r91=0.10),
+            _make_signal(r7=0.02, r28=0.05, r91=0.12),
+        ]
+        sigs[0].return_custom = 0.06
+        sigs[1].return_custom = -0.02
+        m = _compute_group_metrics(sigs, rf_annual=0.03, hold_weeks=8)
+        assert m.hold_days_custom == 56
+        assert m.win_rate_custom == pytest.approx(0.5)   # 1/2 positive
+        assert m.avg_return_custom == pytest.approx(0.02, abs=0.001)
+        assert m.median_return_custom == pytest.approx(0.02, abs=0.001)
+
+    def test_no_hold_weeks_custom_fields_are_none(self):
+        """Without hold_weeks → all custom GroupMetrics fields stay None."""
+        sigs = [_make_signal(r7=0.01, r28=0.03, r91=0.10)]
+        m = _compute_group_metrics(sigs, rf_annual=0.03)
+        assert m.hold_days_custom is None
+        assert m.win_rate_custom is None
+        assert m.avg_return_custom is None
+        assert m.sharpe_custom is None
+
+    def test_hold_days_custom_correct(self):
+        """hold_days_custom = hold_weeks * 7."""
+        sigs = [_make_signal()]
+        sigs[0].return_custom = 0.05
+        m = _compute_group_metrics(sigs, rf_annual=0.03, hold_weeks=6)
+        assert m.hold_days_custom == 42
+
+    def test_custom_excess_aggregated(self):
+        """avg_excess_custom is mean of excess_custom across signals."""
+        sigs = [_make_signal(), _make_signal()]
+        sigs[0].return_custom = 0.10
+        sigs[0].excess_custom = 0.08
+        sigs[1].return_custom = 0.04
+        sigs[1].excess_custom = 0.02
+        m = _compute_group_metrics(sigs, rf_annual=0.03, hold_weeks=8)
+        assert m.avg_excess_custom == pytest.approx(0.05, abs=0.001)
+
+    def test_all_custom_none_custom_rates_none(self):
+        """If all return_custom are None → win_rate_custom/avg_return_custom stay None."""
+        sigs = [_make_signal(), _make_signal()]
+        # return_custom stays None (not set)
+        m = _compute_group_metrics(sigs, rf_annual=0.03, hold_weeks=8)
+        assert m.hold_days_custom == 56
+        assert m.win_rate_custom is None
+        assert m.avg_return_custom is None
+
 
 # ── 공통 헬퍼 ─────────────────────────────────────────────────────
 
@@ -540,6 +671,119 @@ class TestBacktestResultReport:
         )
         assert "테스트 주의사항" in result.to_text_report()
         assert "테스트 주의사항" in result.to_telegram_report()
+
+
+# ── top_bottom_telegram_text ─────────────────────────────────────
+
+class TestTopBottomTelegramText:
+    def _make_result_with_signals(self) -> BacktestResult:
+        cfg = BacktestConfig("ichimoku", date(2025, 1, 1), date(2026, 1, 1))
+        sigs = [
+            _make_signal("A.KS", date(2025, 1, 6),  r28=0.15, r7=0.05, r91=0.30),
+            _make_signal("B.KS", date(2025, 2, 1),  r28=0.08, r7=0.03, r91=0.12),
+            _make_signal("C.KS", date(2025, 3, 1),  r28=-0.05, r7=-0.02, r91=-0.10),
+            _make_signal("D.KS", date(2025, 4, 1),  r28=-0.12, r7=-0.04, r91=-0.20),
+            _make_signal("E.KS", date(2025, 5, 1),  r28=0.22, r7=0.08, r91=0.40),
+        ]
+        m = _compute_group_metrics(sigs, 0.03)
+        return BacktestResult(config=cfg, signals=sigs, overall=m,
+                              computed_at="2026-01-01T00:00:00")
+
+    def test_no_28d_returns_empty_string(self):
+        cfg = BacktestConfig("ichimoku", date(2025, 1, 1), date(2026, 1, 1))
+        result = BacktestResult(config=cfg, signals=[_make_signal()],
+                                overall=GroupMetrics(), computed_at="2026-01-01T00:00:00")
+        assert result.top_bottom_telegram_text() == ""
+
+    def test_top_ranked_first(self):
+        result = self._make_result_with_signals()
+        txt = result.top_bottom_telegram_text(n=2)
+        # E.KS (+22%) should be first in top section
+        top_section = txt.split("📉")[0]
+        assert "+22" in top_section
+
+    def test_bottom_ranked_last(self):
+        result = self._make_result_with_signals()
+        txt = result.top_bottom_telegram_text(n=2)
+        # D.KS (-12%) should be in bottom section
+        bot_section = txt.split("📉")[1]
+        assert "-12" in bot_section
+
+    def test_contains_both_sections(self):
+        result = self._make_result_with_signals()
+        txt = result.top_bottom_telegram_text(n=3)
+        assert "🏆" in txt
+        assert "📉" in txt
+
+    def test_n_caps_at_signal_count(self):
+        """n > signals → clamps to number of signals with 28d returns."""
+        cfg = BacktestConfig("ichimoku", date(2025, 1, 1), date(2026, 1, 1))
+        sigs = [_make_signal(r28=0.05), _make_signal(r28=-0.03)]
+        result = BacktestResult(config=cfg, signals=sigs, overall=GroupMetrics(),
+                                computed_at="2026-01-01T00:00:00")
+        txt = result.top_bottom_telegram_text(n=10)
+        assert txt  # not empty
+        assert "🏆" in txt
+
+
+# ── to_html_report ────────────────────────────────────────────────
+
+class TestToHtmlReport:
+    def _make_result(self, n_sigs: int = 5) -> BacktestResult:
+        cfg = BacktestConfig("stage", date(2025, 1, 1), date(2026, 1, 1))
+        sigs = [
+            _make_signal(f"T{i:02d}.KS", date(2025, 1, 6 + i),
+                         r7=0.01 * i, r28=0.02 * i, r91=0.05 * i,
+                         ex28=0.01 * i - 0.02)
+            for i in range(n_sigs)
+        ]
+        m = _compute_group_metrics(sigs, 0.03)
+        return BacktestResult(config=cfg, signals=sigs, overall=m,
+                              computed_at="2026-01-01T00:00:00")
+
+    def test_creates_file(self, tmp_path):
+        result = self._make_result()
+        out = str(tmp_path / "test_backtest.html")
+        returned = result.to_html_report(out)
+        assert returned == out
+        assert (tmp_path / "test_backtest.html").exists()
+
+    def test_creates_parent_dirs(self, tmp_path):
+        result = self._make_result()
+        out = str(tmp_path / "nested" / "deep" / "report.html")
+        result.to_html_report(out)
+        import os
+        assert os.path.exists(out)
+
+    def test_html_contains_ticker_names(self, tmp_path):
+        result = self._make_result(3)
+        out = str(tmp_path / "r.html")
+        result.to_html_report(out)
+        content = (tmp_path / "r.html").read_text(encoding="utf-8")
+        for sig in result.signals:
+            assert sig.ticker in content
+
+    def test_html_contains_mode_label(self, tmp_path):
+        result = self._make_result()
+        out = str(tmp_path / "r.html")
+        result.to_html_report(out)
+        content = (tmp_path / "r.html").read_text(encoding="utf-8")
+        assert "3단계" in content  # MODE_KOR["stage"]
+
+    def test_html_contains_sort_script(self, tmp_path):
+        result = self._make_result()
+        out = str(tmp_path / "r.html")
+        result.to_html_report(out)
+        content = (tmp_path / "r.html").read_text(encoding="utf-8")
+        assert "function sort(" in content
+
+    def test_empty_signals_no_crash(self, tmp_path):
+        cfg = BacktestConfig("ichimoku", date(2025, 1, 1), date(2026, 1, 1))
+        result = BacktestResult(config=cfg, signals=[], overall=GroupMetrics(),
+                                computed_at="2026-01-01T00:00:00")
+        out = str(tmp_path / "empty.html")
+        result.to_html_report(out)
+        assert (tmp_path / "empty.html").exists()
 
 
 # ── _replay_ichimoku (합성 데이터) ────────────────────────────────

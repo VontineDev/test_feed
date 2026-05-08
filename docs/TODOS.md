@@ -293,6 +293,7 @@ to:
 **Effort:** XS (human: ~30 min / CC: ~5 min)
 **Priority:** P3
 **Blocked by:** ~~Sprint 3 (backtest_engine.py) must ship first.~~ Unblocked (shipped v0.7.0.0). Note: actual implementation uses direct yfinance OHLCV fetch per-run, not signals2.json; re-fetch approach is already in place. Just needs `--hold-weeks N` param added to `BacktestConfig` and `_fill_returns`.
+**Completed:** v0.7.3.1 (2026-05-09) — `hold_weeks` added to `BacktestConfig`, `_fill_returns`, `_compute_group_metrics`; custom period shown in both reports.
 
 ---
 

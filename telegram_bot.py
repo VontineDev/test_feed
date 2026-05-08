@@ -383,7 +383,20 @@ async def _handle_backtest2(
         try:
             loop   = asyncio.get_running_loop()
             result = await loop.run_in_executor(None, run_backtest, config)
+
+            # HTML 리포트 저장
+            from datetime import datetime as _dt
+            from zoneinfo import ZoneInfo as _ZI
+            _ts = _dt.now(_ZI("Asia/Seoul")).strftime("%Y%m%d_%H%M%S")
+            _html_path = f"reports/backtest/backtest_{mode}_{_ts}.html"
+            result.to_html_report(_html_path)
+
             report = result.to_telegram_report()
+            top_bottom = result.top_bottom_telegram_text(n=5)
+            if top_bottom:
+                report = report + top_bottom
+            report += f"\n\n📁 {_html_path}"
+
             # Telegram 4096자 제한 처리
             if len(report) > 4090:
                 report = report[:4087] + "..."

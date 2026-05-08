@@ -65,6 +65,7 @@ class BacktestConfig:
     rf_rate_annual: float = 0.030  # 무위험수익률 (한국국채 3% 기준)
     workers: int = 8
     dsn: Optional[str] = None     # PostgreSQL DSN. 설정 시 daily_ohlcv 캐시 사용
+    hold_weeks: Optional[int] = None  # None = 표준 1/4/13w; N = N주 보유 수익률 추가 계산
 
     def __post_init__(self) -> None:
         if self.mode not in ("ichimoku", "stage", "cross"):
@@ -73,6 +74,8 @@ class BacktestConfig:
             raise ValueError("start는 end보다 이전이어야 합니다")
         if self.market not in ("KOSPI", "KOSDAQ", "ALL"):
             raise ValueError(f"market은 KOSPI|KOSDAQ|ALL 중 하나여야 합니다: {self.market!r}")
+        if self.hold_weeks is not None and self.hold_weeks < 1:
+            raise ValueError(f"hold_weeks는 1 이상이어야 합니다: {self.hold_weeks!r}")
 
 
 @dataclass
@@ -89,6 +92,8 @@ class SignalRecord:
     excess_7d:  Optional[float] = None
     excess_28d: Optional[float] = None
     excess_91d: Optional[float] = None
+    return_custom: Optional[float] = None  # BacktestConfig.hold_weeks 지정 시 채워짐
+    excess_custom: Optional[float] = None
 
 
 @dataclass
@@ -106,6 +111,13 @@ class GroupMetrics:
     sharpe_28d:         Optional[float] = None  # 연환산 샤프비율 (28d 보유)
     sharpe_91d:         Optional[float] = None  # 연환산 샤프비율 (91d 보유)
     mdd:                Optional[float] = None  # 최대낙폭 (equity curve)
+    # 사용자 지정 보유 기간 (hold_weeks 설정 시)
+    hold_days_custom:     Optional[int]   = None
+    win_rate_custom:      Optional[float] = None
+    avg_return_custom:    Optional[float] = None
+    median_return_custom: Optional[float] = None
+    avg_excess_custom:    Optional[float] = None
+    sharpe_custom:        Optional[float] = None
 
 
 @dataclass
@@ -144,6 +156,14 @@ class BacktestResult:
             f"  샤프비율 7d: {val(m.sharpe_7d)}  28d: {val(m.sharpe_28d)}  91d: {val(m.sharpe_91d)}",
             f"  MDD: {pct(m.mdd)}",
         ]
+        if m.hold_days_custom is not None:
+            hw = m.hold_days_custom // 7
+            lines += [
+                "",
+                f"사용자 지정 보유 {hw}주({m.hold_days_custom}d)",
+                f"  승률: {pct(m.win_rate_custom)}  평균: {pct(m.avg_return_custom)}  중앙값: {pct(m.median_return_custom)}",
+                f"  KOSPI 초과: {pct(m.avg_excess_custom)}  샤프비율: {val(m.sharpe_custom)}",
+            ]
         if self.note:
             lines += ["", f"⚠ {self.note}"]
         return "\n".join(lines)
@@ -184,6 +204,18 @@ class BacktestResult:
             f"  샤프비율 28d 연환산: {val(m.sharpe_28d)}",
             f"  샤프비율 91d 연환산: {val(m.sharpe_91d)}",
             f"  MDD:               {pct(m.mdd)}",
+        ]
+        if m.hold_days_custom is not None:
+            hw = m.hold_days_custom // 7
+            lines += [
+                "",
+                f"[ 사용자 지정 보유 {hw}주({m.hold_days_custom}d) ]",
+                f"  승률  : {pct(m.win_rate_custom, 1)}",
+                f"  평균  : {pct(m.avg_return_custom)}   중앙값: {pct(m.median_return_custom)}",
+                f"  KOSPI 초과: {pct(m.avg_excess_custom)}",
+                f"  샤프비율 연환산: {val(m.sharpe_custom)}",
+            ]
+        lines += [
             "",
             f"  산출일시: {self.computed_at}",
         ]
@@ -191,6 +223,209 @@ class BacktestResult:
             lines += ["", f"주의: {self.note}"]
         lines.append("=" * 62)
         return "\n".join(lines)
+
+    def top_bottom_telegram_text(self, n: int = 5) -> str:
+        """Top/bottom N stocks by 28d return — plain text for Telegram append."""
+        scored = [(s, s.return_28d) for s in self.signals if s.return_28d is not None]
+        if not scored:
+            return ""
+        scored.sort(key=lambda x: x[1], reverse=True)
+
+        def _line(rank: int, sig: SignalRecord, ret: float) -> str:
+            name = sig.name[:10] if len(sig.name) > 10 else sig.name
+            return f"  {rank}. {name} {ret * 100:+.1f}% ({sig.signal_date})"
+
+        top_n = min(n, len(scored))
+        bot_n = min(n, len(scored))
+        lines = [f"\n🏆 상위 {top_n}종목 (28d)"]
+        for i, (sig, ret) in enumerate(scored[:top_n], 1):
+            lines.append(_line(i, sig, ret))
+        lines.append(f"\n📉 하위 {bot_n}종목 (28d)")
+        for i, (sig, ret) in enumerate(scored[-bot_n:], 1):
+            lines.append(_line(i, sig, ret))
+        return "\n".join(lines)
+
+    def to_html_report(self, output_path: str) -> str:
+        """HTML 리포트 생성 + 저장. 종목별 수익률 테이블 + 분포 차트 포함. 파일 경로 반환."""
+        import html as _html
+        from pathlib import Path
+
+        cfg = self.config
+        m   = self.overall
+
+        def pct(v: Optional[float], dp: int = 1) -> str:
+            return f"{v * 100:+.{dp}f}%" if v is not None else "—"
+
+        def fmt(v: Optional[float], dp: int = 2) -> str:
+            return f"{v:.{dp}f}" if v is not None else "—"
+
+        mode_kor = MODE_KOR.get(cfg.mode, cfg.mode)
+
+        # ── 28d 분포 SVG ─────────────────────────────────────────
+        r28s = [s.return_28d for s in self.signals if s.return_28d is not None]
+        edges  = [(-9, -0.20), (-0.20, -0.10), (-0.10, 0.0),
+                  (0.0, 0.10), (0.10, 0.20), (0.20, 9)]
+        labels = ["<-20%", "-20~-10%", "-10~0%", "0~10%", "10~20%", ">20%"]
+        colors = ["#b03060", "#d06080", "#806070", "#608060", "#40a060", "#209040"]
+        counts: list[int] = []
+        for lo, hi in edges:
+            if hi == 9:
+                counts.append(sum(1 for r in r28s if r >= lo))
+            else:
+                counts.append(sum(1 for r in r28s if lo <= r < hi))
+        max_c = max(counts) if any(c > 0 for c in counts) else 1
+        BW, BH = 380, 110
+        bw = BW / len(counts) - 4
+        svg_parts: list[str] = []
+        for i, (c, lab, col) in enumerate(zip(counts, labels, colors)):
+            bh_px = (c / max_c) * (BH - 28) if max_c else 0
+            x = i * (BW / len(counts)) + 2
+            y = BH - 22 - bh_px
+            svg_parts.append(
+                f'<rect x="{x:.0f}" y="{y:.0f}" width="{bw:.0f}" '
+                f'height="{bh_px:.0f}" fill="{col}"/>'
+                f'<text x="{x + bw/2:.0f}" y="{BH - 5}" text-anchor="middle" '
+                f'font-size="9" fill="#7d8590">{lab}</text>'
+            )
+            if c > 0:
+                svg_parts.append(
+                    f'<text x="{x + bw/2:.0f}" y="{y - 3:.0f}" '
+                    f'text-anchor="middle" font-size="10" fill="#e6edf3">{c}</text>'
+                )
+        dist_svg = (
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{BW}" height="{BH}" '
+            f'style="overflow:visible">{"".join(svg_parts)}</svg>'
+        ) if r28s else "<span class='muted'>28d 데이터 없음</span>"
+
+        # ── 종목 테이블 행 ────────────────────────────────────────
+        def _ret_td(v: Optional[float]) -> str:
+            dv = v * 10000 if v is not None else -99999
+            cls = "pos" if v is not None and v > 0 else ("neg" if v is not None else "")
+            txt = pct(v)
+            return f'<td class="num {cls}" data-v="{dv}">{txt}</td>'
+
+        table_rows: list[str] = []
+        for sig in self.signals:
+            mkt_b = "KS" if sig.market == "KOSPI" else "KQ"
+            ep    = f"{sig.close_at_signal:,.0f}"
+            table_rows.append(
+                f"<tr>"
+                f'<td data-v="{sig.signal_date.isoformat()}">{sig.signal_date}</td>'
+                f'<td>{_html.escape(sig.name)}</td>'
+                f'<td class="muted">{sig.ticker} <span class="badge">{mkt_b}</span></td>'
+                f'<td class="num" data-v="{sig.close_at_signal}">{ep}</td>'
+                + _ret_td(sig.return_7d)
+                + _ret_td(sig.return_28d)
+                + _ret_td(sig.return_91d)
+                + _ret_td(sig.excess_28d)
+                + "</tr>"
+            )
+
+        # CSS class helpers for summary cards
+        def _cls(v: Optional[float], threshold: float = 0.0) -> str:
+            return "pos" if (v or 0.0) >= threshold else "neg"
+
+        n_sigs  = len(self.signals)
+        note_esc = _html.escape(self.note) if self.note else ""
+
+        html_out = f"""<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>백테스트 리포트 — {_html.escape(mode_kor)} {cfg.start}~{cfg.end}</title>
+<style>
+:root {{
+  --bg:#0d1117; --bg-s:#161b22; --text:#e6edf3; --muted:#7d8590;
+  --border:#30363d; --accent:#58a6ff; --pos:#3fb950; --neg:#f85149;
+  --ui:system-ui,-apple-system,'Segoe UI',sans-serif;
+  --mono:'JetBrains Mono','Consolas',monospace;
+}}
+*,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:var(--bg);color:var(--text);font-family:var(--ui);font-size:14px;padding:24px}}
+header{{border-bottom:1px solid var(--border);padding-bottom:12px;margin-bottom:20px}}
+header h1{{font-size:18px;font-weight:600;margin-bottom:4px}}
+.meta{{color:var(--muted);font-size:12px}}
+h2{{font-size:14px;font-weight:600;margin:24px 0 8px;color:var(--accent)}}
+.cards{{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:24px}}
+.card{{background:var(--bg-s);border:1px solid var(--border);border-radius:6px;padding:12px 16px;min-width:130px}}
+.card .lbl{{font-size:11px;color:var(--muted);margin-bottom:4px}}
+.card .val{{font-size:20px;font-weight:600;font-family:var(--mono)}}
+.pos{{color:var(--pos)}} .neg{{color:var(--neg)}} .muted{{color:var(--muted)}}
+table{{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:13px;margin-top:8px}}
+th,td{{padding:6px 10px;border-bottom:1px solid var(--border);white-space:nowrap}}
+th{{background:var(--bg-s);color:var(--muted);font-weight:500;cursor:pointer;user-select:none}}
+th:hover{{color:var(--accent)}} th.num,td.num{{text-align:right}}
+.badge{{font-size:10px;background:var(--bg-s);border:1px solid var(--border);border-radius:3px;padding:1px 4px}}
+footer{{margin-top:24px;padding-top:12px;border-top:1px solid var(--border);color:var(--muted);font-size:11px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>백테스트 리포트 &nbsp;│&nbsp; {_html.escape(mode_kor)}</h1>
+  <p class="meta">기간: {cfg.start} ~ {cfg.end} &nbsp;│&nbsp; 시장: {cfg.market} &nbsp;│&nbsp; 신호: {m.n}건 &nbsp;│&nbsp; 거래비용(RT): {cfg.tx_cost_rt * 100:.3f}% &nbsp;│&nbsp; 산출: {self.computed_at[:16]}</p>
+</header>
+
+<h2>요약</h2>
+<div class="cards">
+  <div class="card"><div class="lbl">신호 수</div><div class="val">{m.n}</div></div>
+  <div class="card"><div class="lbl">승률 7d</div><div class="val {_cls(m.win_rate_7d, 0.5)}">{pct(m.win_rate_7d)}</div></div>
+  <div class="card"><div class="lbl">승률 28d</div><div class="val {_cls(m.win_rate_28d, 0.5)}">{pct(m.win_rate_28d)}</div></div>
+  <div class="card"><div class="lbl">승률 91d</div><div class="val {_cls(m.win_rate_91d, 0.5)}">{pct(m.win_rate_91d)}</div></div>
+  <div class="card"><div class="lbl">평균수익 28d</div><div class="val {_cls(m.avg_return_28d)}">{pct(m.avg_return_28d)}</div></div>
+  <div class="card"><div class="lbl">평균수익 91d</div><div class="val {_cls(m.avg_return_91d)}">{pct(m.avg_return_91d)}</div></div>
+  <div class="card"><div class="lbl">KOSPI 초과 28d</div><div class="val {_cls(m.avg_excess_28d)}">{pct(m.avg_excess_28d)}</div></div>
+  <div class="card"><div class="lbl">샤프비율 28d</div><div class="val">{fmt(m.sharpe_28d)}</div></div>
+  <div class="card"><div class="lbl">MDD</div><div class="val neg">{pct(m.mdd)}</div></div>
+</div>
+
+<h2>28d 수익률 분포</h2>
+<div style="margin-bottom:24px">{dist_svg}</div>
+
+<h2>종목별 결과 ({n_sigs}건)</h2>
+<table id="tbl" data-sc="-1" data-sd="asc">
+<thead><tr>
+  <th onclick="sort(0,false)">신호일</th>
+  <th onclick="sort(1,false)">종목명</th>
+  <th onclick="sort(2,false)">티커</th>
+  <th class="num" onclick="sort(3,true)">진입가</th>
+  <th class="num" onclick="sort(4,true)">7d</th>
+  <th class="num" onclick="sort(5,true)">28d</th>
+  <th class="num" onclick="sort(6,true)">91d</th>
+  <th class="num" onclick="sort(7,true)">초과(28d)</th>
+</tr></thead>
+<tbody>
+{chr(10).join(table_rows)}
+</tbody>
+</table>
+<footer>생성: {self.computed_at}{(' &nbsp;│&nbsp; ' + note_esc) if note_esc else ''}</footer>
+<script>
+function sort(col,num){{
+  const t=document.getElementById('tbl');
+  const p=parseInt(t.dataset.sc);
+  const d=(p===col&&t.dataset.sd==='asc')?'desc':'asc';
+  t.dataset.sc=col; t.dataset.sd=d;
+  const rows=[...t.querySelectorAll('tbody tr')];
+  rows.sort((a,b)=>{{
+    const av=a.cells[col].dataset.v??a.cells[col].textContent.trim();
+    const bv=b.cells[col].dataset.v??b.cells[col].textContent.trim();
+    const c=num?(parseFloat(av)||-1e9)-(parseFloat(bv)||-1e9):av.localeCompare(bv,'ko');
+    return d==='asc'?c:-c;
+  }});
+  const tb=t.querySelector('tbody');
+  rows.forEach(r=>tb.appendChild(r));
+  t.querySelectorAll('th').forEach((h,i)=>{{
+    h.textContent=h.textContent.replace(/ [▲▼]$/,'');
+    if(i===col)h.textContent+=d==='asc'?' ▲':' ▼';
+  }});
+}}
+</script>
+</body>
+</html>"""
+
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_text(html_out, encoding="utf-8")
+        return output_path
 
 
 # ── 유틸 함수 ─────────────────────────────────────────────────────
@@ -257,7 +492,7 @@ def _compute_mdd(returns: list[float]) -> Optional[float]:
 
 
 def _compute_group_metrics(
-    signals: list[SignalRecord], rf_annual: float
+    signals: list[SignalRecord], rf_annual: float, hold_weeks: Optional[int] = None
 ) -> GroupMetrics:
     """신호 목록에서 집계 지표 계산."""
     if not signals:
@@ -289,6 +524,19 @@ def _compute_group_metrics(
     m.sharpe_28d = _compute_sharpe(r28s, hold_days=28, rf_annual=rf_annual)
     m.sharpe_91d = _compute_sharpe(r91s, hold_days=91, rf_annual=rf_annual)
     m.mdd        = _compute_mdd(r28s)
+
+    if hold_weeks is not None:
+        hold_days = hold_weeks * 7
+        m.hold_days_custom = hold_days
+        rcs  = [s.return_custom for s in signals if s.return_custom is not None]
+        excs = [s.excess_custom for s in signals if s.excess_custom is not None]
+        if rcs:
+            m.win_rate_custom      = sum(1 for r in rcs if r > 0) / len(rcs)
+            m.avg_return_custom    = statistics.mean(rcs)
+            m.median_return_custom = statistics.median(rcs)
+        if excs:
+            m.avg_excess_custom = statistics.mean(excs)
+        m.sharpe_custom = _compute_sharpe(rcs, hold_days=hold_days, rf_annual=rf_annual)
 
     return m
 
@@ -589,8 +837,13 @@ def _fill_returns(
     stock_lookup: dict[date, float],
     kospi_lookup: dict[date, float],
     tx_cost_rt: float,
+    hold_weeks: Optional[int] = None,
 ) -> None:
-    """신호에 수익률 및 초과수익률 채우기 (거래비용 차감 포함)."""
+    """신호에 수익률 및 초과수익률 채우기 (거래비용 차감 포함).
+
+    hold_weeks가 지정되면 N주(N*7일) 보유 수익률을 return_custom/excess_custom에도 채운다.
+    표준 기간(1/4/13w)이더라도 return_custom에 중복 저장하므로 리포트 로직이 단순해진다.
+    """
     base = sig.close_at_signal
     if base == 0:
         return
@@ -617,6 +870,16 @@ def _fill_returns(
     sig.excess_7d  = sig.return_7d  - k7  if sig.return_7d  is not None and k7  is not None else None
     sig.excess_28d = sig.return_28d - k28 if sig.return_28d is not None and k28 is not None else None
     sig.excess_91d = sig.return_91d - k91 if sig.return_91d is not None and k91 is not None else None
+
+    if hold_weeks is not None:
+        hold_days = hold_weeks * 7
+        sig.return_custom = _ret(hold_days)
+        kc = _kospi_ret(hold_days)
+        sig.excess_custom = (
+            sig.return_custom - kc
+            if sig.return_custom is not None and kc is not None
+            else None
+        )
 
 
 # ── 메인 실행 ─────────────────────────────────────────────────────
@@ -646,9 +909,10 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
 
     # 2. 데이터 수집 범위
     #   전방: MA120w(주봉 120주=840일) + 여유 → 2년(760일) lookback
-    #   후방: 최대 보유 91일 + 여유 14일
+    #   후방: 최대 보유 91일 + 여유 14일 (hold_weeks 지정 시 그 기간으로 확장)
     fetch_start = config.start - timedelta(days=760)
-    fetch_end   = config.end   + timedelta(days=105)
+    hold_buffer = (config.hold_weeks * 7 + 14) if config.hold_weeks else 0
+    fetch_end   = config.end + timedelta(days=max(105, hold_buffer))
 
     # 3. OHLCV 병렬 수집
     if config.dsn:
@@ -710,13 +974,13 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
             continue
         if sig.ticker not in stock_lookup_cache:
             stock_lookup_cache[sig.ticker] = _build_price_lookup(df)
-        _fill_returns(sig, stock_lookup_cache[sig.ticker], kospi_lookup, config.tx_cost_rt)
+        _fill_returns(sig, stock_lookup_cache[sig.ticker], kospi_lookup, config.tx_cost_rt, config.hold_weeks)
 
     # 9. 날짜 순 정렬 → MDD equity curve가 시간 순서대로 누적
     all_signals.sort(key=lambda s: s.signal_date)
 
     # 10. 집계 지표
-    overall = _compute_group_metrics(all_signals, config.rf_rate_annual)
+    overall = _compute_group_metrics(all_signals, config.rf_rate_annual, config.hold_weeks)
 
     note = ""
     if config.mode in ("stage", "cross"):
