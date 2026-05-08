@@ -19,17 +19,153 @@ from backtest_engine import (
     GroupMetrics,
     SignalRecord,
     TX_COST_DEFAULT,
+    _STOP_LOSS_PCT,
     _apply_cross_filter,
     _build_price_lookup,
+    _build_weekly_ichimoku,
     _compute_group_metrics,
     _compute_mdd,
+    _compute_rsi,
+    _compute_sell_signals_and_s2,
     _compute_sharpe,
     _fill_returns,
+    _find_ichimoku_sell,
     _nearest_price,
     _replay_ichimoku,
     _replay_stage,
     _week_label,
 )
+
+# ── BacktestConfig.hold_weeks ─────────────────────────────────────
+
+class TestBacktestConfigHoldWeeks:
+    def test_none_by_default(self):
+        cfg = BacktestConfig("ichimoku", date(2025, 1, 1), date(2026, 1, 1))
+        assert cfg.hold_weeks is None
+
+    def test_valid_non_standard(self):
+        cfg = BacktestConfig("ichimoku", date(2025, 1, 1), date(2026, 1, 1), hold_weeks=8)
+        assert cfg.hold_weeks == 8
+
+    def test_valid_standard_weeks(self):
+        for w in (1, 4, 13):
+            cfg = BacktestConfig("stage", date(2025, 1, 1), date(2026, 1, 1), hold_weeks=w)
+            assert cfg.hold_weeks == w
+
+    def test_zero_raises(self):
+        with pytest.raises(ValueError, match="hold_weeks"):
+            BacktestConfig("ichimoku", date(2025, 1, 1), date(2026, 1, 1), hold_weeks=0)
+
+    def test_negative_raises(self):
+        with pytest.raises(ValueError, match="hold_weeks"):
+            BacktestConfig("ichimoku", date(2025, 1, 1), date(2026, 1, 1), hold_weeks=-3)
+
+
+# ── _fill_returns — custom hold period ───────────────────────────
+
+class TestFillReturnsCustomHold:
+    def test_non_standard_hold_populates_custom(self):
+        """hold_weeks=8 (56d) → return_custom computed from N*7 days offset."""
+        sig = _make_signal(close=10_000.0, signal_date=date(2025, 1, 6))
+        # 2025-01-06 + 56d = 2025-03-03
+        stock = {date(2025, 3, 3): 11_200.0}
+        _fill_returns(sig, stock, {}, tx_cost_rt=0.0, hold_weeks=8)
+        assert sig.return_custom == pytest.approx(0.12, abs=0.001)
+
+    def test_standard_4w_custom_matches_28d(self):
+        """hold_weeks=4 → return_custom == return_28d (same 28-day target)."""
+        sig = _make_signal(close=10_000.0, signal_date=date(2025, 1, 6))
+        # 2025-01-06 + 28d = 2025-02-03
+        stock = {date(2025, 2, 3): 10_800.0}
+        _fill_returns(sig, stock, {}, tx_cost_rt=0.0, hold_weeks=4)
+        assert sig.return_28d   == pytest.approx(0.08, abs=0.001)
+        assert sig.return_custom == pytest.approx(0.08, abs=0.001)
+
+    def test_no_hold_weeks_custom_stays_none(self):
+        """hold_weeks not set → return_custom/excess_custom remain None."""
+        sig = _make_signal(close=10_000.0, signal_date=date(2025, 1, 6))
+        stock = {date(2025, 1, 13): 10_500.0}
+        _fill_returns(sig, stock, {}, tx_cost_rt=0.0)
+        assert sig.return_custom is None
+        assert sig.excess_custom is None
+
+    def test_tx_cost_deducted_from_custom(self):
+        """Transaction cost subtracted from return_custom same as standard returns."""
+        sig = _make_signal(close=10_000.0, signal_date=date(2025, 1, 6))
+        # 2025-01-06 + 56d = 2025-03-03, flat price
+        stock = {date(2025, 3, 3): 10_000.0}
+        _fill_returns(sig, stock, {}, tx_cost_rt=0.005, hold_weeks=8)
+        assert sig.return_custom == pytest.approx(-0.005, abs=0.0001)
+
+    def test_missing_price_custom_is_none(self):
+        """No price data at custom hold target → return_custom is None."""
+        sig = _make_signal(close=10_000.0, signal_date=date(2025, 1, 6))
+        _fill_returns(sig, {}, {}, tx_cost_rt=0.0, hold_weeks=8)
+        assert sig.return_custom is None
+        assert sig.excess_custom is None
+
+    def test_custom_excess_uses_kospi(self):
+        """excess_custom = return_custom − KOSPI return over same period."""
+        sig = _make_signal(close=10_000.0, signal_date=date(2025, 1, 6))
+        # 2025-01-06 + 56d = 2025-03-03
+        stock = {date(2025, 3, 3): 11_200.0}   # +12%
+        kospi = {date(2025, 1, 6): 2_700.0, date(2025, 3, 3): 2_754.0}  # +2%
+        _fill_returns(sig, stock, kospi, tx_cost_rt=0.0, hold_weeks=8)
+        assert sig.return_custom == pytest.approx(0.12, abs=0.001)
+        assert sig.excess_custom == pytest.approx(0.10, abs=0.001)  # 0.12 − 0.02
+
+
+# ── _compute_group_metrics — custom hold ─────────────────────────
+
+class TestComputeGroupMetricsCustomHold:
+    def test_custom_metrics_populated(self):
+        """Signals with return_custom → GroupMetrics custom fields computed."""
+        sigs = [
+            _make_signal(r7=0.01, r28=0.03, r91=0.10),
+            _make_signal(r7=0.02, r28=0.05, r91=0.12),
+        ]
+        sigs[0].return_custom = 0.06
+        sigs[1].return_custom = -0.02
+        m = _compute_group_metrics(sigs, rf_annual=0.03, hold_weeks=8)
+        assert m.hold_days_custom == 56
+        assert m.win_rate_custom == pytest.approx(0.5)   # 1/2 positive
+        assert m.avg_return_custom == pytest.approx(0.02, abs=0.001)
+        assert m.median_return_custom == pytest.approx(0.02, abs=0.001)
+
+    def test_no_hold_weeks_custom_fields_are_none(self):
+        """Without hold_weeks → all custom GroupMetrics fields stay None."""
+        sigs = [_make_signal(r7=0.01, r28=0.03, r91=0.10)]
+        m = _compute_group_metrics(sigs, rf_annual=0.03)
+        assert m.hold_days_custom is None
+        assert m.win_rate_custom is None
+        assert m.avg_return_custom is None
+        assert m.sharpe_custom is None
+
+    def test_hold_days_custom_correct(self):
+        """hold_days_custom = hold_weeks * 7."""
+        sigs = [_make_signal()]
+        sigs[0].return_custom = 0.05
+        m = _compute_group_metrics(sigs, rf_annual=0.03, hold_weeks=6)
+        assert m.hold_days_custom == 42
+
+    def test_custom_excess_aggregated(self):
+        """avg_excess_custom is mean of excess_custom across signals."""
+        sigs = [_make_signal(), _make_signal()]
+        sigs[0].return_custom = 0.10
+        sigs[0].excess_custom = 0.08
+        sigs[1].return_custom = 0.04
+        sigs[1].excess_custom = 0.02
+        m = _compute_group_metrics(sigs, rf_annual=0.03, hold_weeks=8)
+        assert m.avg_excess_custom == pytest.approx(0.05, abs=0.001)
+
+    def test_all_custom_none_custom_rates_none(self):
+        """If all return_custom are None → win_rate_custom/avg_return_custom stay None."""
+        sigs = [_make_signal(), _make_signal()]
+        # return_custom stays None (not set)
+        m = _compute_group_metrics(sigs, rf_annual=0.03, hold_weeks=8)
+        assert m.hold_days_custom == 56
+        assert m.win_rate_custom is None
+        assert m.avg_return_custom is None
 
 
 # ── 공통 헬퍼 ─────────────────────────────────────────────────────
@@ -542,6 +678,567 @@ class TestBacktestResultReport:
         assert "테스트 주의사항" in result.to_telegram_report()
 
 
+# ── top_bottom_telegram_text ─────────────────────────────────────
+
+class TestTopBottomTelegramText:
+    def _make_result_with_signals(self) -> BacktestResult:
+        cfg = BacktestConfig("ichimoku", date(2025, 1, 1), date(2026, 1, 1))
+        sigs = [
+            _make_signal("A.KS", date(2025, 1, 6),  r28=0.15, r7=0.05, r91=0.30),
+            _make_signal("B.KS", date(2025, 2, 1),  r28=0.08, r7=0.03, r91=0.12),
+            _make_signal("C.KS", date(2025, 3, 1),  r28=-0.05, r7=-0.02, r91=-0.10),
+            _make_signal("D.KS", date(2025, 4, 1),  r28=-0.12, r7=-0.04, r91=-0.20),
+            _make_signal("E.KS", date(2025, 5, 1),  r28=0.22, r7=0.08, r91=0.40),
+        ]
+        m = _compute_group_metrics(sigs, 0.03)
+        return BacktestResult(config=cfg, signals=sigs, overall=m,
+                              computed_at="2026-01-01T00:00:00")
+
+    def test_no_28d_returns_empty_string(self):
+        cfg = BacktestConfig("ichimoku", date(2025, 1, 1), date(2026, 1, 1))
+        result = BacktestResult(config=cfg, signals=[_make_signal()],
+                                overall=GroupMetrics(), computed_at="2026-01-01T00:00:00")
+        assert result.top_bottom_telegram_text() == ""
+
+    def test_top_ranked_first(self):
+        result = self._make_result_with_signals()
+        txt = result.top_bottom_telegram_text(n=2)
+        # E.KS (+22%) should be first in top section
+        top_section = txt.split("📉")[0]
+        assert "+22" in top_section
+
+    def test_bottom_ranked_last(self):
+        result = self._make_result_with_signals()
+        txt = result.top_bottom_telegram_text(n=2)
+        # D.KS (-12%) should be in bottom section
+        bot_section = txt.split("📉")[1]
+        assert "-12" in bot_section
+
+    def test_contains_both_sections(self):
+        result = self._make_result_with_signals()
+        txt = result.top_bottom_telegram_text(n=3)
+        assert "🏆" in txt
+        assert "📉" in txt
+
+    def test_n_caps_at_signal_count(self):
+        """n > signals → clamps to number of signals with 28d returns."""
+        cfg = BacktestConfig("ichimoku", date(2025, 1, 1), date(2026, 1, 1))
+        sigs = [_make_signal(r28=0.05), _make_signal(r28=-0.03)]
+        result = BacktestResult(config=cfg, signals=sigs, overall=GroupMetrics(),
+                                computed_at="2026-01-01T00:00:00")
+        txt = result.top_bottom_telegram_text(n=10)
+        assert txt  # not empty
+        assert "🏆" in txt
+
+
+# ── to_html_report ────────────────────────────────────────────────
+
+class TestToHtmlReport:
+    def _make_result(self, n_sigs: int = 5) -> BacktestResult:
+        cfg = BacktestConfig("stage", date(2025, 1, 1), date(2026, 1, 1))
+        sigs = [
+            _make_signal(f"T{i:02d}.KS", date(2025, 1, 6 + i),
+                         r7=0.01 * i, r28=0.02 * i, r91=0.05 * i,
+                         ex28=0.01 * i - 0.02)
+            for i in range(n_sigs)
+        ]
+        m = _compute_group_metrics(sigs, 0.03)
+        return BacktestResult(config=cfg, signals=sigs, overall=m,
+                              computed_at="2026-01-01T00:00:00")
+
+    def test_creates_file(self, tmp_path):
+        result = self._make_result()
+        out = str(tmp_path / "test_backtest.html")
+        returned = result.to_html_report(out)
+        assert returned == out
+        assert (tmp_path / "test_backtest.html").exists()
+
+    def test_creates_parent_dirs(self, tmp_path):
+        result = self._make_result()
+        out = str(tmp_path / "nested" / "deep" / "report.html")
+        result.to_html_report(out)
+        import os
+        assert os.path.exists(out)
+
+    def test_html_contains_ticker_names(self, tmp_path):
+        result = self._make_result(3)
+        out = str(tmp_path / "r.html")
+        result.to_html_report(out)
+        content = (tmp_path / "r.html").read_text(encoding="utf-8")
+        for sig in result.signals:
+            assert sig.ticker in content
+
+    def test_html_contains_mode_label(self, tmp_path):
+        result = self._make_result()
+        out = str(tmp_path / "r.html")
+        result.to_html_report(out)
+        content = (tmp_path / "r.html").read_text(encoding="utf-8")
+        assert "3단계" in content  # MODE_KOR["stage"]
+
+    def test_html_contains_sort_script(self, tmp_path):
+        result = self._make_result()
+        out = str(tmp_path / "r.html")
+        result.to_html_report(out)
+        content = (tmp_path / "r.html").read_text(encoding="utf-8")
+        assert "function sort(" in content
+
+    def test_empty_signals_no_crash(self, tmp_path):
+        cfg = BacktestConfig("ichimoku", date(2025, 1, 1), date(2026, 1, 1))
+        result = BacktestResult(config=cfg, signals=[], overall=GroupMetrics(),
+                                computed_at="2026-01-01T00:00:00")
+        out = str(tmp_path / "empty.html")
+        result.to_html_report(out)
+        assert (tmp_path / "empty.html").exists()
+
+
+# ── _compute_sell_signals_and_s2 ─────────────────────────────────
+
+def _make_ohlcv_for_sell(
+    n_flat: int = 60,
+    flat_price: float = 10_000.0,
+    flat_vol: int = 100_000,
+    spike_pct: float = 0.08,
+    spike_vol_mult: float = 3.0,
+    post: Optional[list[tuple[float, int]]] = None,
+    start_date: date = date(2022, 1, 3),
+) -> tuple[pd.DataFrame, date, date]:
+    """Returns (df, spike_date, first_post_date)."""
+    if post is None:
+        post = [(flat_price * (1 + spike_pct) * 0.85, flat_vol)]  # MA20 break day
+
+    current = start_date
+    dates, opens, highs, lows, closes, vols = [], [], [], [], [], []
+    all_prices = [flat_price] * n_flat + [flat_price * (1 + spike_pct)] + [p for p, _ in post]
+    all_vols   = [flat_vol] * n_flat + [int(flat_vol * spike_vol_mult)] + [v for _, v in post]
+
+    for p, v in zip(all_prices, all_vols):
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        dates.append(pd.Timestamp(current, tz="UTC"))
+        opens.append(p * 0.999); highs.append(p * 1.001)
+        lows.append(p * 0.999);  closes.append(p); vols.append(v)
+        current += timedelta(days=1)
+
+    df = pd.DataFrame({"Open": opens, "High": highs, "Low": lows,
+                       "Close": closes, "Volume": vols}, index=dates)
+    spike_date     = dates[n_flat].date()
+    first_post_date = dates[n_flat + 1].date() if post else spike_date
+    return df, spike_date, first_post_date
+
+
+class TestComputeSellSignalsAndS2:
+    def _make_sig(self, ticker: str, signal_date: date,
+                  close: float, mode: str = "stage") -> SignalRecord:
+        return SignalRecord(ticker=ticker, name="테스트", signal_date=signal_date,
+                            close_at_signal=close, mode=mode, market="KOSPI")
+
+    def test_ma20_break_detected(self):
+        """Price drops below MA20 but above stop loss → sell_reason = MA20 이탈.
+
+        MA20 at post day ≈ (18×10_000 + 10_800 + 9_950)/20 ≈ 10_037.
+        Stop price = 10_800 × 0.92 = 9_936.
+        9_950: below MA20 (break ✓) but above stop price (no stop loss ✓).
+        """
+        df, spike_date, post_date = _make_ohlcv_for_sell(
+            n_flat=60, flat_price=10_000.0, spike_pct=0.08,
+            post=[(9_950, 100_000)])   # 9_950 < MA20≈10_037 but > stop 9_936
+        sig = self._make_sig("T.KS", spike_date, 10_800.0)
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0)
+        assert sig.sell_date   == post_date
+        assert sig.sell_reason == "MA20 이탈"
+        assert sig.sell_return is not None
+        assert sig.sell_return == pytest.approx(9_950 / 10_800 - 1.0, abs=0.001)
+        assert sig.hold_days   == (post_date - spike_date).days
+
+    def test_stop_loss_detected(self):
+        """Price drops ≥ 8% → stop loss fires before MA20 break."""
+        # stop_price = 10_800 * 0.92 = 9_936
+        # post day close = 9_500 ≤ 9_936 → stop loss
+        df, spike_date, post_date = _make_ohlcv_for_sell(
+            n_flat=60, flat_price=10_000.0, spike_pct=0.08,
+            post=[(9_500, 100_000)])
+        sig = self._make_sig("T.KS", spike_date, 10_800.0)
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0)
+        assert sig.sell_date   == post_date
+        assert "손절" in sig.sell_reason
+        assert sig.sell_return == pytest.approx(9_500 / 10_800 - 1.0, abs=0.001)
+
+    def test_stop_loss_priority_over_ma20_same_day(self):
+        """Same day: both stop loss and MA20 break → stop loss reported."""
+        # MA20 ≈ 10_040; 9_000 < MA20 AND 9_000 < 10_800 * 0.92 = 9_936
+        df, spike_date, post_date = _make_ohlcv_for_sell(
+            n_flat=60, flat_price=10_000.0, spike_pct=0.08,
+            post=[(9_000, 100_000)])
+        sig = self._make_sig("T.KS", spike_date, 10_800.0)
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0)
+        assert "손절" in sig.sell_reason
+
+    def test_no_sell_signal_still_above_ma20(self):
+        """Price stays above MA20 and stop loss → sell_reason = 보유 중."""
+        # post day: same spike price (still high, no break)
+        df, spike_date, _ = _make_ohlcv_for_sell(
+            n_flat=60, flat_price=10_000.0, spike_pct=0.08,
+            post=[(10_800, 100_000)])
+        sig = self._make_sig("T.KS", spike_date, 10_800.0)
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0)
+        assert sig.sell_date   is None
+        assert sig.sell_reason == "보유 중"
+        assert sig.sell_return is None
+
+    def test_tx_cost_deducted_from_sell_return(self):
+        """Transaction cost subtracted from sell_return."""
+        df, spike_date, _ = _make_ohlcv_for_sell(
+            n_flat=60, flat_price=10_000.0, spike_pct=0.08,
+            post=[(9_000, 100_000)])
+        sig = self._make_sig("T.KS", spike_date, 10_800.0)
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.005)
+        expected = 9_000 / 10_800 - 1.0 - 0.005  # raw return - tx cost
+        assert sig.sell_return == pytest.approx(expected, abs=0.001)
+
+    def test_s2_date_detected_for_stage1(self):
+        """C1+C2+C3 met within 14 days of S1 → s2_date populated."""
+        # spike=+8%=10_800, post: 9_720 (−10%, C1 OK), vol=40% of spike (C3 OK)
+        # MA20 ≈ 10_040; 9_720 ≥ 10_040*0.95=9_538 (C2 OK)
+        spike_vol = int(100_000 * 3.0)
+        df, spike_date, post_date = _make_ohlcv_for_sell(
+            n_flat=60, flat_price=10_000.0, spike_pct=0.08, spike_vol_mult=3.0,
+            post=[(10_800 * 0.90, int(spike_vol * 0.40))])
+        sig = self._make_sig("T.KS", spike_date, 10_800.0, mode="stage")
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0)
+        assert sig.s2_date == post_date
+
+    def test_s2_date_not_set_for_stage2_mode(self):
+        """S2 detection only applies to stage-mode signals, not stage2."""
+        spike_vol = int(100_000 * 3.0)
+        df, spike_date, _ = _make_ohlcv_for_sell(
+            n_flat=60, flat_price=10_000.0, spike_pct=0.08, spike_vol_mult=3.0,
+            post=[(10_800 * 0.90, int(spike_vol * 0.40))])
+        sig = self._make_sig("T.KS", spike_date, 10_800.0, mode="stage2")
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0)
+        assert sig.s2_date is None
+
+    def test_missing_ticker_no_crash(self):
+        """Ticker not in ohlcv_map → signal unchanged (no crash)."""
+        sig = self._make_sig("MISSING.KS", date(2025, 1, 6), 10_000.0)
+        _compute_sell_signals_and_s2([sig], {}, tx_cost_rt=0.0)
+        assert sig.sell_date   is None
+        assert sig.sell_reason == ""
+
+    def test_s3_date_detected_after_s2(self):
+        """S3 conditions (10d-high break + +5% + RSI≥70 + 1.5×vol) after S2 → s3_date set.
+
+        Setup: 50 uptrend days (+1%) to prime RSI, then S1 spike (+8%),
+        S2 pullback (−10%), 12 flat days (RSI partial recovery), then S3 (+5%, 2×vol).
+        After 12 flat days, RSI at S3 day is ≈72 ≥ 70.
+        The 12-day consolidation pushes the S1 spike outside the 10-day high window,
+        so close > 10d-high (consolidation high) is satisfied.
+        """
+        n_up = 50
+        base = 10_000.0
+        # Build uptrend: each day +1%
+        current = date(2021, 1, 4)
+        dates_, opens_, highs_, lows_, closes_, vols_ = [], [], [], [], [], []
+
+        p = base
+        for _ in range(n_up):
+            while current.weekday() >= 5:
+                current += timedelta(days=1)
+            next_p = p * 1.01
+            dates_.append(pd.Timestamp(current, tz="UTC"))
+            opens_.append(p * 0.999); highs_.append(next_p * 1.001)
+            lows_.append(p * 0.999);  closes_.append(next_p); vols_.append(100_000)
+            p = next_p
+            current += timedelta(days=1)
+
+        # S1 spike
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s1_price = p * 1.08
+        s1_vol   = 300_000
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(p); highs_.append(s1_price * 1.001)
+        lows_.append(p);  closes_.append(s1_price); vols_.append(s1_vol)
+        s1_date = current
+        current += timedelta(days=1)
+
+        # S2 pullback (−10%)
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s2_price = s1_price * 0.90
+        s2_vol   = int(s1_vol * 0.40)
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(s2_price); highs_.append(s2_price * 1.001)
+        lows_.append(s2_price);  closes_.append(s2_price); vols_.append(s2_vol)
+        current += timedelta(days=1)
+
+        # 12 flat consolidation days
+        for _ in range(12):
+            while current.weekday() >= 5:
+                current += timedelta(days=1)
+            dates_.append(pd.Timestamp(current, tz="UTC"))
+            opens_.append(s2_price); highs_.append(s2_price * 1.001)
+            lows_.append(s2_price);  closes_.append(s2_price); vols_.append(100_000)
+            current += timedelta(days=1)
+
+        # S3 breakout (+5%, above 10d-high, 2× avg_vol30)
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s3_price = s2_price * 1.05
+        s3_vol   = 200_000   # > 1.5 × avg30 ≈ 107k
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(s2_price); highs_.append(s3_price * 1.001)
+        lows_.append(s2_price);  closes_.append(s3_price); vols_.append(s3_vol)
+        s3_expected_date = current
+
+        df = pd.DataFrame(
+            {"Open": opens_, "High": highs_, "Low": lows_,
+             "Close": closes_, "Volume": vols_},
+            index=dates_,
+        )
+
+        sig = self._make_sig("T.KS", s1_date, s1_price, mode="stage")
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0)
+        # S2 should be detected first
+        assert sig.s2_date is not None, "S2 should be detected"
+        # S3 should be detected after S2
+        assert sig.s3_date == s3_expected_date, (
+            f"Expected s3_date={s3_expected_date}, got {sig.s3_date}"
+        )
+
+    def test_s3_not_set_without_s2(self):
+        """No S2 → s3_date stays None.
+
+        post vol = 200k → vol_ratio = 200k/300k = 0.667 > 0.60, C3 fails → no S2.
+        price 9_950 < MA20 ≈ 10_037 → sell fires; no S2 → S3 also not scanned.
+        """
+        df, spike_date, _ = _make_ohlcv_for_sell(
+            n_flat=60, flat_price=10_000.0, spike_pct=0.08, spike_vol_mult=3.0,
+            post=[(9_950, 200_000)])  # vol_ratio=0.667 > 0.60 → C3 fails → no S2
+        sig = self._make_sig("T.KS", spike_date, 10_800.0, mode="stage")
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0)
+        assert sig.s2_date is None
+        assert sig.s3_date is None
+
+    def test_s3_blocked_by_flow_condition(self):
+        """flow_lookup 제공 + 외인·기관 중 하나가 순매도 → S3 미감지."""
+        n_up = 50
+        base = 10_000.0
+        current = date(2021, 1, 4)
+        dates_, opens_, highs_, lows_, closes_, vols_ = [], [], [], [], [], []
+
+        p = base
+        for _ in range(n_up):
+            while current.weekday() >= 5:
+                current += timedelta(days=1)
+            next_p = p * 1.01
+            dates_.append(pd.Timestamp(current, tz="UTC"))
+            opens_.append(p * 0.999); highs_.append(next_p * 1.001)
+            lows_.append(p * 0.999);  closes_.append(next_p); vols_.append(100_000)
+            p = next_p
+            current += timedelta(days=1)
+
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s1_price = p * 1.08
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(p); highs_.append(s1_price * 1.001)
+        lows_.append(p);  closes_.append(s1_price); vols_.append(300_000)
+        s1_date = current
+        current += timedelta(days=1)
+
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s2_price = s1_price * 0.90
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(s2_price); highs_.append(s2_price * 1.001)
+        lows_.append(s2_price);  closes_.append(s2_price); vols_.append(int(300_000 * 0.40))
+        current += timedelta(days=1)
+
+        for _ in range(12):
+            while current.weekday() >= 5:
+                current += timedelta(days=1)
+            dates_.append(pd.Timestamp(current, tz="UTC"))
+            opens_.append(s2_price); highs_.append(s2_price * 1.001)
+            lows_.append(s2_price);  closes_.append(s2_price); vols_.append(100_000)
+            current += timedelta(days=1)
+
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s3_price = s2_price * 1.05
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(s2_price); highs_.append(s3_price * 1.001)
+        lows_.append(s2_price);  closes_.append(s3_price); vols_.append(200_000)
+        s3_day = current
+
+        df = pd.DataFrame(
+            {"Open": opens_, "High": highs_, "Low": lows_,
+             "Close": closes_, "Volume": vols_},
+            index=dates_,
+        )
+        sig = self._make_sig("T.KS", s1_date, s1_price, mode="stage")
+
+        # Case A: 외인 순매도 → S3 차단
+        flow_blocked = {("T.KS", s3_day): (-1_000, 500)}
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0,
+                                     flow_lookup=flow_blocked)
+        assert sig.s2_date is not None
+        assert sig.s3_date is None, "외인 순매도 시 S3 차단되어야 함"
+
+    def test_s3_allowed_by_flow_condition(self):
+        """flow_lookup 제공 + 외인·기관 모두 순매수 → S3 감지."""
+        n_up = 50
+        base = 10_000.0
+        current = date(2021, 6, 1)
+        dates_, opens_, highs_, lows_, closes_, vols_ = [], [], [], [], [], []
+
+        p = base
+        for _ in range(n_up):
+            while current.weekday() >= 5:
+                current += timedelta(days=1)
+            next_p = p * 1.01
+            dates_.append(pd.Timestamp(current, tz="UTC"))
+            opens_.append(p * 0.999); highs_.append(next_p * 1.001)
+            lows_.append(p * 0.999);  closes_.append(next_p); vols_.append(100_000)
+            p = next_p
+            current += timedelta(days=1)
+
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s1_price = p * 1.08
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(p); highs_.append(s1_price * 1.001)
+        lows_.append(p);  closes_.append(s1_price); vols_.append(300_000)
+        s1_date = current
+        current += timedelta(days=1)
+
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s2_price = s1_price * 0.90
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(s2_price); highs_.append(s2_price * 1.001)
+        lows_.append(s2_price);  closes_.append(s2_price); vols_.append(int(300_000 * 0.40))
+        current += timedelta(days=1)
+
+        for _ in range(12):
+            while current.weekday() >= 5:
+                current += timedelta(days=1)
+            dates_.append(pd.Timestamp(current, tz="UTC"))
+            opens_.append(s2_price); highs_.append(s2_price * 1.001)
+            lows_.append(s2_price);  closes_.append(s2_price); vols_.append(100_000)
+            current += timedelta(days=1)
+
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s3_price = s2_price * 1.05
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(s2_price); highs_.append(s3_price * 1.001)
+        lows_.append(s2_price);  closes_.append(s3_price); vols_.append(200_000)
+        s3_day = current
+
+        df = pd.DataFrame(
+            {"Open": opens_, "High": highs_, "Low": lows_,
+             "Close": closes_, "Volume": vols_},
+            index=dates_,
+        )
+        sig = self._make_sig("T.KS", s1_date, s1_price, mode="stage")
+
+        # 외인+기관 모두 순매수
+        flow_ok = {("T.KS", s3_day): (5_000, 3_000)}
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0,
+                                     flow_lookup=flow_ok)
+        assert sig.s2_date is not None
+        assert sig.s3_date == s3_day, "외인+기관 모두 순매수 시 S3 감지되어야 함"
+
+    def test_s3_passes_when_flow_date_missing(self):
+        """flow_lookup 있지만 해당 날짜 데이터 없음 → 조건 5 생략, S3 감지."""
+        n_up = 50
+        base = 10_000.0
+        current = date(2021, 9, 1)
+        dates_, opens_, highs_, lows_, closes_, vols_ = [], [], [], [], [], []
+
+        p = base
+        for _ in range(n_up):
+            while current.weekday() >= 5:
+                current += timedelta(days=1)
+            next_p = p * 1.01
+            dates_.append(pd.Timestamp(current, tz="UTC"))
+            opens_.append(p * 0.999); highs_.append(next_p * 1.001)
+            lows_.append(p * 0.999);  closes_.append(next_p); vols_.append(100_000)
+            p = next_p
+            current += timedelta(days=1)
+
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s1_price = p * 1.08
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(p); highs_.append(s1_price * 1.001)
+        lows_.append(p);  closes_.append(s1_price); vols_.append(300_000)
+        s1_date = current
+        current += timedelta(days=1)
+
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s2_price = s1_price * 0.90
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(s2_price); highs_.append(s2_price * 1.001)
+        lows_.append(s2_price);  closes_.append(s2_price); vols_.append(int(300_000 * 0.40))
+        current += timedelta(days=1)
+
+        for _ in range(12):
+            while current.weekday() >= 5:
+                current += timedelta(days=1)
+            dates_.append(pd.Timestamp(current, tz="UTC"))
+            opens_.append(s2_price); highs_.append(s2_price * 1.001)
+            lows_.append(s2_price);  closes_.append(s2_price); vols_.append(100_000)
+            current += timedelta(days=1)
+
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s3_price = s2_price * 1.05
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(s2_price); highs_.append(s3_price * 1.001)
+        lows_.append(s2_price);  closes_.append(s3_price); vols_.append(200_000)
+        s3_day = current
+
+        df = pd.DataFrame(
+            {"Open": opens_, "High": highs_, "Low": lows_,
+             "Close": closes_, "Volume": vols_},
+            index=dates_,
+        )
+        sig = self._make_sig("T.KS", s1_date, s1_price, mode="stage")
+
+        # flow_lookup은 있지만 s3_day 데이터가 없음 → 조건 5 생략 → 통과
+        flow_no_s3_day: dict = {}
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0,
+                                     flow_lookup=flow_no_s3_day)
+        assert sig.s2_date is not None
+        assert sig.s3_date == s3_day, "flow 데이터 없는 날짜는 조건 5 생략 → S3 감지"
+
+    def test_group_metrics_s3_fields(self):
+        """_compute_group_metrics populates s3_progression_rate when s3_date present."""
+        sig1 = _make_signal(r7=0.01, r28=0.03, r91=0.08)
+        sig1.s2_date = date(2025, 1, 14)
+        sig1.s3_date = date(2025, 2, 5)
+        sig2 = _make_signal(r7=0.02, r28=0.04, r91=0.10)
+        sig2.s2_date = date(2025, 1, 16)
+        # sig2 has no s3_date
+        m = _compute_group_metrics([sig1, sig2], rf_annual=0.03)
+        assert m.s3_progression_rate == pytest.approx(0.5)  # 1 of 2 S2 → S3
+
+    def test_group_metrics_sell_fields(self):
+        """_compute_group_metrics populates sell/S2 fields when data present."""
+        sig = _make_signal(r7=0.02, r28=0.05, r91=0.10)
+        sig.sell_return = 0.03
+        sig.hold_days   = 15
+        sig.mode        = "stage"
+        sig.s2_date     = date(2025, 1, 14)
+        m = _compute_group_metrics([sig], rf_annual=0.03)
+        assert m.win_rate_sell     == pytest.approx(1.0)
+        assert m.avg_return_sell   == pytest.approx(0.03)
+        assert m.avg_hold_days     == pytest.approx(15.0)
+        assert m.s2_progression_rate == pytest.approx(1.0)
+
+
 # ── _replay_ichimoku (합성 데이터) ────────────────────────────────
 
 class TestReplayIchimoku:
@@ -638,3 +1335,234 @@ class TestReplayIchimoku:
                 f"Consecutive signals {sigs[i-1].signal_date} → {sigs[i].signal_date} "
                 f"({gap} days apart) — condition B should prevent this"
             )
+
+
+# ── _build_weekly_ichimoku ────────────────────────────────────────
+
+def _make_daily_for_weekly(
+    n_days: int = 450,
+    price: float = 10_000.0,
+    start_date: date = date(2020, 1, 6),
+) -> pd.DataFrame:
+    """Flat daily OHLCV for weekly ichimoku tests."""
+    current = start_date
+    dates, opens, highs, lows, closes, vols = [], [], [], [], [], []
+    for _ in range(n_days):
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        dates.append(pd.Timestamp(current, tz="UTC"))
+        opens.append(price * 0.999); highs.append(price * 1.001)
+        lows.append(price * 0.999);  closes.append(price); vols.append(100_000)
+        current += timedelta(days=1)
+    return pd.DataFrame(
+        {"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": vols},
+        index=dates,
+    )
+
+
+class TestBuildWeeklyIchimoku:
+    def test_returns_dataframe_for_sufficient_data(self):
+        """≥ 62 weeks of daily data → returns DataFrame with expected columns."""
+        df = _make_daily_for_weekly(n_days=500)
+        weekly = _build_weekly_ichimoku(df)
+        assert weekly is not None
+        for col in ("cloud_top", "cloud_bottom", "tenkan", "kijun"):
+            assert col in weekly.columns, f"Missing column: {col}"
+
+    def test_returns_none_for_insufficient_data(self):
+        """< 62 weeks (< 434 days) → None."""
+        df = _make_daily_for_weekly(n_days=300)   # ≈ 43 weeks
+        result = _build_weekly_ichimoku(df)
+        assert result is None
+
+    def test_weekly_rows_are_fridays(self):
+        """W-FRI resample → all index timestamps are Friday."""
+        df = _make_daily_for_weekly(n_days=500)
+        weekly = _build_weekly_ichimoku(df)
+        assert weekly is not None
+        for ts in weekly.index:
+            d = ts.date() if hasattr(ts, "date") else ts
+            assert d.weekday() == 4, f"Expected Friday, got {d} (weekday={d.weekday()})"
+
+    def test_cloud_top_ge_cloud_bottom(self):
+        """cloud_top ≥ cloud_bottom for all valid rows."""
+        df = _make_daily_for_weekly(n_days=500)
+        weekly = _build_weekly_ichimoku(df)
+        assert weekly is not None
+        valid = weekly.dropna(subset=["cloud_top", "cloud_bottom"])
+        assert (valid["cloud_top"] >= valid["cloud_bottom"]).all()
+
+
+# ── _find_ichimoku_sell ───────────────────────────────────────────
+
+def _make_weekly_ichi_df(
+    n_weeks: int = 100,
+    price: float = 10_000.0,
+    start_date: date = date(2020, 1, 3),
+) -> pd.DataFrame:
+    """Minimal weekly DataFrame with ichimoku columns for sell tests.
+
+    All prices flat → cloud_top=cloud_bottom=price, tenkan=kijun=price.
+    """
+    # Find first Friday >= start_date
+    current = start_date
+    while current.weekday() != 4:
+        current += timedelta(days=1)
+
+    dates, closes, cloud_tops, cloud_bottoms, tenkans, kijuns = [], [], [], [], [], []
+    for _ in range(n_weeks):
+        dates.append(pd.Timestamp(current, tz="UTC"))
+        closes.append(price)
+        cloud_tops.append(price)
+        cloud_bottoms.append(price)
+        tenkans.append(price)
+        kijuns.append(price)
+        current += timedelta(weeks=1)
+
+    return pd.DataFrame(
+        {
+            "Close": closes,
+            "cloud_top": cloud_tops,
+            "cloud_bottom": cloud_bottoms,
+            "tenkan": tenkans,
+            "kijun": kijuns,
+        },
+        index=dates,
+    )
+
+
+class TestFindIchimokuSell:
+    def test_stop_loss_detected(self):
+        """Close ≤ entry × 0.92 → sell_reason contains '손절'."""
+        entry = 10_000.0
+        stop_price = entry * 0.92  # 9_200
+        signal_date = date(2020, 1, 10)  # a Friday
+
+        df = _make_weekly_ichi_df(n_weeks=80, price=entry)
+        # Override 3rd weekly bar after signal to be below stop
+        target_row = 3
+        after_signal = [i for i, ts in enumerate(df.index) if ts.date() > signal_date]
+        assert len(after_signal) >= target_row
+        idx = after_signal[target_row - 1]
+        df.iloc[idx, df.columns.get_loc("Close")] = stop_price - 100.0
+
+        sell_date, sell_reason, sell_ret, hold_days = _find_ichimoku_sell(
+            signal_date, entry, df, tx_cost_rt=0.0, stop_loss_pct=0.08,
+        )
+        assert sell_date is not None
+        assert "손절" in sell_reason
+        assert sell_ret is not None and sell_ret < 0
+
+    def test_cloud_breakdown_detected(self):
+        """Close < cloud_bottom → '구름 이탈' (stop loss not triggered)."""
+        entry = 10_000.0
+        signal_date = date(2020, 1, 10)
+
+        # Price slightly below cloud_bottom but above stop
+        df = _make_weekly_ichi_df(n_weeks=80, price=entry)
+        after_signal = [i for i, ts in enumerate(df.index) if ts.date() > signal_date]
+        idx = after_signal[1]  # 2nd bar after signal
+        close_below_cloud = entry * 0.95   # 9_500 — below cloud (10_000) but above stop (9_200)
+        df.iloc[idx, df.columns.get_loc("Close")] = close_below_cloud
+        # cloud_bottom stays at 10_000 (above close) → breakdown triggered
+
+        sell_date, sell_reason, sell_ret, hold_days = _find_ichimoku_sell(
+            signal_date, entry, df, tx_cost_rt=0.0, stop_loss_pct=0.08,
+        )
+        assert sell_date is not None
+        assert sell_reason == "구름 이탈"
+        assert hold_days > 0
+
+    def test_dead_cross_detected(self):
+        """tenkan crosses below kijun (prev: tenkan≥kijun, curr: tenkan<kijun) → '전환<기준 DC'."""
+        entry = 10_000.0
+        signal_date = date(2020, 1, 10)
+
+        df = _make_weekly_ichi_df(n_weeks=80, price=entry)
+        after_signal = [i for i, ts in enumerate(df.index) if ts.date() > signal_date]
+
+        # Bar 1: tenkan=kijun (prev equal → no DC yet)
+        # Bar 2: tenkan < kijun (DC fires) — close stays well above stop & cloud
+        idx1 = after_signal[0]
+        idx2 = after_signal[1]
+        df.iloc[idx1, df.columns.get_loc("tenkan")] = entry          # prev_tenkan == kijun
+        df.iloc[idx1, df.columns.get_loc("kijun")]  = entry
+        df.iloc[idx2, df.columns.get_loc("tenkan")] = entry * 0.97   # tenkan < kijun
+        df.iloc[idx2, df.columns.get_loc("kijun")]  = entry          # kijun stays
+        # Keep close > stop (entry * 0.92) and above cloud_bottom (entry)
+        # Close must NOT fall below cloud_bottom to avoid prior trigger
+        df.iloc[idx2, df.columns.get_loc("Close")]       = entry * 1.01  # above cloud
+        df.iloc[idx2, df.columns.get_loc("cloud_bottom")] = entry * 0.50  # lower cloud
+
+        sell_date, sell_reason, sell_ret, hold_days = _find_ichimoku_sell(
+            signal_date, entry, df, tx_cost_rt=0.0, stop_loss_pct=0.08,
+        )
+        assert sell_date is not None
+        assert sell_reason == "전환<기준 DC"
+
+    def test_stop_loss_priority_over_cloud_breakdown(self):
+        """Same bar: both stop loss and cloud breakdown → stop loss takes priority."""
+        entry = 10_000.0
+        signal_date = date(2020, 1, 10)
+
+        df = _make_weekly_ichi_df(n_weeks=80, price=entry)
+        after_signal = [i for i, ts in enumerate(df.index) if ts.date() > signal_date]
+        idx = after_signal[0]
+        below_stop = entry * 0.90  # < stop(9_200) AND < cloud_bottom(10_000)
+        df.iloc[idx, df.columns.get_loc("Close")] = below_stop
+
+        _, sell_reason, _, _ = _find_ichimoku_sell(
+            signal_date, entry, df, tx_cost_rt=0.0, stop_loss_pct=0.08,
+        )
+        assert "손절" in sell_reason
+
+    def test_no_signal_returns_holding(self):
+        """No sell condition ever met → (None, '보유 중', None, None)."""
+        entry = 10_000.0
+        signal_date = date(2020, 1, 10)
+        df = _make_weekly_ichi_df(n_weeks=20, price=entry)  # all flat above cloud
+
+        sell_date, sell_reason, sell_ret, hold_days = _find_ichimoku_sell(
+            signal_date, entry, df, tx_cost_rt=0.0, stop_loss_pct=0.08,
+        )
+        assert sell_date is None
+        assert sell_reason == "보유 중"
+        assert sell_ret is None
+        assert hold_days is None
+
+    def test_tx_cost_deducted(self):
+        """sell_return = (close/entry - 1) - tx_cost_rt."""
+        entry = 10_000.0
+        tx = 0.005
+        signal_date = date(2020, 1, 10)
+
+        df = _make_weekly_ichi_df(n_weeks=80, price=entry)
+        after_signal = [i for i, ts in enumerate(df.index) if ts.date() > signal_date]
+        idx = after_signal[0]
+        close_val = entry * 0.90  # triggers stop
+        df.iloc[idx, df.columns.get_loc("Close")] = close_val
+
+        _, _, sell_ret, _ = _find_ichimoku_sell(
+            signal_date, entry, df, tx_cost_rt=tx, stop_loss_pct=0.08,
+        )
+        expected = (close_val / entry - 1.0) - tx
+        assert sell_ret == pytest.approx(expected, abs=0.0001)
+
+    def test_bars_before_signal_date_are_skipped(self):
+        """signal_date bars are excluded — sell only triggers on strictly later bars."""
+        entry = 10_000.0
+        signal_date = date(2020, 1, 10)
+
+        df = _make_weekly_ichi_df(n_weeks=80, price=entry)
+        # Inject stop-loss price on the bar AT signal_date (should be skipped)
+        for i, ts in enumerate(df.index):
+            if ts.date() == signal_date:
+                df.iloc[i, df.columns.get_loc("Close")] = entry * 0.80
+                break
+
+        sell_date, sell_reason, _, _ = _find_ichimoku_sell(
+            signal_date, entry, df, tx_cost_rt=0.0, stop_loss_pct=0.08,
+        )
+        # The signal_date bar must have been skipped; no other bars trigger
+        assert sell_date is None
+        assert sell_reason == "보유 중"

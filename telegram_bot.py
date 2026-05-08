@@ -288,14 +288,14 @@ async def _handle_backtest2(
     # ── 인수 파싱 ──────────────────────────────────────────────
     USAGE = (
         "사용법: /backtest2 <mode> <start> <end> [market] [--max N] [--tx-cost F]\n"
-        "  mode   : ichimoku | stage | cross\n"
+        "  mode   : ichimoku | stage | stage2 | cross\n"
         "  start  : YYYY-MM-DD\n"
         "  end    : YYYY-MM-DD\n"
         "  market : KOSPI | KOSDAQ | ALL (기본: ALL)\n"
         "  --max N      : 최대 티커 수 (기본 200, 0=전종목)\n"
         "  --tx-cost F  : 왕복 거래비용 (기본: KRX 실비 ~0.0021)\n\n"
         "예) /backtest2 ichimoku 2025-01-01 2026-01-01\n"
-        "    /backtest2 stage 2025-01-01 2026-01-01 KOSDAQ --max 100"
+        "    /backtest2 stage2  2025-01-01 2026-01-01 KOSDAQ --max 100"
     )
 
     if len(args) < 3:
@@ -306,8 +306,8 @@ async def _handle_backtest2(
     start_str = args[1]
     end_str   = args[2]
 
-    if mode not in ("ichimoku", "stage", "cross"):
-        await _send_plain(http, chat_id, f"mode는 ichimoku|stage|cross 중 하나여야 합니다.\n\n{USAGE}")
+    if mode not in ("ichimoku", "stage", "stage2", "cross"):
+        await _send_plain(http, chat_id, f"mode는 ichimoku|stage|stage2|cross 중 하나여야 합니다.\n\n{USAGE}")
         return
 
     from datetime import date as _date
@@ -383,7 +383,20 @@ async def _handle_backtest2(
         try:
             loop   = asyncio.get_running_loop()
             result = await loop.run_in_executor(None, run_backtest, config)
+
+            # HTML 리포트 저장
+            from datetime import datetime as _dt
+            from zoneinfo import ZoneInfo as _ZI
+            _ts = _dt.now(_ZI("Asia/Seoul")).strftime("%Y%m%d_%H%M%S")
+            _html_path = f"reports/backtest/backtest_{mode}_{_ts}.html"
+            result.to_html_report(_html_path)
+
             report = result.to_telegram_report()
+            top_bottom = result.top_bottom_telegram_text(n=5)
+            if top_bottom:
+                report = report + top_bottom
+            report += f"\n\n📁 {_html_path}"
+
             # Telegram 4096자 제한 처리
             if len(report) > 4090:
                 report = report[:4087] + "..."
