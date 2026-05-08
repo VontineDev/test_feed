@@ -96,8 +96,9 @@ class SignalRecord:
     excess_91d: Optional[float] = None
     return_custom: Optional[float] = None  # BacktestConfig.hold_weeks 지정 시 채워짐
     excess_custom: Optional[float] = None
-    # 매도 신호 및 S2 진행 (run_backtest에서 채워짐)
+    # 매도 신호 및 단계 진행 (run_backtest에서 채워짐)
     s2_date:     Optional[date]  = None  # S1 신호 후 14일 이내 S2 조건 충족일
+    s3_date:     Optional[date]  = None  # S2 이후 조정 고점 돌파 + RSI≥70 (과열 재가속)
     sell_date:   Optional[date]  = None  # MA20 이탈 또는 손절 발생일
     sell_reason: str             = ""    # "MA20 이탈" | "손절 -N%" | "보유 중"
     sell_return: Optional[float] = None  # 매도 시점 수익률 (거래비용 차감)
@@ -132,6 +133,7 @@ class GroupMetrics:
     median_return_sell:   Optional[float] = None
     avg_hold_days:        Optional[float] = None
     s2_progression_rate:  Optional[float] = None  # S1→S2 진행 비율
+    s3_progression_rate:  Optional[float] = None  # S2→S3 진행 비율
 
 
 @dataclass
@@ -186,6 +188,8 @@ class BacktestResult:
             ]
         if m.s2_progression_rate is not None:
             lines.append(f"  S1→S2 진행: {pct(m.s2_progression_rate, 1)}")
+        if m.s3_progression_rate is not None:
+            lines.append(f"  S2→S3 진행: {pct(m.s3_progression_rate, 1)}")
         if self.note:
             lines += ["", f"⚠ {self.note}"]
         return "\n".join(lines)
@@ -247,6 +251,8 @@ class BacktestResult:
             ]
         if m.s2_progression_rate is not None:
             lines.append(f"  S1→S2 진행률: {pct(m.s2_progression_rate, 1)}")
+        if m.s3_progression_rate is not None:
+            lines.append(f"  S2→S3 진행률: {pct(m.s3_progression_rate, 1)}")
         lines += [
             "",
             f"  산출일시: {self.computed_at}",
@@ -350,6 +356,9 @@ class BacktestResult:
             s2_td = (f'<td data-v="{sig.s2_date.isoformat()}">{sig.s2_date}</td>'
                      if sig.s2_date else '<td class="muted" data-v="">—</td>')
 
+            s3_td = (f'<td data-v="{sig.s3_date.isoformat()}">{sig.s3_date}</td>'
+                     if sig.s3_date else '<td class="muted" data-v="">—</td>')
+
             sell_cls = next((v for k, v in _SELL_CLS.items() if sig.sell_reason.startswith(k)), "")
             sell_td  = (f'<td><span class="badge {sell_cls}">{_html.escape(sig.sell_reason)}</span></td>'
                         if sell_cls else f'<td class="muted">{_html.escape(sig.sell_reason)}</td>')
@@ -372,6 +381,7 @@ class BacktestResult:
                 + _ret_td(sig.return_91d)
                 + _ret_td(sig.excess_28d)
                 + s2_td
+                + s3_td
                 + sell_td
                 + sd_td
                 + hd_td
@@ -443,6 +453,7 @@ footer{{margin-top:24px;padding-top:12px;border-top:1px solid var(--border);colo
   {'<div class="card"><div class="lbl">평균 매도수익</div><div class="val ' + _cls(m.avg_return_sell) + '">' + pct(m.avg_return_sell) + '</div></div>' if m.avg_return_sell is not None else ''}
   {'<div class="card"><div class="lbl">평균 보유일</div><div class="val">' + fmt(m.avg_hold_days, 1) + '일</div></div>' if m.avg_hold_days is not None else ''}
   {'<div class="card"><div class="lbl">S1→S2 진행률</div><div class="val">' + pct(m.s2_progression_rate) + '</div></div>' if m.s2_progression_rate is not None else ''}
+  {'<div class="card"><div class="lbl">S2→S3 진행률</div><div class="val">' + pct(m.s3_progression_rate) + '</div></div>' if m.s3_progression_rate is not None else ''}
 </div>
 
 <h2>28d 수익률 분포</h2>
@@ -462,10 +473,11 @@ footer{{margin-top:24px;padding-top:12px;border-top:1px solid var(--border);colo
   <th class="num" onclick="sort(7,true)">91d</th>
   <th class="num" onclick="sort(8,true)">초과(28d)</th>
   <th onclick="sort(9,false)">S2진행일</th>
-  <th onclick="sort(10,false)">매도신호</th>
-  <th onclick="sort(11,false)">매도일</th>
-  <th class="num" onclick="sort(12,true)">보유일</th>
-  <th class="num" onclick="sort(13,true)">매도수익</th>
+  <th onclick="sort(10,false)">S3진행일</th>
+  <th onclick="sort(11,false)">매도신호</th>
+  <th onclick="sort(12,false)">매도일</th>
+  <th class="num" onclick="sort(13,true)">보유일</th>
+  <th class="num" onclick="sort(14,true)">매도수익</th>
 </tr></thead>
 <tbody>
 {chr(10).join(table_rows)}
@@ -565,6 +577,17 @@ def _compute_mdd(returns: list[float]) -> Optional[float]:
     return -max_dd
 
 
+def _compute_rsi(closes: pd.Series, period: int = 14) -> pd.Series:
+    """RSI(period) — Wilder 지수이동평균 방식."""
+    delta    = closes.diff()
+    gain     = delta.clip(lower=0)
+    loss     = (-delta).clip(lower=0)
+    avg_gain = gain.ewm(com=period - 1, min_periods=period).mean()
+    avg_loss = loss.ewm(com=period - 1, min_periods=period).mean()
+    rs       = avg_gain / avg_loss.replace(0.0, float("nan"))
+    return 100.0 - 100.0 / (1.0 + rs)
+
+
 def _compute_group_metrics(
     signals: list[SignalRecord], rf_annual: float, hold_weeks: Optional[int] = None
 ) -> GroupMetrics:
@@ -624,6 +647,9 @@ def _compute_group_metrics(
     s1_sigs = [s for s in signals if s.mode == "stage"]
     if s1_sigs:
         m.s2_progression_rate = sum(1 for s in s1_sigs if s.s2_date is not None) / len(s1_sigs)
+    s2_sigs = [s for s in signals if s.s2_date is not None]
+    if s2_sigs:
+        m.s3_progression_rate = sum(1 for s in s2_sigs if s.s3_date is not None) / len(s2_sigs)
 
     return m
 
@@ -1043,7 +1069,11 @@ def _compute_sell_signals_and_s2(
             continue
 
         df = raw_df.copy()
-        df["ma_20"] = df["Close"].rolling(20, min_periods=20).mean()
+        df["ma_20"]     = df["Close"].rolling(20, min_periods=20).mean()
+        df["rsi_14"]    = _compute_rsi(df["Close"])
+        df["avg_vol30"] = df["Volume"].rolling(30, min_periods=30).mean()
+        df["high_10d"]  = df["High"].shift(1).rolling(10, min_periods=10).max()
+        df["pct_chg"]   = df["Close"].pct_change(fill_method=None)
 
         idx_map: dict[date, int] = {}
         for i, ts in enumerate(df.index):
@@ -1076,10 +1106,13 @@ def _compute_sell_signals_and_s2(
                 if pd.isna(cur["Close"]):
                     continue
 
-                close     = float(cur["Close"])
-                vol       = float(cur["Volume"]) if not pd.isna(cur["Volume"]) else 0.0
-                ma20_val  = cur["ma_20"]
-                ma20      = float(ma20_val) if not pd.isna(ma20_val) else None
+                close    = float(cur["Close"])
+                vol      = float(cur["Volume"])  if not pd.isna(cur["Volume"])  else 0.0
+                ma20     = float(cur["ma_20"])   if not pd.isna(cur["ma_20"])   else None
+                rsi14    = float(cur["rsi_14"])  if not pd.isna(cur["rsi_14"])  else None
+                avg30    = float(cur["avg_vol30"]) if not pd.isna(cur["avg_vol30"]) else None
+                high10d  = float(cur["high_10d"]) if not pd.isna(cur["high_10d"]) else None
+                pct_chg  = float(cur["pct_chg"]) if not pd.isna(cur["pct_chg"]) else None
 
                 # S2 진행 감지 (Stage 1 신호 × 14일 이내)
                 if sig.mode == "stage" and not s2_found and row_date <= s2_cutoff:
@@ -1091,6 +1124,17 @@ def _compute_sell_signals_and_s2(
                                 and 0.30 <= vol_ratio <= 0.60):
                             sig.s2_date = row_date
                             s2_found    = True
+
+                # S3 감지 (S2 이후, 조정 고점 돌파 + RSI≥70 + 거래량)
+                # 조건 5(외인+기관 동시 순매수)는 과거 데이터 없어 건너뜀
+                if (s2_found and sig.s3_date is None
+                        and sig.s2_date is not None and row_date > sig.s2_date):
+                    if (pct_chg  is not None and pct_chg  >= 0.05   # C2: +5%
+                            and rsi14   is not None and rsi14   >= 70    # C3: RSI≥70
+                            and high10d is not None and close > high10d  # C1: 10일 고가 돌파
+                            and avg30   is not None and avg30   >  0
+                            and vol >= 1.5 * avg30):                     # C4: 1.5× vol30
+                        sig.s3_date = row_date
 
                 # 매도 신호 (손절 > MA20 이탈)
                 if sig.sell_date is None:
@@ -1105,8 +1149,10 @@ def _compute_sell_signals_and_s2(
                         sig.sell_return = (close / entry_price - 1.0) - tx_cost_rt
                         sig.hold_days   = (row_date - sig.signal_date).days
 
-                # S2 감지 완료 + 매도 완료 → 조기 종료
-                if sig.sell_date is not None and (s2_found or row_date > s2_cutoff):
+                # 조기 종료: 매도 완료 + S2 윈도우 만료 + S3 완료(또는 S2 없음)
+                past_s2_window = s2_found or row_date > s2_cutoff
+                s3_done        = not s2_found or sig.s3_date is not None
+                if sig.sell_date is not None and past_s2_window and s3_done:
                     break
 
             if sig.sell_date is None:

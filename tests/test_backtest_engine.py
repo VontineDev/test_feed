@@ -24,6 +24,7 @@ from backtest_engine import (
     _build_price_lookup,
     _compute_group_metrics,
     _compute_mdd,
+    _compute_rsi,
     _compute_sell_signals_and_s2,
     _compute_sharpe,
     _fill_returns,
@@ -920,6 +921,112 @@ class TestComputeSellSignalsAndS2:
         _compute_sell_signals_and_s2([sig], {}, tx_cost_rt=0.0)
         assert sig.sell_date   is None
         assert sig.sell_reason == ""
+
+    def test_s3_date_detected_after_s2(self):
+        """S3 conditions (10d-high break + +5% + RSI≥70 + 1.5×vol) after S2 → s3_date set.
+
+        Setup: 50 uptrend days (+1%) to prime RSI, then S1 spike (+8%),
+        S2 pullback (−10%), 12 flat days (RSI partial recovery), then S3 (+5%, 2×vol).
+        After 12 flat days, RSI at S3 day is ≈72 ≥ 70.
+        The 12-day consolidation pushes the S1 spike outside the 10-day high window,
+        so close > 10d-high (consolidation high) is satisfied.
+        """
+        n_up = 50
+        base = 10_000.0
+        # Build uptrend: each day +1%
+        current = date(2021, 1, 4)
+        dates_, opens_, highs_, lows_, closes_, vols_ = [], [], [], [], [], []
+
+        p = base
+        for _ in range(n_up):
+            while current.weekday() >= 5:
+                current += timedelta(days=1)
+            next_p = p * 1.01
+            dates_.append(pd.Timestamp(current, tz="UTC"))
+            opens_.append(p * 0.999); highs_.append(next_p * 1.001)
+            lows_.append(p * 0.999);  closes_.append(next_p); vols_.append(100_000)
+            p = next_p
+            current += timedelta(days=1)
+
+        # S1 spike
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s1_price = p * 1.08
+        s1_vol   = 300_000
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(p); highs_.append(s1_price * 1.001)
+        lows_.append(p);  closes_.append(s1_price); vols_.append(s1_vol)
+        s1_date = current
+        current += timedelta(days=1)
+
+        # S2 pullback (−10%)
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s2_price = s1_price * 0.90
+        s2_vol   = int(s1_vol * 0.40)
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(s2_price); highs_.append(s2_price * 1.001)
+        lows_.append(s2_price);  closes_.append(s2_price); vols_.append(s2_vol)
+        current += timedelta(days=1)
+
+        # 12 flat consolidation days
+        for _ in range(12):
+            while current.weekday() >= 5:
+                current += timedelta(days=1)
+            dates_.append(pd.Timestamp(current, tz="UTC"))
+            opens_.append(s2_price); highs_.append(s2_price * 1.001)
+            lows_.append(s2_price);  closes_.append(s2_price); vols_.append(100_000)
+            current += timedelta(days=1)
+
+        # S3 breakout (+5%, above 10d-high, 2× avg_vol30)
+        while current.weekday() >= 5:
+            current += timedelta(days=1)
+        s3_price = s2_price * 1.05
+        s3_vol   = 200_000   # > 1.5 × avg30 ≈ 107k
+        dates_.append(pd.Timestamp(current, tz="UTC"))
+        opens_.append(s2_price); highs_.append(s3_price * 1.001)
+        lows_.append(s2_price);  closes_.append(s3_price); vols_.append(s3_vol)
+        s3_expected_date = current
+
+        df = pd.DataFrame(
+            {"Open": opens_, "High": highs_, "Low": lows_,
+             "Close": closes_, "Volume": vols_},
+            index=dates_,
+        )
+
+        sig = self._make_sig("T.KS", s1_date, s1_price, mode="stage")
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0)
+        # S2 should be detected first
+        assert sig.s2_date is not None, "S2 should be detected"
+        # S3 should be detected after S2
+        assert sig.s3_date == s3_expected_date, (
+            f"Expected s3_date={s3_expected_date}, got {sig.s3_date}"
+        )
+
+    def test_s3_not_set_without_s2(self):
+        """No S2 → s3_date stays None.
+
+        post vol = 200k → vol_ratio = 200k/300k = 0.667 > 0.60, C3 fails → no S2.
+        price 9_950 < MA20 ≈ 10_037 → sell fires; no S2 → S3 also not scanned.
+        """
+        df, spike_date, _ = _make_ohlcv_for_sell(
+            n_flat=60, flat_price=10_000.0, spike_pct=0.08, spike_vol_mult=3.0,
+            post=[(9_950, 200_000)])  # vol_ratio=0.667 > 0.60 → C3 fails → no S2
+        sig = self._make_sig("T.KS", spike_date, 10_800.0, mode="stage")
+        _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0)
+        assert sig.s2_date is None
+        assert sig.s3_date is None
+
+    def test_group_metrics_s3_fields(self):
+        """_compute_group_metrics populates s3_progression_rate when s3_date present."""
+        sig1 = _make_signal(r7=0.01, r28=0.03, r91=0.08)
+        sig1.s2_date = date(2025, 1, 14)
+        sig1.s3_date = date(2025, 2, 5)
+        sig2 = _make_signal(r7=0.02, r28=0.04, r91=0.10)
+        sig2.s2_date = date(2025, 1, 16)
+        # sig2 has no s3_date
+        m = _compute_group_metrics([sig1, sig2], rf_annual=0.03)
+        assert m.s3_progression_rate == pytest.approx(0.5)  # 1 of 2 S2 → S3
 
     def test_group_metrics_sell_fields(self):
         """_compute_group_metrics populates sell/S2 fields when data present."""
