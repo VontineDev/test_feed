@@ -96,7 +96,9 @@ class SignalRecord:
     excess_91d: Optional[float] = None
     return_custom: Optional[float] = None  # BacktestConfig.hold_weeks 지정 시 채워짐
     excess_custom: Optional[float] = None
-    # 매도 신호 및 단계 진행 (run_backtest에서 채워짐)
+    # 업종·MDD·매도 신호·단계 진행 (run_backtest에서 채워짐)
+    sector:      str             = ""    # KIND 업종명 (빈 문자열 = 미확인)
+    mdd_91d:     Optional[float] = None  # 진입일 기준 91일 MDD (≤ 0)
     s2_date:     Optional[date]  = None  # S1 신호 후 14일 이내 S2 조건 충족일
     s3_date:     Optional[date]  = None  # S2 이후 조정 고점 돌파 + RSI≥70 (과열 재가속)
     sell_date:   Optional[date]  = None  # MA20 이탈 또는 손절 발생일
@@ -134,6 +136,7 @@ class GroupMetrics:
     avg_hold_days:        Optional[float] = None
     s2_progression_rate:  Optional[float] = None  # S1→S2 진행 비율
     s3_progression_rate:  Optional[float] = None  # S2→S3 진행 비율
+    avg_mdd_91d:          Optional[float] = None  # 종목별 MDD(91d) 평균
 
 
 @dataclass
@@ -345,10 +348,21 @@ class BacktestResult:
                         "cross": ("교차", "cross"), "ichimoku": ("이치", "ichi")}
         _SELL_CLS    = {"MA20 이탈": "sell-ma", "손절": "sell-sl"}
 
+        def _mdd_td(v: Optional[float]) -> str:
+            if v is None:
+                return '<td class="num muted" data-v="-1">—</td>'
+            dv  = v * 10000
+            cls = "neg" if v < 0 else ""
+            txt = f"{v * 100:.1f}%"
+            return f'<td class="num {cls}" data-v="{dv}">{txt}</td>'
+
         table_rows: list[str] = []
         for sig in self.signals:
             mkt_b = "KS" if sig.market == "KOSPI" else "KQ"
             ep    = f"{sig.close_at_signal:,.0f}"
+
+            sector_txt = _html.escape(sig.sector[:12]) if sig.sector else "—"
+            sector_td  = f'<td class="muted">{sector_txt}</td>'
 
             stage_lbl, stage_cls = _STAGE_LABEL.get(sig.mode, (sig.mode, ""))
             stage_td = f'<td><span class="badge {stage_cls}">{stage_lbl}</span></td>'
@@ -373,7 +387,8 @@ class BacktestResult:
                 f"<tr>"
                 f'<td data-v="{sig.signal_date.isoformat()}">{sig.signal_date}</td>'
                 f'<td>{_html.escape(sig.name)}</td>'
-                f'<td class="muted">{sig.ticker} <span class="badge">{mkt_b}</span></td>'
+                + sector_td
+                + f'<td class="muted">{sig.ticker} <span class="badge">{mkt_b}</span></td>'
                 + stage_td
                 + f'<td class="num" data-v="{sig.close_at_signal}">{ep}</td>'
                 + _ret_td(sig.return_7d)
@@ -386,6 +401,7 @@ class BacktestResult:
                 + sd_td
                 + hd_td
                 + _ret_td(sig.sell_return)
+                + _mdd_td(sig.mdd_91d)
                 + "</tr>"
             )
 
@@ -454,6 +470,7 @@ footer{{margin-top:24px;padding-top:12px;border-top:1px solid var(--border);colo
   {'<div class="card"><div class="lbl">평균 보유일</div><div class="val">' + fmt(m.avg_hold_days, 1) + '일</div></div>' if m.avg_hold_days is not None else ''}
   {'<div class="card"><div class="lbl">S1→S2 진행률</div><div class="val">' + pct(m.s2_progression_rate) + '</div></div>' if m.s2_progression_rate is not None else ''}
   {'<div class="card"><div class="lbl">S2→S3 진행률</div><div class="val">' + pct(m.s3_progression_rate) + '</div></div>' if m.s3_progression_rate is not None else ''}
+  {'<div class="card"><div class="lbl">평균 종목MDD(91d)</div><div class="val neg">' + f"{(m.avg_mdd_91d or 0)*100:.1f}%" + '</div></div>' if m.avg_mdd_91d is not None else ''}
 </div>
 
 <h2>28d 수익률 분포</h2>
@@ -465,19 +482,21 @@ footer{{margin-top:24px;padding-top:12px;border-top:1px solid var(--border);colo
 <thead><tr>
   <th onclick="sort(0,false)">신호일</th>
   <th onclick="sort(1,false)">종목명</th>
-  <th onclick="sort(2,false)">티커</th>
-  <th onclick="sort(3,false)">단계</th>
-  <th class="num" onclick="sort(4,true)">진입가</th>
-  <th class="num" onclick="sort(5,true)">7d</th>
-  <th class="num" onclick="sort(6,true)">28d</th>
-  <th class="num" onclick="sort(7,true)">91d</th>
-  <th class="num" onclick="sort(8,true)">초과(28d)</th>
-  <th onclick="sort(9,false)">S2진행일</th>
-  <th onclick="sort(10,false)">S3진행일</th>
-  <th onclick="sort(11,false)">매도신호</th>
-  <th onclick="sort(12,false)">매도일</th>
-  <th class="num" onclick="sort(13,true)">보유일</th>
-  <th class="num" onclick="sort(14,true)">매도수익</th>
+  <th onclick="sort(2,false)">업종</th>
+  <th onclick="sort(3,false)">티커</th>
+  <th onclick="sort(4,false)">단계</th>
+  <th class="num" onclick="sort(5,true)">진입가</th>
+  <th class="num" onclick="sort(6,true)">7d</th>
+  <th class="num" onclick="sort(7,true)">28d</th>
+  <th class="num" onclick="sort(8,true)">91d</th>
+  <th class="num" onclick="sort(9,true)">초과(28d)</th>
+  <th onclick="sort(10,false)">S2진행일</th>
+  <th onclick="sort(11,false)">S3진행일</th>
+  <th onclick="sort(12,false)">매도신호</th>
+  <th onclick="sort(13,false)">매도일</th>
+  <th class="num" onclick="sort(14,true)">보유일</th>
+  <th class="num" onclick="sort(15,true)">매도수익</th>
+  <th class="num" onclick="sort(16,true)">MDD(91d)</th>
 </tr></thead>
 <tbody>
 {chr(10).join(table_rows)}
@@ -650,6 +669,9 @@ def _compute_group_metrics(
     s2_sigs = [s for s in signals if s.s2_date is not None]
     if s2_sigs:
         m.s3_progression_rate = sum(1 for s in s2_sigs if s.s3_date is not None) / len(s2_sigs)
+    mdd_list = [s.mdd_91d for s in signals if s.mdd_91d is not None]
+    if mdd_list:
+        m.avg_mdd_91d = statistics.mean(mdd_list)
 
     return m
 
@@ -1095,8 +1117,11 @@ def _compute_sell_signals_and_s2(
                 v = df.iloc[entry_idx]["Volume"]
                 s1_vol = float(v) if not pd.isna(v) else 0.0
 
-            s2_cutoff = sig.signal_date + timedelta(days=14)
-            s2_found  = False
+            s2_cutoff      = sig.signal_date + timedelta(days=14)
+            mdd_window_end = sig.signal_date + timedelta(days=91)
+            s2_found       = False
+            peak_for_mdd   = entry_price
+            max_dd_frac    = 0.0
 
             for j in range(entry_idx + 1, len(df)):
                 ts       = df.index[j]
@@ -1113,6 +1138,14 @@ def _compute_sell_signals_and_s2(
                 avg30    = float(cur["avg_vol30"]) if not pd.isna(cur["avg_vol30"]) else None
                 high10d  = float(cur["high_10d"]) if not pd.isna(cur["high_10d"]) else None
                 pct_chg  = float(cur["pct_chg"]) if not pd.isna(cur["pct_chg"]) else None
+
+                # MDD(91d) 추적
+                if row_date <= mdd_window_end:
+                    if close > peak_for_mdd:
+                        peak_for_mdd = close
+                    dd = (peak_for_mdd - close) / peak_for_mdd
+                    if dd > max_dd_frac:
+                        max_dd_frac = dd
 
                 # S2 진행 감지 (Stage 1 신호 × 14일 이내)
                 if sig.mode == "stage" and not s2_found and row_date <= s2_cutoff:
@@ -1157,6 +1190,7 @@ def _compute_sell_signals_and_s2(
 
             if sig.sell_date is None:
                 sig.sell_reason = "보유 중"
+            sig.mdd_91d = -max_dd_frac  # 음수 표기 (0이면 낙폭 없음)
 
 
 def _fill_returns(
@@ -1220,8 +1254,10 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
         config.mode, config.start, config.end, config.market, config.max_tickers or "전종목",
     )
 
-    # 1. 티커 목록 (FinanceDataReader)
-    all_tickers = get_all_tickers()
+    # 1. 업종 매핑 + 티커 목록
+    from chart_screener import fetch_kind_sector_map
+    sector_map  = fetch_kind_sector_map()
+    all_tickers = get_all_tickers(sector_map=sector_map if sector_map else None)
     if config.market == "KOSPI":
         tickers = [(t, n, s) for t, n, s in all_tickers if t.endswith(".KS")]
     elif config.market == "KOSDAQ":
@@ -1305,7 +1341,12 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
             stock_lookup_cache[sig.ticker] = _build_price_lookup(df)
         _fill_returns(sig, stock_lookup_cache[sig.ticker], kospi_lookup, config.tx_cost_rt, config.hold_weeks)
 
-    # 8.5. 매도 신호 및 S2 진행일 계산
+    # 8.5. 업종 정보 주입
+    ticker_sector: dict[str, str] = {t: s for t, _n, s in tickers}
+    for sig in all_signals:
+        sig.sector = ticker_sector.get(sig.ticker, "")
+
+    # 8.6. 매도 신호·MDD·S2/S3 진행일 계산
     _compute_sell_signals_and_s2(all_signals, ohlcv_map, config.tx_cost_rt)
 
     # 9. 날짜 순 정렬 → MDD equity curve가 시간 순서대로 누적
