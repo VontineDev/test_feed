@@ -337,3 +337,43 @@ def load_flow_data(
             return {(row[0], row[1]): (row[2], row[3]) for row in cur.fetchall()}
     finally:
         conn.close()
+
+
+# ── 시간외 데이터 로드 ─────────────────────────────────────────
+
+AftermarketKey   = tuple[str, date]                          # (yfinance_symbol, trade_date)
+AftermarketValue = tuple[Optional[int], Optional[int], Optional[float]]
+# (after_volume, after_close, after_chg_pct)
+
+
+def load_aftermarket_data(
+    dsn: str,
+    tickers: list[str],
+    start: date,
+    end: date,
+) -> dict[AftermarketKey, AftermarketValue]:
+    """aftermarket_snap 테이블에서 시간외 데이터 로드.
+
+    반환: {(ticker, trade_date): (after_volume, after_close, after_chg_pct)}
+    값이 없는 날짜(시간외 거래 없음 포함)는 dict에 포함되지 않음.
+    """
+    if not tickers:
+        return {}
+    conn = _connect(dsn)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT ticker, trade_date, after_volume, after_close, after_chg_pct
+                FROM aftermarket_snap
+                WHERE ticker = ANY(%s)
+                  AND trade_date BETWEEN %s AND %s
+                """,
+                (tickers, start, end),
+            )
+            return {
+                (row[0], row[1]): (row[2], row[3], float(row[4]) if row[4] is not None else None)
+                for row in cur.fetchall()
+            }
+    finally:
+        conn.close()
