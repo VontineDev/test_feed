@@ -696,19 +696,6 @@ G = 이번 주 종가 > 120주선 (데이터 부족 시 통과) — 장기 추�
 - **업종별 섹션**: 테이블 하단에 KIND 섹터별 그룹 뷰 추가. 이번 주 돌파가 특정 섹터에 집중됐는지 한눈에 파악할 수 있습니다.
 - **외국인 / 기관 순매수 칸**: 스크리너 통과 종목의 당일 외국인·기관 순매수 금액 표시 (Sprint 2에서 실데이터 연동 예정 — 현재는 `—` 표시).
 
-### 차트 스크리너 백테스트 (v0.5.0.0~)
-
-매주 일요일 스크리닝이 완료된 직후, 시스템은 과거 스크리닝 신호들의 사후 수익률을 자동으로 계산합니다.
-
-**계산 항목:**
-- 신호 발생 후 1주 / 4주 / 13주 수익률
-- KOSPI 대비 초과수익률 (같은 기간 코스피 대비)
-- 정배열(★) 신호와 일반 신호의 수익률 분리
-
-**결과 파일:** `~/.gstack/backtest/test_feed/chart_backtest_latest.html`
-
-브라우저로 열면 월별 · 연간 수익률 테이블과 신호 건수 추이를 볼 수 있습니다. 데이터는 증분 업데이트 방식으로 쌓이며, 13주가 지난 신호부터 의미 있는 완성 데이터가 됩니다.
-
 ### 실행 일정
 
 매주 일요일 20:30 KST에 자동 실행됩니다.
@@ -716,15 +703,7 @@ G = 이번 주 종가 > 120주선 (데이터 부족 시 통과) — 장기 추�
 
 ### 수동 실행
 
-```bash
-source venv/bin/activate
-python generate_report.py
-# 두 파일이 생성됩니다:
-#   screening_report_YYYYMMDD_HHMM.txt   (텍스트, 현재 디렉터리)
-#   reports/screener/screener_YYYYMMDD_HHMM.html  (브라우저용 HTML)
-```
-
-수천 개 종목을 처리하므로 수십 분이 걸릴 수 있습니다 (`SCREENER_WORKERS` 값에 따라 다름).
+텔레그램에서 `/scan` 명령어를 전송하면 즉시 전 종목 스크리닝이 실행됩니다. 수천 개 종목을 처리하므로 10~20분 소요됩니다.
 
 단독 테스트만 하려면:
 
@@ -864,35 +843,6 @@ Stage 3 종목 중 다음 조건이 충족되면 `⚠️ Stage 3 피크아웃 �
 
 ---
 
-### 8-2. 차트 스크리너 백테스트 (HTML 리포트)
-
-매주 일요일 스크리닝 완료 후 자동 실행됩니다. 과거 스크리닝 신호들의 사후 수익률을 계산하여 HTML로 출력합니다.
-
-#### 열람 방법
-
-```bash
-# 브라우저로 직접 열기 (경로는 OS 홈 디렉터리 기준)
-# Linux/macOS
-open ~/.gstack/backtest/test_feed/chart_backtest_latest.html
-
-# Windows (WSL)
-explorer.exe "$(wslpath -w ~/.gstack/backtest/test_feed/chart_backtest_latest.html)"
-```
-
-#### 리포트 내용
-
-- **연간 집계**: 전체 / 정배열(★) / 일반 신호 승률, 평균 수익률, 중위 수익률, KOSPI 초과수익률
-- **월별 집계**: 월별 신호 건수와 수익률 추이
-- **수익률 기준**: 신호 발생 주 종가 대비 1주 후 / 4주 후 / 13주 후 종가
-
-#### 데이터 축적 주기
-
-신호 발생 후 13주(약 3개월)가 지나야 13주 수익률 항목이 채워집니다. 초기에는 `—` 로 표시되며, 실행 기간이 쌓일수록 데이터가 풍부해집니다.
-
-> **참고:** 스크리너 백테스트 데이터는 `~/.gstack/backtest/test_feed/signals.json` 에 로컬 저장됩니다. DB를 초기화해도 백테스트 이력은 유지됩니다.
-
----
-
 ## 10. 스케줄러
 
 `run_scheduler.py` 실행 시 다음 7개 작업이 등록됩니다.
@@ -903,7 +853,7 @@ explorer.exe "$(wslpath -w ~/.gstack/backtest/test_feed/chart_backtest_latest.ht
 | `price_tracker` | 30분마다 | 체크포인트 가격 조회 (뉴스 백테스트 데이터 채움) |
 | `weekly_backtest` | 매주 일요일 20:00 KST | 주간 뉴스 신호 백테스팅 리포트 자동 전송 |
 | `krx_daily_refresh` | 매일 20:00 KST | KRX 전체 종목 리스트 갱신 (~2,500종목) |
-| `weekly_chart_screener` | 매주 일요일 20:30 KST | KOSPI/KOSDAQ 주봉 차트 스크리닝 → 스크리너 게이트 갱신 → 차트 스크리너 백테스트 증분 업데이트 → HTML 리포트 재생성 |
+| `weekly_chart_screener` | 매주 일요일 20:30 KST | KOSPI/KOSDAQ 주봉 차트 스크리닝 → 스크리너 게이트 갱신 → HTML 리포트 저장 → Telegram 전송 |
 | `daily_volume_report` | 평일 15:40 KST | 거래량 패턴 일일 배치 리포트 |
 | `daily_stage_classifier` | 평일 16:30 KST | KOSPI/KOSDAQ 전 종목 일봉 Stage 1/2/3 분류 → DB 저장 → Ichimoku 비교 메시지 발송 (v0.6.0.0~) |
 
@@ -1093,12 +1043,7 @@ ollama pull qwen3.5:9b
 
 1. 매주 일요일 20:30 KST 자동 실행을 기다리거나,
 
-2. 수동으로 스크리너 실행:
-   ```bash
-   source venv/bin/activate
-   python generate_report.py
-   ```
-   수천 개 종목을 처리하므로 수십 분이 걸릴 수 있습니다 (`SCREENER_WORKERS` 값에 따라 다름).
+2. 텔레그램에서 `/scan` 명령어로 즉시 수동 실행 (10~20분 소요).
 
 ---
 

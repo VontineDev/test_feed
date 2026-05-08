@@ -25,6 +25,10 @@ All notable changes to this project will be documented in this file.
 ### Tests
 - `test_watchlist_brief.py` 신규 22개: `send_watchlist_brief` 포맷(vol_ratio 전 분기, 경계값, 스트릭 None, Ichimoku 상태), `get_stage1_watchlist` DB 헬퍼(정상·빈 결과·DB 오류).
 
+### Maintenance
+- **프로젝트 구조 개편**: `tests/` (pytest 27개 파일 + `conftest.py`), `docs/` (`ARCHITECTURE.md`, `USER_MANUAL.md`, `TODOS.md`), `scripts/` (배포·운영 보조) 폴더로 분리. 루트는 실행 가능한 Python 모듈만 유지. `pytest.ini` 추가 (`testpaths = tests`).
+- **미사용 파일 제거**: `chart_backtest.py` · `generate_backtest_html.py` (로컬 파일 전용, Telegram 출력 없음), `run_backtest.py` (`/backtest2` 명령으로 대체), `compare_tx_amt.py` (`krx_flow_sync.py` 도입 후 역할 없음), `scripts/check_feeds.py` (개발 초기 일회성), `scripts/generate_report.py` (`/scan` 명령으로 대체). `run_scheduler.py`에서 `chart_backtest` lazy-import 블록 35줄 제거.
+
 ## [0.7.2.0] - 2026-05-08
 
 ### Added

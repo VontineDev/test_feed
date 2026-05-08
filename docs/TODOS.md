@@ -10,10 +10,11 @@ Items deferred from code review and planning sessions.
 
 **Why:** Avoids confusion between production code and dev tooling. The root should contain only production-runnable modules.
 
-**How to apply:** `git mv compare_tx_amt.py scripts/compare_tx_amt.py`. Create `scripts/` if it doesn't exist. No imports reference `compare_tx_amt.py` directly.
+**How to apply:** `git mv compare_tx_amt.py scripts/compare_tx_amt.py`. Create `scripts/` if it doesn't exist. No imports reference `compare_tx_amit.py` directly.
 
 **Effort:** XS (human: ~2 min / CC: ~1 min)
 **Priority:** P4
+**Completed:** v0.7.3.0 (2026-05-08) — 파일 삭제됨 (`krx_flow_sync.py` 도입 후 역할 없음)
 
 ---
 
@@ -310,8 +311,8 @@ Stage 2 conditions to replay:
 **How to apply:**
 - In `backtest_engine.py`, add `_replay_stage2(ticker, name, daily_df, market, config)` that first calls `_replay_stage()` (or inlines Stage 1 check) to find S1 dates, then for each S1 signal date scans the next 14 days for Stage 2 conditions.
 - Add `"stage2"` to `BacktestConfig.mode` valid values.
-- Add `--mode stage2` to `run_backtest.py` CLI.
 - Add `test_replay_stage2.py` with at least: S1 prerequisite check, each condition independently, 14-day lookback boundary, condition 4 skipped gracefully.
+- (Note: `run_backtest.py` was removed — `/backtest2 stage2` Telegram command is the intended interface)
 
 **Pros:** Validates the full 3-stage classifier pipeline end-to-end. Can measure whether Stage 2 entries outperform raw Stage 1.
 **Cons:** Replaying Stage 2 requires Stage 1 history in the same data window — increases memory footprint for long backtests. The 수급 skip means Stage 2 replay is 3/4 conditions, same limitation as Stage 1.
