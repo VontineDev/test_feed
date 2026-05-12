@@ -10,6 +10,10 @@ Long polling 방식으로 명령어를 수신하고 DB 조회 결과를 응답.
     /backtest  — 교차분석 백테스팅 리포트 (판정별/종목별 적중률)
     /screener  — 최신 주봉 차트 스크리닝 결과 (DB 조회, 명령어 발신자에게만 전송)
     /scan      — 주봉 스크리닝 즉시 실행 (전 종목 실시간 스캔, 결과 저장 후 발신자에게 전송)
+    /buy       — 진입 기록 (거래 저널)
+    /sell      — 청산 기록 (FIFO)
+    /port      — 보유 현황 + 미실현 P&L
+    /pnl       — 실현 P&L 요약
     /help      — 명령어 목록
 """
 
@@ -592,6 +596,18 @@ async def _process_update(http: httpx.AsyncClient, update: dict, pool) -> None:
         await _handle_screener(http, chat_id, pool)
     elif cmd == "/scan":
         await _handle_scan(http, chat_id, pool)
+    elif cmd == "/buy":
+        from telegram_trade import handle_buy
+        await handle_buy(http, _get_token(), chat_id, args, pool)
+    elif cmd == "/sell":
+        from telegram_trade import handle_sell
+        await handle_sell(http, _get_token(), chat_id, args, pool)
+    elif cmd == "/port":
+        from telegram_trade import handle_port
+        await handle_port(http, _get_token(), chat_id, pool)
+    elif cmd == "/pnl":
+        from telegram_trade import handle_pnl
+        await handle_pnl(http, _get_token(), chat_id, args, pool)
     elif cmd in ("/help", "/start"):
         await _handle_help(http, chat_id)
     else:
@@ -613,6 +629,10 @@ async def _register_commands(http: httpx.AsyncClient) -> None:
         {"command": "volume",    "description": "시간대별 거래량 패턴 분석"},
         {"command": "screener", "description": "최신 주봉 차트 스크리닝 결과 (DB 조회)"},
         {"command": "scan",     "description": "주봉 스크리닝 즉시 실행 (전 종목 실시간 스캔)"},
+        {"command": "buy",      "description": "진입 기록 — /buy 005930 70000 100 [YYYYMMDD]"},
+        {"command": "sell",     "description": "청산 기록 (FIFO) — /sell 005930 73500"},
+        {"command": "port",     "description": "보유 현황 + 미실현 P&L"},
+        {"command": "pnl",      "description": "실현 P&L 요약 — /pnl [week|month|all]"},
         {"command": "help",     "description": "명령어 목록"},
     ]
     try:
