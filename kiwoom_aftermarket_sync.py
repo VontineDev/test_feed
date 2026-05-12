@@ -1,0 +1,595 @@
+"""
+kiwoom_aftermarket_sync.py — 키움 REST API로 시간외 단일가 스냅샷 수집
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+설계 의도:
+  기존 krx_aftermarket_sync.py (data.krx.co.kr BLD 방식) 대신
+  키움 REST API를 사용하는 버전.
+
+  ka10098 (시간외단일가등락률조회)로 KOSPI/KOSDAQ 전 종목
+  시간외 데이터를 2회 요청으로 수집.
+
+  ⚠️  키움 REST API는 당일 실시간 데이터만 제공.
+      과거 날짜 backfill은 krx_aftermarket_sync.py 사용.
+
+  수집 데이터 (aftermarket_snap):
+    reg_close     : 정규장 종가    (tdy_close_pric)
+    after_close   : 시간외 체결가   (cur_prc)
+    after_volume  : 시간외 누적 거래량 (acc_trde_qty)
+    after_value   : 시간외 누적 거래대금 (acc_trde_prica × 10000 원)
+    after_chg_pct : 시간외 등락률   (flu_rt)
+
+  ⚠️  acc_trde_prica 단위는 만원(10,000원)으로 추정.
+      실제 값이 다를 경우 _VALUE_UNIT 상수를 조정하세요.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+인증:
+  .env 에 KIWOOM_APPKEY + KIWOOM_SECRETKEY 설정 (필수)
+  또는 KIWOOM_TOKEN (미리 발급된 토큰 직접 주입)
+
+API 레퍼런스:
+  au10001  POST /oauth2/token          토큰 발급
+  au10002  POST /oauth2/revoke         토큰 폐기
+  ka10098  POST /api/dostk/rkinfo      시간외단일가등락률조회 (bulk)
+  ka10087  POST /api/dostk/mrkcond     시간외단일호가조회 (per-stock)
+
+사용법:
+  # 당일 수집 (15:40~16:00 사이 실행 권장):
+  python kiwoom_aftermarket_sync.py --today
+
+  # 특정 날짜로 적재 (데이터는 당일 것, 날짜만 override):
+  python kiwoom_aftermarket_sync.py --today --trade-date 2026-05-09
+
+  # 시장 필터:
+  python kiwoom_aftermarket_sync.py --today --market KOSPI
+
+  # 응답 구조 확인 (--probe):
+  python kiwoom_aftermarket_sync.py --probe
+
+  # 증분 (어제 날짜로 당일 데이터 적재 — 스케줄러 16:05 실행):
+  python kiwoom_aftermarket_sync.py --incremental
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+from __future__ import annotations
+
+import argparse
+import json as _json
+import logging
+import os
+import sys
+import time as _time
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from typing import Optional
+
+import psycopg2
+import psycopg2.extras
+import requests as _req
+from dotenv import load_dotenv
+
+load_dotenv()
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
+
+# ── 상수 ─────────────────────────────────────────────────────────
+
+_BASE_URL = "https://api.kiwoom.com"
+_MOCK_URL = "https://mockapi.kiwoom.com"  # KRX 시장 운영 시간 외 테스트용
+
+# acc_trde_prica 단위 보정 계수 (만원 → 원)
+# ⚠️  실제 단위가 다를 경우 이 값을 조정:
+#     만원    → 10_000
+#     백만원  → 1_000_000
+#     원(그대로) → 1
+_VALUE_UNIT = 1_000_000
+
+# ka10098 mrkt_tp 매핑
+_MARKET_CODES = {
+    "KOSPI":  "001",
+    "KOSDAQ": "101",
+    "ALL":    "000",  # 전체 (한 번에 수집, 시장 구분 불명확)
+}
+
+
+# ── DDL ──────────────────────────────────────────────────────────
+
+_CREATE_TABLE = """
+CREATE TABLE IF NOT EXISTS aftermarket_snap (
+    trade_date    DATE            NOT NULL,
+    ticker        VARCHAR(12)     NOT NULL,
+    reg_close     NUMERIC(12, 0),
+    after_close   NUMERIC(12, 0),
+    after_volume  BIGINT,
+    after_value   BIGINT,
+    after_chg_pct NUMERIC(6, 2),
+    fetched_at    TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (trade_date, ticker)
+);
+CREATE INDEX IF NOT EXISTS idx_aftermarket_date
+    ON aftermarket_snap (trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_aftermarket_ticker_date
+    ON aftermarket_snap (ticker, trade_date DESC);
+"""
+
+
+# ── 레코드 ───────────────────────────────────────────────────────
+
+@dataclass
+class AftermarketRecord:
+    trade_date:    date
+    ticker:        str
+    reg_close:     Optional[int]
+    after_close:   Optional[int]
+    after_volume:  Optional[int]
+    after_value:   Optional[int]
+    after_chg_pct: Optional[float]
+
+
+# ── 키움 REST API 클라이언트 ──────────────────────────────────────
+
+class KiwoomClient:
+    """키움 REST API OAuth2 클라이언트.
+
+    au10001 토큰 발급 → Bearer 토큰으로 API 호출.
+    """
+
+    def __init__(self, use_mock: bool = False) -> None:
+        self._base = _MOCK_URL if use_mock else _BASE_URL
+        self._session = _req.Session()
+        self._token: Optional[str] = None
+        self._token_expires: Optional[datetime] = None
+
+    # ── 인증 ───────────────────────────────────────────────────
+
+    def issue_token(self, appkey: str, secretkey: str) -> str:
+        """au10001: 토큰 발급. 발급된 토큰 문자열 반환."""
+        resp = self._session.post(
+            f"{self._base}/oauth2/token",
+            json={
+                "grant_type": "client_credentials",
+                "appkey": appkey,
+                "secretkey": secretkey,
+            },
+            headers={"Content-Type": "application/json;charset=UTF-8"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("return_code", -1) != 0:
+            raise RuntimeError(f"토큰 발급 실패: {data.get('return_msg')}")
+
+        self._token = data["token"]
+        # expires_dt: "20241107083713" → datetime
+        exp_str = data.get("expires_dt", "")
+        if len(exp_str) == 14:
+            self._token_expires = datetime.strptime(exp_str, "%Y%m%d%H%M%S")
+        logger.info("[kiwoom] 토큰 발급 완료 (만료: %s)", exp_str)
+        return self._token
+
+    def inject_token(self, token: str) -> None:
+        """KIWOOM_TOKEN 환경변수로 토큰 직접 주입."""
+        self._token = token
+        logger.info("[kiwoom] 토큰 주입 완료 (외부 제공)")
+
+    def revoke_token(self, appkey: str, secretkey: str) -> None:
+        """au10002: 토큰 폐기."""
+        if not self._token:
+            return
+        try:
+            self._session.post(
+                f"{self._base}/oauth2/revoke",
+                json={"appkey": appkey, "secretkey": secretkey, "token": self._token},
+                headers=self._auth_headers("au10002"),
+                timeout=10,
+            )
+        except Exception as e:
+            logger.debug("[kiwoom] 토큰 폐기 중 오류 (무시): %s", e)
+
+    def _auth_headers(self, api_id: str) -> dict:
+        if not self._token:
+            raise RuntimeError("토큰 미발급 — issue_token() 또는 inject_token() 먼저 호출")
+        return {
+            "Content-Type":  "application/json;charset=UTF-8",
+            "authorization": f"Bearer {self._token}",
+            "api-id":        api_id,
+        }
+
+    # ── API 호출 공통 ──────────────────────────────────────────
+
+    def _post(self, path: str, api_id: str, body: dict,
+              cont_yn: str = "N", next_key: str = "") -> tuple[dict, dict]:
+        """(json_body, resp_headers) 반환. cont-yn/next-key 는 응답 헤더에 있음."""
+        headers = self._auth_headers(api_id)
+        if cont_yn == "Y":
+            headers["cont-yn"] = "Y"
+            headers["next-key"] = next_key
+        resp = self._session.post(
+            f"{self._base}{path}",
+            json=body,
+            headers=headers,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("return_code", -1) != 0:
+            raise RuntimeError(
+                f"API 오류 [{api_id}]: {data.get('return_msg', '알 수 없음')}"
+            )
+        return data, dict(resp.headers)
+
+    # ── ka10098: 시간외단일가등락률조회 ────────────────────────
+
+    def fetch_aftermarket_bulk(
+        self,
+        mrkt_tp: str,
+        sort_base: str = "5",
+    ) -> list[dict]:
+        """ka10098: 시장 전체 시간외단일가 등락률 목록.
+
+        페이지네이션(cont-yn/next-key)을 처리해 전 종목을 반환.
+        """
+        body = {
+            "mrkt_tp":     mrkt_tp,
+            "sort_base":   sort_base,  # 5:등락률
+            "stk_cnd":     "0",        # 0:전체조회
+            "trde_qty_cnd": "0",       # 0:전체조회
+            "crd_cnd":     "0",        # 0:전체조회
+            "trde_prica":  "0",        # 0:전체조회
+        }
+        all_rows: list[dict] = []
+        cont_yn, next_key = "N", ""
+
+        while True:
+            data, resp_hdrs = self._post(
+                "/api/dostk/rkinfo", "ka10098", body, cont_yn, next_key
+            )
+            rows = data.get("ovt_sigpric_flu_rt_rank") or []
+            all_rows.extend(rows)
+            logger.debug("[kiwoom] ka10098 mrkt_tp=%s — %d행 수신 (누적 %d)",
+                         mrkt_tp, len(rows), len(all_rows))
+
+            # cont-yn / next-key 는 HTTP 응답 헤더에 있음
+            resp_cont = resp_hdrs.get("cont-yn", "N")
+            resp_key  = resp_hdrs.get("next-key", "")
+            if resp_cont != "Y" or not resp_key:
+                break
+            cont_yn, next_key = "Y", resp_key
+
+        return all_rows
+
+    # ── ka10087: 시간외단일호가조회 (단일 종목) ────────────────
+
+    def fetch_aftermarket_single(self, stk_cd: str) -> dict:
+        """ka10087: 특정 종목 시간외단일가 호가 현황."""
+        data, _ = self._post(
+            "/api/dostk/mrkcond", "ka10087", {"stk_cd": stk_cd}
+        )
+        return data
+
+
+# ── 파싱 ─────────────────────────────────────────────────────────
+
+def _strip_sign(s: str) -> str:
+    """'+95400' → '95400', '-3000' → '-3000'"""
+    if s and s[0] in ("+",):
+        return s[1:]
+    return s
+
+
+def _parse_int(s) -> Optional[int]:
+    if s is None:
+        return None
+    s = str(s).replace(",", "").strip()
+    s = _strip_sign(s)
+    if s in ("-", "", "N/A", "nan", "0"):
+        return None
+    try:
+        return int(float(s))
+    except ValueError:
+        return None
+
+
+def _parse_float(s) -> Optional[float]:
+    if s is None:
+        return None
+    s = str(s).replace(",", "").strip()
+    s = _strip_sign(s)
+    if s in ("-", "", "N/A", "nan"):
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def parse_bulk_rows(
+    rows: list[dict],
+    trade_date: date,
+    suffix: str,          # ".KS" for KOSPI, ".KQ" for KOSDAQ
+    market_filter: Optional[str] = None,
+) -> list[AftermarketRecord]:
+    """ka10098 응답 행 목록 → AftermarketRecord 목록."""
+    records: list[AftermarketRecord] = []
+
+    for row in rows:
+        try:
+            krx_code = str(row.get("stk_cd", "")).strip().zfill(6)
+            if not krx_code or krx_code == "000000":
+                continue
+
+            ticker = f"{krx_code}{suffix}"
+
+            # 시장 필터
+            if market_filter == "KOSPI"  and suffix != ".KS":
+                continue
+            if market_filter == "KOSDAQ" and suffix != ".KQ":
+                continue
+
+            after_close  = _parse_int(row.get("cur_prc"))
+            after_volume = _parse_int(row.get("acc_trde_qty"))
+            reg_close    = _parse_int(row.get("tdy_close_pric"))
+
+            # 거래량 0 제외 (시간외 거래 없음)
+            if after_volume is None or after_volume == 0:
+                continue
+
+            # 거래대금: acc_trde_prica × _VALUE_UNIT → 원
+            raw_val = _parse_int(row.get("acc_trde_prica"))
+            after_value = (raw_val * _VALUE_UNIT) if raw_val is not None else None
+
+            # 등락률
+            flu_raw = _parse_float(row.get("flu_rt"))
+            if flu_raw is not None:
+                after_chg_pct = round(flu_raw, 2)
+            elif reg_close and after_close and reg_close > 0:
+                after_chg_pct = round((after_close / reg_close - 1.0) * 100, 2)
+            else:
+                after_chg_pct = None
+
+            records.append(AftermarketRecord(
+                trade_date=trade_date,
+                ticker=ticker,
+                reg_close=reg_close,
+                after_close=after_close,
+                after_volume=after_volume,
+                after_value=after_value,
+                after_chg_pct=after_chg_pct,
+            ))
+        except Exception as e:
+            logger.debug("[kiwoom] 행 파싱 실패: %s — %s", row, e)
+
+    return records
+
+
+# ── DB 유틸 ──────────────────────────────────────────────────────
+
+def _connect(dsn: str):
+    return psycopg2.connect(dsn)
+
+
+def ensure_table(dsn: str) -> None:
+    conn = _connect(dsn)
+    try:
+        with conn.cursor() as cur:
+            for stmt in _CREATE_TABLE.strip().split(";"):
+                stmt = stmt.strip()
+                if stmt:
+                    cur.execute(stmt)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def upsert_records(dsn: str, records: list[AftermarketRecord]) -> int:
+    if not records:
+        return 0
+    conn = _connect(dsn)
+    try:
+        with conn.cursor() as cur:
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO aftermarket_snap
+                    (trade_date, ticker, reg_close, after_close,
+                     after_volume, after_value, after_chg_pct)
+                VALUES %s
+                ON CONFLICT (trade_date, ticker) DO UPDATE SET
+                    reg_close     = EXCLUDED.reg_close,
+                    after_close   = EXCLUDED.after_close,
+                    after_volume  = EXCLUDED.after_volume,
+                    after_value   = EXCLUDED.after_value,
+                    after_chg_pct = EXCLUDED.after_chg_pct,
+                    fetched_at    = now()
+                """,
+                [
+                    (r.trade_date, r.ticker, r.reg_close, r.after_close,
+                     r.after_volume, r.after_value, r.after_chg_pct)
+                    for r in records
+                ],
+            )
+        conn.commit()
+        return len(records)
+    finally:
+        conn.close()
+
+
+def already_loaded(dsn: str, trade_date: date) -> bool:
+    """해당 날짜 데이터가 이미 DB에 있는지 확인."""
+    conn = _connect(dsn)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM aftermarket_snap WHERE trade_date = %s",
+                (trade_date,),
+            )
+            return cur.fetchone()[0] > 0
+    finally:
+        conn.close()
+
+
+# ── 날짜 헬퍼 ────────────────────────────────────────────────────
+
+def _prev_business_day(d: date) -> date:
+    d -= timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
+# ── probe: 응답 구조 출력 ─────────────────────────────────────────
+
+def probe(client: KiwoomClient) -> None:
+    print("\n[probe] ka10098 KOSPI 응답 구조 확인...")
+    rows = client.fetch_aftermarket_bulk(mrkt_tp="001")
+    if not rows:
+        print("[probe] 데이터 없음 (장 마감 전이거나 시간외 거래 없음)")
+        return
+    print(f"[probe] KOSPI {len(rows)}행 수신")
+    print(f"[probe] 컬럼: {list(rows[0].keys())}")
+    print("\n[probe] 첫 3행 (KOSPI):")
+    for r in rows[:3]:
+        print(" ", r)
+
+    _time.sleep(0.5)
+
+    print("\n[probe] ka10098 KOSDAQ 응답 구조 확인...")
+    rows_kq = client.fetch_aftermarket_bulk(mrkt_tp="101")
+    print(f"[probe] KOSDAQ {len(rows_kq)}행 수신")
+    if rows_kq:
+        print("\n[probe] 첫 3행 (KOSDAQ):")
+        for r in rows_kq[:3]:
+            print(" ", r)
+
+    print(
+        "\n[probe] 필드 해석:\n"
+        "  cur_prc        → 시간외 현재가 (after_close)\n"
+        "  tdy_close_pric → 당일 정규장 종가 (reg_close)\n"
+        "  acc_trde_qty   → 시간외 누적 거래량 (after_volume)\n"
+        f"  acc_trde_prica → 시간외 거래대금 × {_VALUE_UNIT} = after_value (원)\n"
+        "  flu_rt         → 시간외 등락률 (after_chg_pct)\n"
+        "\n  단위가 맞지 않으면 _VALUE_UNIT 상수를 수정하세요."
+    )
+
+
+# ── 메인 실행 ────────────────────────────────────────────────────
+
+def _build_client(use_mock: bool = False) -> KiwoomClient:
+    appkey    = os.environ.get("KIWOOM_APPKEY")
+    secretkey = os.environ.get("KIWOOM_SECRETKEY")
+    token_env = os.environ.get("KIWOOM_TOKEN")
+
+    client = KiwoomClient(use_mock=use_mock)
+
+    if token_env:
+        client.inject_token(token_env)
+    elif appkey and secretkey:
+        client.issue_token(appkey, secretkey)
+    else:
+        logger.warning(
+            "[kiwoom] 인증 정보 없음. "
+            ".env 에 KIWOOM_APPKEY+KIWOOM_SECRETKEY 또는 KIWOOM_TOKEN 설정 필요."
+        )
+    return client
+
+
+def _collect(
+    client: KiwoomClient,
+    trade_date: date,
+    markets: list[tuple[str, str]],  # [(mrkt_tp, suffix), ...]
+) -> list[AftermarketRecord]:
+    """markets 목록에 대해 ka10098 수집 후 파싱."""
+    all_records: list[AftermarketRecord] = []
+    for mrkt_tp, suffix in markets:
+        label = "KOSPI" if suffix == ".KS" else "KOSDAQ"
+        logger.info("[kiwoom] %s 시간외 수집 중 (mrkt_tp=%s)...", label, mrkt_tp)
+        rows = client.fetch_aftermarket_bulk(mrkt_tp=mrkt_tp)
+        records = parse_bulk_rows(rows, trade_date, suffix)
+        logger.info("[kiwoom] %s — %d건 파싱", label, len(records))
+        all_records.extend(records)
+        _time.sleep(0.3)
+    return all_records
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="키움 REST API 시간외 단일가 수집기")
+
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--today",       action="store_true",
+                      help="당일 시간외 데이터 수집")
+    mode.add_argument("--incremental", action="store_true",
+                      help="전일 날짜로 당일 데이터 적재 (스케줄러 16:05 실행)")
+    mode.add_argument("--probe",       action="store_true",
+                      help="응답 구조 확인 (DB 저장 없음)")
+
+    parser.add_argument("--trade-date", metavar="DATE",
+                        help="적재 trade_date override (YYYY-MM-DD). "
+                             "--today 와 함께 사용")
+    parser.add_argument("--market", choices=["KOSPI", "KOSDAQ", "ALL"],
+                        default="ALL", help="시장 필터 (기본: ALL)")
+    parser.add_argument("--mock", action="store_true",
+                        help="mockapi.kiwoom.com 사용 (장외 테스트)")
+    parser.add_argument("--force", action="store_true",
+                        help="이미 수집된 날짜도 재수집")
+
+    args = parser.parse_args()
+
+    client = _build_client(use_mock=args.mock)
+
+    # ── probe 모드 ──────────────────────────────────────────────
+    if args.probe:
+        probe(client)
+        return
+
+    if not (args.today or args.incremental):
+        parser.error("--today | --incremental | --probe 중 하나 필요")
+
+    # ── 날짜 결정 ───────────────────────────────────────────────
+    if args.trade_date:
+        trade_date = date.fromisoformat(args.trade_date)
+    elif args.incremental:
+        trade_date = _prev_business_day(date.today())
+    else:
+        trade_date = date.today()
+
+    # ── DB 준비 ─────────────────────────────────────────────────
+    dsn = os.environ.get("DATABASE_URL") or (
+        f"postgresql://{os.environ['DB_USER']}:{os.environ['DB_PASSWORD']}"
+        f"@{os.environ['DB_HOST']}:{os.environ.get('DB_PORT', 5432)}"
+        f"/{os.environ['DB_NAME']}"
+    )
+    ensure_table(dsn)
+
+    if not args.force and already_loaded(dsn, trade_date):
+        logger.info("[kiwoom] %s 이미 수집됨 — 스킵 (--force 로 재수집 가능)", trade_date)
+        return
+
+    # ── 시장 목록 결정 ──────────────────────────────────────────
+    if args.market == "KOSPI":
+        markets = [("001", ".KS")]
+    elif args.market == "KOSDAQ":
+        markets = [("101", ".KQ")]
+    else:
+        # ALL: KOSPI + KOSDAQ 각각 호출해 suffix 확정
+        markets = [("001", ".KS"), ("101", ".KQ")]
+
+    # ── 수집 + 저장 ─────────────────────────────────────────────
+    records = _collect(client, trade_date, markets)
+
+    if not records:
+        logger.warning("[kiwoom] 수집된 데이터 없음 — 시간외 거래가 없거나 장 진행 중")
+        return
+
+    saved = upsert_records(dsn, records)
+    logger.info("[kiwoom] 완료 — %s %d건 저장", trade_date, saved)
+
+
+if __name__ == "__main__":
+    main()
