@@ -292,14 +292,22 @@ async def _handle_backtest2(
     # ── 인수 파싱 ──────────────────────────────────────────────
     USAGE = (
         "사용법: /backtest2 <mode> <start> <end> [market] [--max N] [--tx-cost F]\n"
-        "  mode   : ichimoku | stage | stage2 | cross\n"
-        "  start  : YYYY-MM-DD\n"
-        "  end    : YYYY-MM-DD\n"
-        "  market : KOSPI | KOSDAQ | ALL (기본: ALL)\n"
-        "  --max N      : 최대 티커 수 (기본 200, 0=전종목)\n"
-        "  --tx-cost F  : 왕복 거래비용 (기본: KRX 실비 ~0.0021)\n\n"
-        "예) /backtest2 ichimoku 2025-01-01 2026-01-01\n"
-        "    /backtest2 stage2  2025-01-01 2026-01-01 KOSDAQ --max 100"
+        "              [--tp1 F] [--tp1-ratio F] [--trail F] [--stop F]\n"
+        "  mode        : ichimoku | stage | stage2 | cross\n"
+        "  start/end   : YYYY-MM-DD\n"
+        "  market      : KOSPI | KOSDAQ | ALL (기본: ALL)\n"
+        "  --max N     : 최대 티커 수 (기본 200)\n"
+        "  --tx-cost F : 왕복 거래비용 (기본 ~0.0021)\n"
+        "  --tp1 F     : 1차 익절 목표 (예: 0.25 = +25%)\n"
+        "  --tp1-ratio F: 1차 익절 비율 (기본 0.5)\n"
+        "  --trail F   : 트레일링 스탑 (고점 대비, 예: 0.10)\n"
+        "  --stop F    : 하드 손절 (기본 0.08)\n\n"
+        "권장 파라미터:\n"
+        "  Stage/KOSPI : --tp1 0.25 --trail 0.10 --stop 0.10\n"
+        "  Stage/KOSDAQ: --tp1 0.25 --trail 0.15 --stop 0.10\n"
+        "  Cross       : --tp1 0.15 --trail 0.10 --stop 0.10\n\n"
+        "예) /backtest2 stage 2024-01-01 2026-01-01 KOSPI --tp1 0.25 --trail 0.10 --stop 0.10\n"
+        "    /backtest2 cross 2024-01-01 2026-01-01 ALL --tp1 0.15 --trail 0.10 --stop 0.10"
     )
 
     if len(args) < 3:
@@ -331,10 +339,14 @@ async def _handle_backtest2(
         return
 
     # 선택적 인수 파싱
-    remaining = args[3:]
-    market    = "ALL"
+    remaining   = args[3:]
+    market      = "ALL"
     max_tickers = 200
-    tx_cost   = None
+    tx_cost     = None
+    tp1_pct     = 0.0
+    tp1_ratio   = 0.5
+    trail_pct   = 0.0
+    hard_stop   = 0.08
 
     i = 0
     while i < len(remaining):
@@ -343,15 +355,33 @@ async def _handle_backtest2(
             market = tok.upper()
         elif tok == "--max" and i + 1 < len(remaining):
             try:
-                max_tickers = int(remaining[i + 1])
-                i += 1
+                max_tickers = int(remaining[i + 1]); i += 1
             except ValueError:
                 pass
         elif tok == "--tx-cost" and i + 1 < len(remaining):
             try:
                 v = float(remaining[i + 1])
-                tx_cost = max(0.0, min(v, 0.10))  # 0% ~ 10% 범위 강제
-                i += 1
+                tx_cost = max(0.0, min(v, 0.10)); i += 1
+            except ValueError:
+                pass
+        elif tok == "--tp1" and i + 1 < len(remaining):
+            try:
+                tp1_pct = max(0.0, min(float(remaining[i + 1]), 1.0)); i += 1
+            except ValueError:
+                pass
+        elif tok == "--tp1-ratio" and i + 1 < len(remaining):
+            try:
+                tp1_ratio = max(0.0, min(float(remaining[i + 1]), 1.0)); i += 1
+            except ValueError:
+                pass
+        elif tok == "--trail" and i + 1 < len(remaining):
+            try:
+                trail_pct = max(0.0, min(float(remaining[i + 1]), 1.0)); i += 1
+            except ValueError:
+                pass
+        elif tok == "--stop" and i + 1 < len(remaining):
+            try:
+                hard_stop = max(0.01, min(float(remaining[i + 1]), 0.5)); i += 1
             except ValueError:
                 pass
         i += 1
@@ -372,13 +402,23 @@ async def _handle_backtest2(
         tx_cost_rt=tx_cost if tx_cost is not None else TX_COST_DEFAULT,
         max_tickers=max_tickers,
         dsn=_dsn,
+        tp1_pct=tp1_pct,
+        tp1_ratio=tp1_ratio,
+        trail_pct=trail_pct,
+        hard_stop_pct=hard_stop,
     )
 
-    mode_kor = MODE_KOR.get(mode, mode)
-    eta_min  = max(2, max_tickers // 50) if max_tickers > 0 else 20
+    mode_kor   = MODE_KOR.get(mode, mode)
+    eta_min    = max(2, max_tickers // 50) if max_tickers > 0 else 20
+    exit_label = (
+        f"tp1={tp1_pct*100:.0f}% trail={trail_pct*100:.0f}% stop={hard_stop*100:.0f}%"
+        if tp1_pct > 0 or trail_pct > 0
+        else f"MA20/손절 {hard_stop*100:.0f}%"
+    )
     await _send_plain(http, chat_id,
         f"📊 백테스트 시작 — {mode_kor}\n"
         f"📅 {start} ~ {end}  {market}  티커 최대 {max_tickers or '전종목'}개\n"
+        f"📐 청산: {exit_label}\n"
         f"⏳ 예상 소요: {eta_min}~{eta_min * 3}분 (데이터 다운로드 포함)\n"
         "완료되면 결과를 전송합니다."
     )
