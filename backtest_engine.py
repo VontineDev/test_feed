@@ -66,7 +66,18 @@ OPTIMAL_EXIT_PARAMS: dict = {
     "use_stage3_peak": False,
 }
 
-# Cross 모드 (Ichimoku × Stage, ALL시장, 신호 ~99건/검증기간, 과적합 필터 적용)
+# Stage 모드 KOSDAQ (신호 ~1227건/검증기간, val>>train — 검증기간 강세장 반영)
+#   val_sharpe=5.48, val_win_rate=46.7%, val_cagr=67.7%
+#   trail=15%: KOSDAQ 변동성 특성상 더 넓은 트레일이 유리.
+OPTIMAL_EXIT_PARAMS_KOSDAQ: dict = {
+    "tp1_pct":         0.25,
+    "tp1_ratio":       0.50,
+    "trail_pct":       0.15,   # KOSPI(10%)보다 넓음 — KOSDAQ 변동성 반영
+    "hard_stop_pct":   0.10,
+    "use_stage3_peak": False,
+}
+
+# Cross 모드 (Ichimoku × Stage, ALL시장, 신호 ~105건/검증기간, 과적합 필터 적용)
 #   val_sharpe=5.11, val_win_rate=54.3%, val_cagr=46.6%, overfit_gap=0.29
 #   tp1_pct=0.15: 과적합 없이 승률 극대화. 0.25 대비 낮지만 gap 안전.
 OPTIMAL_EXIT_PARAMS_CROSS: dict = {
