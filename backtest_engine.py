@@ -240,9 +240,14 @@ class BacktestResult:
                 f"  KOSPI 초과: {pct(m.avg_excess_custom)}  샤프비율: {val(m.sharpe_custom)}",
             ]
         if m.win_rate_sell is not None:
+            _exit_label = (
+                f"분할청산 (TP1 {cfg.tp1_pct*100:.0f}% / 트레일 {cfg.trail_pct*100:.0f}% / 손절 {cfg.hard_stop_pct*100:.0f}%)"
+                if cfg.tp1_pct > 0 or cfg.trail_pct > 0
+                else f"매도 신호 (MA20 이탈 / 손절 {cfg.hard_stop_pct*100:.0f}%)"
+            )
             lines += [
                 "",
-                "매도 신호 (MA20 이탈 / 손절 -8%)",
+                _exit_label,
                 f"  승률: {pct(m.win_rate_sell)}  평균: {pct(m.avg_return_sell)}  보유: {val(m.avg_hold_days, 1)}d",
             ]
         if m.s2_progression_rate is not None:
@@ -434,15 +439,26 @@ class BacktestResult:
             s3_td = (f'<td data-v="{sig.s3_date.isoformat()}">{sig.s3_date}</td>'
                      if sig.s3_date else '<td class="muted" data-v="">—</td>')
 
-            sell_cls = next((v for k, v in _SELL_CLS.items() if sig.sell_reason.startswith(k)), "")
-            sell_td  = (f'<td><span class="badge {sell_cls}">{_html.escape(sig.sell_reason)}</span></td>'
-                        if sell_cls else f'<td class="muted">{_html.escape(sig.sell_reason)}</td>')
+            # 청산 유형 — blended 모드면 final_exit_type, 아니면 sell_reason
+            exit_type = sig.final_exit_type if sig.final_exit_type else sig.sell_reason
+            exit_cls  = next((v for k, v in _SELL_CLS.items() if exit_type.startswith(k)), "")
+            exit_td   = (f'<td><span class="badge {exit_cls}">{_html.escape(exit_type)}</span></td>'
+                         if exit_cls else f'<td class="muted">{_html.escape(exit_type)}</td>')
 
-            sd_td = (f'<td data-v="{sig.sell_date.isoformat()}">{sig.sell_date}</td>'
-                     if sig.sell_date else '<td class="muted" data-v="">—</td>')
+            # 1차 TP 날짜
+            tp1_td = (f'<td data-v="{sig.tp1_date.isoformat()}">{sig.tp1_date}</td>'
+                      if sig.tp1_date else '<td class="muted" data-v="">—</td>')
+
+            # 최종 청산일 (final_exit_date 우선, 없으면 sell_date)
+            final_date = sig.final_exit_date or sig.sell_date
+            final_sd_td = (f'<td data-v="{final_date.isoformat()}">{final_date}</td>'
+                           if final_date else '<td class="muted" data-v="">—</td>')
 
             hd_td = (f'<td class="num" data-v="{sig.hold_days}">{sig.hold_days}d</td>'
                      if sig.hold_days is not None else '<td class="num muted" data-v="-1">—</td>')
+
+            # 최종 수익: blended_return 우선, 없으면 sell_return
+            blended = sig.blended_return if sig.blended_return is not None else sig.sell_return
 
             table_rows.append(
                 f"<tr>"
@@ -458,10 +474,12 @@ class BacktestResult:
                 + _ret_td(sig.excess_28d)
                 + s2_td
                 + s3_td
-                + sell_td
-                + sd_td
+                + exit_td
+                + tp1_td
+                + final_sd_td
                 + hd_td
-                + _ret_td(sig.sell_return)
+                + _ret_td(sig.tp1_ret)
+                + _ret_td(blended)
                 + _mdd_td(sig.mdd_91d)
                 + "</tr>"
             )
@@ -554,11 +572,13 @@ footer{{margin-top:24px;padding-top:12px;border-top:1px solid var(--border);colo
   <th class="num" onclick="sort(9,true)">초과(28d)</th>
   <th onclick="sort(10,false)">S2진행일</th>
   <th onclick="sort(11,false)">S3진행일</th>
-  <th onclick="sort(12,false)">매도신호</th>
-  <th onclick="sort(13,false)">매도일</th>
-  <th class="num" onclick="sort(14,true)">보유일</th>
-  <th class="num" onclick="sort(15,true)">매도수익</th>
-  <th class="num" onclick="sort(16,true)">MDD(91d)</th>
+  <th onclick="sort(12,false)">청산유형</th>
+  <th onclick="sort(13,false)">1차TP일</th>
+  <th onclick="sort(14,false)">최종청산일</th>
+  <th class="num" onclick="sort(15,true)">보유일</th>
+  <th class="num" onclick="sort(16,true)">1차TP수익</th>
+  <th class="num" onclick="sort(17,true)">최종수익(blended)</th>
+  <th class="num" onclick="sort(18,true)">MDD(91d)</th>
 </tr></thead>
 <tbody>
 {chr(10).join(table_rows)}
@@ -807,8 +827,12 @@ def _compute_group_metrics(
             m.avg_excess_custom = statistics.mean(excs)
         m.sharpe_custom = _compute_sharpe(rcs, hold_days=hold_days, rf_annual=rf_annual)
 
-    # 매도 신호 기반 집계
-    sell_rets = [s.sell_return for s in signals if s.sell_return is not None]
+    # 매도 신호 기반 집계 — blended_return(분할 청산 가중평균) 우선, 없으면 sell_return
+    sell_rets = [
+        s.blended_return if s.blended_return is not None else s.sell_return
+        for s in signals
+        if (s.blended_return is not None or s.sell_return is not None)
+    ]
     if sell_rets:
         m.win_rate_sell      = sum(1 for r in sell_rets if r > 0) / len(sell_rets)
         m.avg_return_sell    = statistics.mean(sell_rets)
