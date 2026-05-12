@@ -68,6 +68,12 @@ class BacktestConfig:
     workers: int = 8
     dsn: Optional[str] = None     # PostgreSQL DSN. 설정 시 daily_ohlcv 캐시 사용
     hold_weeks: Optional[int] = None  # None = 표준 1/4/13w; N = N주 보유 수익률 추가 계산
+    # ── 분할 청산 파라미터 (sweep 최적화용) ──────────────────────────
+    tp1_pct:         float = 0.0    # 1차 익절 타겟 (0이면 미사용 → MA20 폴백)
+    tp1_ratio:       float = 0.5    # 1차 익절 시 청산 비율 (나머지 1-tp1_ratio 계속 보유)
+    trail_pct:       float = 0.0    # 트레일링 스탑: 일봉 High 고점 대비 하락률 (0이면 미사용)
+    hard_stop_pct:   float = 0.08            # 하드 스탑 (진입 Close 대비, 기존 _STOP_LOSS_PCT와 동일)
+    use_stage3_peak: bool  = False   # Stage3 peakout_flag 트리거 사용 여부
 
     def __post_init__(self) -> None:
         if self.mode not in ("ichimoku", "stage", "cross", "stage2"):
@@ -78,6 +84,12 @@ class BacktestConfig:
             raise ValueError(f"market은 KOSPI|KOSDAQ|ALL 중 하나여야 합니다: {self.market!r}")
         if self.hold_weeks is not None and self.hold_weeks < 1:
             raise ValueError(f"hold_weeks는 1 이상이어야 합니다: {self.hold_weeks!r}")
+        if self.tp1_pct < 0 or self.tp1_pct > 1:
+            raise ValueError(f"tp1_pct는 0~1 범위여야 합니다: {self.tp1_pct!r}")
+        if self.trail_pct < 0 or self.trail_pct > 1:
+            raise ValueError(f"trail_pct는 0~1 범위여야 합니다: {self.trail_pct!r}")
+        if self.hard_stop_pct <= 0 or self.hard_stop_pct > 0.5:
+            raise ValueError(f"hard_stop_pct는 0초과 0.5 이하여야 합니다: {self.hard_stop_pct!r}")
 
 
 @dataclass
@@ -105,6 +117,15 @@ class SignalRecord:
     sell_reason: str             = ""    # "MA20 이탈" | "손절 -N%" | "보유 중"
     sell_return: Optional[float] = None  # 매도 시점 수익률 (거래비용 차감)
     hold_days:   Optional[int]   = None  # 신호일~매도일 달력일수
+    # ── 분할 청산 추적 (tp1_pct > 0 일 때만 채워짐) ──────────────────
+    tp1_date:        Optional[date]  = None  # 1차 익절 날짜
+    tp1_ret:         Optional[float] = None  # 1차 익절 수익률 (tx cost 포함)
+    final_exit_date: Optional[date]  = None  # 잔여분 청산 날짜
+    final_exit_ret:  Optional[float] = None  # 잔여분 수익률
+    final_exit_type: str             = ""    # "trail"|"stage3"|"hard_stop"|"period_end"|"ma20"
+    blended_return:  Optional[float] = None  # 가중평균 최종 수익률
+    # blended = tp1_ratio*tp1_ret + (1-tp1_ratio)*final_exit_ret  (tp1 발동 시)
+    # blended = final_exit_ret  (tp1 미발동 — 전량 단일 청산)
 
 
 @dataclass
@@ -1164,17 +1185,145 @@ def _replay_stage2(
 _STOP_LOSS_PCT: float = 0.08  # 기본 손절 기준 (−8%)
 
 
+def _compute_exit_logic(
+    sig: "SignalRecord",
+    df: "pd.DataFrame",
+    entry_idx: int,
+    entry_price: float,
+    cfg: "BacktestConfig",
+    stage3_peakout_dates: "frozenset[date]",
+) -> None:
+    """분할 청산 모델: 1차 TP + 트레일링 스탑 + Stage3 피크아웃.
+
+    청산 우선순위 (매일 순서대로):
+      1. Hard stop: Close <= entry × (1 - hard_stop_pct)  → 전량 즉시 청산
+      2. 1차 TP:   Close >= entry × (1 + tp1_pct)         → tp1_ratio 분할 청산
+      3. Stage3 피크아웃: row_date in stage3_peakout_dates → 잔여분 전량 청산
+      4. 트레일링 스탑: Close <= watermark × (1 - trail_pct) → 잔여분 전량 청산
+         watermark = max(row["High"]) since entry
+      5. 기간 종료 (마지막 row): 잔여분 전량 청산 (final_exit_type="period_end")
+
+    동일일 hard_stop + tp1 동시: hard_stop 우선 (tp1 발동 안 됨).
+    동일일 tp1 + trail 동시: tp1 먼저 기록 후 trail 검사 → 잔여분 즉시 trail.
+
+    결과는 sig 필드에 in-place로 기록.
+    기존 호환성: sell_date / sell_reason / sell_return / hold_days 도 채워서
+    기존 집계 코드가 blended_return 없이도 동작하도록 한다.
+    """
+    tx_half = cfg.tx_cost_rt / 2.0  # 분할 청산: 이벤트마다 편도 비용
+    stop_price = entry_price * (1.0 - cfg.hard_stop_pct)
+    tp1_price  = entry_price * (1.0 + cfg.tp1_pct) if cfg.tp1_pct > 0 else None
+
+    tp1_triggered = False
+    watermark     = entry_price  # High 기준 고점 추적
+
+    def _ret(close: float, cost: float) -> float:
+        return (close / entry_price - 1.0) - cost
+
+    for j in range(entry_idx + 1, len(df)):
+        ts       = df.index[j]
+        row_date = ts.date() if hasattr(ts, "date") else ts
+        cur      = df.iloc[j]
+
+        if pd.isna(cur["Close"]):
+            continue
+
+        close = float(cur["Close"])
+        high  = float(cur["High"]) if not pd.isna(cur["High"]) else close
+        watermark = max(watermark, high)
+
+        is_last = (j == len(df) - 1)
+
+        # ── 1. Hard stop (최우선) ──────────────────────────────────
+        if close <= stop_price:
+            cost = tx_half if tp1_triggered else cfg.tx_cost_rt
+            ret  = _ret(close, cost)
+            sig.final_exit_date = row_date
+            sig.final_exit_ret  = ret
+            sig.final_exit_type = "hard_stop"
+            sig.sell_date   = row_date
+            sig.sell_reason = f"손절 -{cfg.hard_stop_pct * 100:.0f}%"
+            sig.sell_return = ret
+            sig.hold_days   = (row_date - sig.signal_date).days
+            break
+
+        # ── 2. 1차 TP ────────────────────────────────────────────
+        if not tp1_triggered and tp1_price is not None and close >= tp1_price:
+            tp1_triggered    = True
+            sig.tp1_date     = row_date
+            sig.tp1_ret      = _ret(close, tx_half)
+            # 1차 TP를 sell_date에도 기록 (기존 집계 호환)
+            sig.sell_date    = row_date
+            sig.sell_reason  = f"1차TP +{cfg.tp1_pct * 100:.0f}%"
+            sig.sell_return  = sig.tp1_ret
+            sig.hold_days    = (row_date - sig.signal_date).days
+            # 잔여분(1-tp1_ratio)에 대해 trail/stage3 계속 감시
+            continue
+
+        # ── 3. Stage3 피크아웃 (잔여분) ───────────────────────────
+        if tp1_triggered and cfg.use_stage3_peak and row_date in stage3_peakout_dates:
+            ret = _ret(close, tx_half)
+            sig.final_exit_date = row_date
+            sig.final_exit_ret  = ret
+            sig.final_exit_type = "stage3"
+            sig.sell_date    = row_date
+            sig.sell_reason  = "Stage3 피크아웃"
+            sig.sell_return  = ret
+            sig.hold_days    = (row_date - sig.signal_date).days
+            break
+
+        # ── 4. 트레일링 스탑 (잔여분, tp1 이후에만) ──────────────
+        if tp1_triggered and cfg.trail_pct > 0:
+            trail_price = watermark * (1.0 - cfg.trail_pct)
+            if close <= trail_price:
+                ret = _ret(close, tx_half)
+                sig.final_exit_date = row_date
+                sig.final_exit_ret  = ret
+                sig.final_exit_type = "trail"
+                sig.sell_date    = row_date
+                sig.sell_reason  = f"트레일 -{cfg.trail_pct * 100:.0f}%"
+                sig.sell_return  = ret
+                sig.hold_days    = (row_date - sig.signal_date).days
+                break
+
+        # ── 5. 기간 종료 강제 청산 ────────────────────────────────
+        if is_last:
+            cost = tx_half if tp1_triggered else cfg.tx_cost_rt
+            ret  = _ret(close, cost)
+            sig.final_exit_date = row_date
+            sig.final_exit_ret  = ret
+            sig.final_exit_type = "period_end"
+            if sig.sell_date is None:
+                sig.sell_date    = row_date
+                sig.sell_reason  = "보유 중 (기간 종료)"
+                sig.sell_return  = ret
+                sig.hold_days    = (row_date - sig.signal_date).days
+            break
+
+    # ── blended_return 계산 ───────────────────────────────────────
+    if sig.tp1_ret is not None and sig.final_exit_ret is not None:
+        r = cfg.tp1_ratio
+        sig.blended_return = r * sig.tp1_ret + (1.0 - r) * sig.final_exit_ret
+    elif sig.final_exit_ret is not None:
+        sig.blended_return = sig.final_exit_ret
+    elif sig.tp1_ret is not None:
+        # tp1 발동 후 잔여분 청산 없이 루프 종료 (이론상 발생 안 함)
+        sig.blended_return = sig.tp1_ret
+
+
 def _compute_sell_signals_and_s2(
     signals: list[SignalRecord],
     ohlcv_map: dict[str, "pd.DataFrame"],
     tx_cost_rt: float,
     stop_loss_pct: float = _STOP_LOSS_PCT,
     flow_lookup: Optional[dict] = None,
+    cfg: Optional["BacktestConfig"] = None,
+    stage3_peakout_map: Optional[dict[str, "frozenset[date]"]] = None,
 ) -> None:
     """매도 신호(MA20 이탈 / 손절) 및 S1→S2 진행일 인-플레이스 계산.
 
-    매도 우선순위: 손절(close ≤ entry×(1−stop_loss_pct)) > MA20 이탈(close < MA20).
-    같은 날에 두 조건이 동시에 충족되면 손절을 기록.
+    cfg.tp1_pct > 0 또는 cfg.trail_pct > 0 이면 _compute_exit_logic()으로 분기.
+    그 외(cfg=None 또는 tp1_pct=trail_pct=0): 기존 MA20 이탈 / hard_stop 로직.
     S2 감지는 Stage 1(mode="stage") 신호에만 적용.
     S3 조건 5(외인+기관 동시 순매수): flow_lookup 제공 + 해당 날짜 데이터 있을 때만 적용.
     """
@@ -1205,6 +1354,14 @@ def _compute_sell_signals_and_s2(
             d = ts.date() if hasattr(ts, "date") else ts
             idx_map[d] = i
 
+        # 분할 청산 모드: cfg.tp1_pct > 0 또는 trail_pct > 0
+        use_exit_logic = (
+            cfg is not None and (cfg.tp1_pct > 0 or cfg.trail_pct > 0)
+        )
+        ticker_peakout: frozenset[date] = frozenset()
+        if use_exit_logic and cfg.use_stage3_peak and stage3_peakout_map:
+            ticker_peakout = stage3_peakout_map.get(ticker, frozenset())
+
         for sig in sigs:
             entry_idx = idx_map.get(sig.signal_date)
             if entry_idx is None:
@@ -1213,6 +1370,12 @@ def _compute_sell_signals_and_s2(
             entry_price = sig.close_at_signal
             if entry_price <= 0:
                 continue
+
+            # ── 분할 청산 모드 분기 ─────────────────────────────────
+            if use_exit_logic:
+                _compute_exit_logic(sig, df, entry_idx, entry_price, cfg, ticker_peakout)
+                # S2/S3/MDD는 아래 기존 루프에서 계속 처리 (sell 판정만 교체)
+
             stop_price = entry_price * (1 - stop_loss_pct)
 
             s1_vol: float = 0.0
@@ -1282,8 +1445,8 @@ def _compute_sell_signals_and_s2(
                         if s3_flow_ok:
                             sig.s3_date = row_date
 
-                # 매도 신호 — ichimoku는 주봉 스캔으로 별도 처리
-                if sig.mode != "ichimoku" and sig.sell_date is None:
+                # 매도 신호 — ichimoku는 주봉 스캔, 분할 청산 모드는 이미 처리됨
+                if not use_exit_logic and sig.mode != "ichimoku" and sig.sell_date is None:
                     if close <= stop_price:
                         sig.sell_date   = row_date
                         sig.sell_reason = f"손절 -{stop_loss_pct * 100:.0f}%"
@@ -1477,7 +1640,26 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
         sig.sector = ticker_sector.get(sig.ticker, "")
 
     # 8.6. 매도 신호·MDD·S2/S3 진행일 계산
-    _compute_sell_signals_and_s2(all_signals, ohlcv_map, config.tx_cost_rt, flow_lookup=flow_lookup)
+    # Stage3 peakout map: 분할 청산 모드(tp1>0 or trail>0)에서만 DB 조회
+    stage3_peakout_map: Optional[dict] = None
+    if config.dsn and config.use_stage3_peak and (config.tp1_pct > 0 or config.trail_pct > 0):
+        try:
+            import asyncio as _asyncio
+            from db import get_stage3_peakout_map as _get_peakout
+            ticker_syms = [t for t, _, _ in tickers]
+            stage3_peakout_map = _asyncio.run(
+                _get_peakout(None, ticker_syms, config.start, fetch_end, dsn=config.dsn)
+            )
+        except Exception as _pe:
+            logger.warning("[백테스트] Stage3 peakout 조회 실패 (use_stage3_peak 무시): %s", _pe)
+
+    _compute_sell_signals_and_s2(
+        all_signals, ohlcv_map, config.tx_cost_rt,
+        stop_loss_pct=config.hard_stop_pct,
+        flow_lookup=flow_lookup,
+        cfg=config,
+        stage3_peakout_map=stage3_peakout_map,
+    )
 
     # 9. 날짜 순 정렬 → MDD equity curve가 시간 순서대로 누적
     all_signals.sort(key=lambda s: s.signal_date)

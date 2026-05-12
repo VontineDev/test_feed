@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 from urllib.parse import quote
 
@@ -1449,3 +1449,54 @@ async def get_pnl_summary(
         logger.error("[trade] get_pnl_summary 실패: %s", e)
         return {"trade_cnt": 0, "win_cnt": 0, "total_pnl": 0,
                 "avg_win": 0, "avg_loss": 0, "by_stage": {}}
+
+
+async def get_stage3_peakout_map(
+    pool,
+    tickers: list[str],
+    start: date,
+    end: date,
+    dsn: Optional[str] = None,
+) -> dict[str, frozenset]:
+    """Stage 3 peakout_flag=TRUE 날짜를 티커별 집합으로 반환.
+
+    pool이 None이면 dsn으로 임시 연결을 생성한다.
+    peakout_flag 컬럼이 없거나 DB 오류 시 빈 dict 반환 (use_stage3_peak=False 동작).
+
+    반환: {ticker: frozenset({date, ...})}
+    """
+    async def _query(conn) -> dict[str, frozenset]:
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT ticker, classified_date
+                FROM   stage_classifications
+                WHERE  ticker = ANY($1)
+                  AND  classified_date BETWEEN $2 AND $3
+                  AND  stage = 3
+                  AND  peakout_flag = TRUE
+                """,
+                tickers, start, end,
+            )
+        except Exception:
+            return {}
+        result: dict[str, list] = {}
+        for r in rows:
+            result.setdefault(r["ticker"], []).append(r["classified_date"])
+        return {t: frozenset(dates) for t, dates in result.items()}
+
+    try:
+        if pool is not None:
+            async with pool.acquire() as conn:
+                return await _query(conn)
+        elif dsn:
+            import asyncpg as _apg
+            conn = await _apg.connect(dsn)
+            try:
+                return await _query(conn)
+            finally:
+                await conn.close()
+        return {}
+    except Exception as e:
+        logger.warning("[db] get_stage3_peakout_map 실패: %s", e)
+        return {}
