@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.0.0] - 2026-05-12
+
+### Added
+- **Portfolio Tracker** (`telegram_trade.py`): 실제 거래 기록 및 P&L 추적 시스템.
+  - `/buy <ticker> <price> <qty> [YYYYMMDD]` — 진입 기록 (stage_classifications 자동 조회)
+  - `/sell <ticker> <price>` — FIFO 청산 (entry_date 기준 최선입선출)
+  - `/port` — 미청산 포지션 현황 + yfinance 미실현 P&L (asyncio.to_thread)
+  - `/pnl [week|month|all]` — 실현 P&L 요약 + Stage별 승률
+- **`trade_log` 테이블** (`db.py`): PostgreSQL GENERATED ALWAYS AS STORED 컬럼 활용.
+  - `entry_delay_days`: signal_date → entry_date 거래일 수 자동 계산
+  - `pnl`: (exit_price - entry_price) × qty 자동 계산
+  - `pnl_pct`: 수익률(%) 소수점 3자리 자동 계산
+- **DB 헬퍼 5종** (`db.py`): `save_trade`, `close_position`, `get_open_positions`, `get_pnl_summary`, DDL init
+- **Kiwoom REST API 시간외 동기화** (`kiwoom_aftermarket_sync.py`): KRX BLD 대신 Kiwoom ka10098 bulk API 활용.
+  - HTTP 헤더 페이지네이션 (`cont-yn / next-key`)
+  - KOSPI(001) + KOSDAQ(101) 별도 호출 → `.KS/.KQ` 심볼 결정
+  - `acc_trde_prica` 단위: 백만원(×1,000,000)
+  - CLI: `--today`, `--incremental`, `--probe`, `--mock`, `--force`
+- **Windows Task Scheduler 등록** (`scripts/register_aftermarket_task.ps1`): 평일 16:05 `KiwoomAftermarketSync` 작업 자동 실행
+
+### Changed
+- **`telegram_bot.py`**: `/buy`, `/sell`, `/port`, `/pnl` 명령 dispatch 추가 (lazy import from telegram_trade)
+
+### Tests
+- `tests/test_trade_journal.py` 18개: /buy·/sell·/port·/pnl 핸들러 단위 테스트 + DB 레이어 검증
+- `tests/test_trade_integration.py` 3개: PostgreSQL GENERATED COLUMN 통합 테스트 (DB 없으면 자동 skip)
+
 ## [0.7.3.0] - 2026-05-08
 
 ### Added
