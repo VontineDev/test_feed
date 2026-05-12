@@ -173,6 +173,25 @@ def sweep_backtest(
         except Exception as e:
             logger.warning("[sweep] 수급 로드 실패: %s", e)
 
+    # ── 2b. Stage3 peakout map (use_stage3_peak=True 조합에서 사용) ──
+    stage3_peakout_map: dict = {}
+    if dsn:
+        try:
+            import asyncio as _asyncio
+            from db import get_stage3_peakout_map as _get_peakout
+            ticker_syms = [t for t, _, _ in tickers]
+            stage3_peakout_map = _asyncio.run(
+                _get_peakout(None, ticker_syms,
+                             min(train_start, val_start),
+                             max(train_end, val_end),
+                             dsn=dsn)
+            )
+            total_peakout = sum(len(v) for v in stage3_peakout_map.values())
+            logger.info("[sweep] Stage3 peakout 로드: %d종목 %d건",
+                        len(stage3_peakout_map), total_peakout)
+        except Exception as e:
+            logger.warning("[sweep] Stage3 peakout 로드 실패 (use_stage3_peak 비활성): %s", e)
+
     # ── 3. 업종 정보 ───────────────────────────────────────────────
     ticker_sector = {t: s for t, _n, s in tickers}
 
@@ -246,6 +265,7 @@ def sweep_backtest(
             stop_loss_pct=cfg.hard_stop_pct,
             flow_lookup=flow_lookup,
             cfg=cfg,
+            stage3_peakout_map=stage3_peakout_map if cfg.use_stage3_peak else None,
         )
 
         use_blended = (cfg.tp1_pct > 0 or cfg.trail_pct > 0)
@@ -361,7 +381,7 @@ def main() -> None:
     logger.info("[sweep] 결과 저장: %s", out_path)
 
     # 상위 결과 출력
-    valid = df[df["val_sharpe"].notna() & df["val_n"] >= 10].copy()
+    valid = df[df["val_sharpe"].notna() & (df["val_n"] >= 10)].copy()
     if valid.empty:
         logger.warning("val_n >= 10 인 조합 없음 — 검증 기간에 신호 부족")
         return

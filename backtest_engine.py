@@ -53,6 +53,17 @@ MODE_KOR: dict[str, str] = {
     "stage2":   "Stage 2(일봉)",
 }
 
+# ── 그리드서치로 검증된 최적 청산 파라미터 ──────────────────────────
+# 출처: scripts/run_sweep.py, Stage/KOSPI 200, 2024~2026-05
+# val_sharpe=4.70, val_win_rate=45.7%, val_cagr≈47%, overfit_gap=-0.23
+OPTIMAL_EXIT_PARAMS: dict = {
+    "tp1_pct":         0.25,   # 1차 익절 목표 +25%
+    "tp1_ratio":       0.50,   # 1차에서 50% 청산, 나머지 50% 트레일링
+    "trail_pct":       0.10,   # 고점 대비 -10% 트레일링 스탑
+    "hard_stop_pct":   0.10,   # 진입가 대비 -10% 하드 스탑
+    "use_stage3_peak": False,  # Stage3 peakout 트리거 (DB 데이터 확보 후 True 검토)
+}
+
 
 # ── 데이터 클래스 ─────────────────────────────────────────────────
 
