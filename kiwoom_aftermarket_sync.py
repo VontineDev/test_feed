@@ -383,6 +383,7 @@ def ensure_table(dsn: str) -> None:
                 stmt = stmt.strip()
                 if stmt:
                     cur.execute(stmt)
+            cur.execute("ALTER TABLE aftermarket_snap ENABLE ROW LEVEL SECURITY;")
         conn.commit()
     finally:
         conn.close()

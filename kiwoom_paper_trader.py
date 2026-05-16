@@ -196,7 +196,7 @@ class KiwoomPaperTrader:
 
 _CREATE_PAPER_POSITIONS = """
 CREATE TABLE IF NOT EXISTS paper_positions (
-    id              SERIAL          PRIMARY KEY,
+    id              BIGINT          GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     model           VARCHAR(20)     NOT NULL,
     ticker          VARCHAR(20)     NOT NULL,
     signal_date     DATE            NOT NULL,
@@ -225,14 +225,36 @@ CREATE INDEX IF NOT EXISTS idx_pp_status ON paper_positions (status);
 CREATE INDEX IF NOT EXISTS idx_pp_ticker ON paper_positions (ticker, signal_date);
 """
 
+# 기존 테이블(구 버전)에 새로 추가된 컬럼을 멱등 적용.
+# SERIAL → IDENTITY 변경은 새 테이블에만 적용; 기존 SERIAL PK는 그대로 유지.
+_MIGRATE_PAPER_POSITIONS = """
+ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS kiwoom_buy_no  VARCHAR(20);
+ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS kiwoom_sell_no VARCHAR(20);
+ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS tp1_pct        FLOAT NOT NULL DEFAULT 0.15;
+ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS tp1_ratio      FLOAT NOT NULL DEFAULT 0.50;
+ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS trail_pct      FLOAT NOT NULL DEFAULT 0.10;
+ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS hard_stop_pct  FLOAT NOT NULL DEFAULT 0.10;
+ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS tp1_date       DATE;
+ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS tp1_price      FLOAT;
+ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS watermark      FLOAT;
+ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS blended_return FLOAT;
+"""
+
 
 async def init_paper_positions(pool) -> None:
-    """paper_positions 테이블 생성 (없으면)."""
+    """paper_positions 테이블 생성 + 컬럼 마이그레이션 + RLS 활성화 (멱등)."""
     async with pool.acquire() as conn:
         for stmt in _CREATE_PAPER_POSITIONS.strip().split(";"):
             stmt = stmt.strip()
             if stmt:
                 await conn.execute(stmt)
+        for stmt in _MIGRATE_PAPER_POSITIONS.strip().split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                await conn.execute(stmt)
+        await conn.execute(
+            "ALTER TABLE paper_positions ENABLE ROW LEVEL SECURITY;"
+        )
     logger.info("[paper] paper_positions 테이블 준비 완료")
 
 

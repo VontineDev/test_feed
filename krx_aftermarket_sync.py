@@ -315,7 +315,7 @@ def _connect(dsn: str):
 
 
 def ensure_table(dsn: str) -> None:
-    """aftermarket_snap 테이블 및 인덱스 생성 (없을 때만)."""
+    """aftermarket_snap 테이블 및 인덱스 생성 + RLS 활성화 (멱등)."""
     conn = _connect(dsn)
     try:
         with conn.cursor() as cur:
@@ -323,6 +323,7 @@ def ensure_table(dsn: str) -> None:
                 stmt = stmt.strip()
                 if stmt:
                     cur.execute(stmt)
+            cur.execute("ALTER TABLE aftermarket_snap ENABLE ROW LEVEL SECURITY;")
         conn.commit()
     finally:
         conn.close()
