@@ -439,7 +439,7 @@ async def _handle_backtest(
                 report = report[:4087] + "..."
             await _send_plain(http, chat_id, report)
         except Exception as e:
-            logger.warning("[봇/backtest2] 실행 실패: %s", e)
+            logger.warning("[봇/backtest] 실행 실패: %s", e)
             await _send_plain(http, chat_id, f"백테스트 실행 중 오류: {e}")
 
 

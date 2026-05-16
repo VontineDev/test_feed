@@ -16,9 +16,9 @@
 > v0.4.0.0부터 기사 유형 분류(8종), 주봉 차트 스크리너 v2(120주선 + KIND 섹터 그룹), 교차분석 v2(MACD·볼린저밴드·MA20/50), 펀더멘털 레이어를 통합하여 출시. 이전 v0.2.5.0~v0.2.9.0 브랜치 기능 전체가 이 버전으로 병합됨.
 > v0.5.0.0부터 스크리너 우선 아키텍처가 적용되었습니다. 뉴스 신호는 해당 주 주봉 스크리너 통과 종목에만 텔레그램 알림이 발송됩니다. Stage 2 필터 프리셋(`screener_filters.py`), `daily_flow` DB 테이블이 추가되었습니다.
 > v0.6.0.0부터 일봉 3단계 분류기(`stage_classifier.py`)가 추가되었습니다. 매일 16:30 KST에 KOSPI + KOSDAQ 전 종목을 Stage 1(랠리 초입) / Stage 2(중간 조정) / Stage 3(과열 재가속)으로 분류하고 `stage_classifications` 테이블에 저장합니다. 주봉 Ichimoku 결과와 교차 비교한 결과를 텔레그램으로 자동 발송합니다.
-> v0.7.0.0부터 통합 백테스트 엔진(`backtest_engine.py`)이 추가되었습니다. 이치모쿠(주봉) / 3단계 Stage 1(일봉) / 교차(두 신호 동일 주 발동) 3개 모드로 과거 구간 백테스트를 실행합니다. 지표: 승률(7d/28d/91d), 평균·중앙값 수익률, KOSPI 초과수익률, 샤프비율(연환산), MDD. KRX 왕복 거래비용(기본 0.21%) 반영. `/backtest2 ichimoku 2025-01-01 2026-01-01` 텔레그램 명령어로 온디맨드 실행 가능.
+> v0.7.0.0부터 통합 백테스트 엔진(`backtest_engine.py`)이 추가되었습니다. 이치모쿠(주봉) / 3단계 Stage 1(일봉) / 교차(두 신호 동일 주 발동) 3개 모드로 과거 구간 백테스트를 실행합니다. 지표: 승률(7d/28d/91d), 평균·중앙값 수익률, KOSPI 초과수익률, 샤프비율(연환산), MDD. KRX 왕복 거래비용(기본 0.21%) 반영. `/backtest ichimoku 2025-01-01 2026-01-01` 텔레그램 명령어로 온디맨드 실행 가능.
 > v0.7.1.0부터 데이터 인프라 레이어가 추가되었습니다. **KRX OpenAPI 클라이언트**(`krx_openapi.py`): `data-dbg.krx.co.kr` 공식 REST API로 종목 마스터·OHLCV·지수 시세 수집(Bearer 토큰). **OHLCV DB 캐시**(`ohlcv_cache.py`): psycopg2 기반 캐시 레이어, yfinance 반복 다운로드 감소. **수급 데이터 파이프라인**(`krx_flow_sync.py`): `data.krx.co.kr`에서 외국인·기관 순매수 이력을 `daily_flow` 테이블에 적재, 백테스트 조건 5(외국인·기관 순매수 > 0) 연결. 샤프비율 7d·91d 추가(`sharpe_7d`·`sharpe_91d`). 단위 테스트 총 65개.
-> v0.8.0.0부터 **통합 백테스트 엔진 v2**가 추가되었습니다. `/backtest2`에 `--tp1 / --tp1-ratio / --trail / --stop` 파라미터가 추가되었고, `OPTIMAL_EXIT_PARAMS` (KOSPI/KOSDAQ/Cross) 3개 상수가 그리드서치로 검증되어 코드에 고정됩니다. 1차 익절(TP1) + 트레일링 스탑 분할 청산 로직, blended_return(가중 수익률) 지표가 추가되었습니다.
+> v0.8.0.0부터 **통합 백테스트 엔진 v2**가 추가되었습니다. `/backtest`에 `--tp1 / --tp1-ratio / --trail / --stop` 파라미터가 추가되었고, `OPTIMAL_EXIT_PARAMS` (KOSPI/KOSDAQ/Cross) 3개 상수가 그리드서치로 검증되어 코드에 고정됩니다. 1차 익절(TP1) + 트레일링 스탑 분할 청산 로직, blended_return(가중 수익률) 지표가 추가되었습니다.
 > v0.9.0.0부터 **키움 모의투자 자동주문 시스템**(`kiwoom_paper_trader.py`)이 추가되었습니다. Stage/KOSDAQ/Cross/Ichimoku 4개 모델로 T+1 시가 매수주문을 키움 모의투자 서버(mockapi.kiwoom.com)에 제출하고 슬리피지를 측정합니다. `paper_positions` DB 테이블, 3개 스케줄 잡(09:05/16:10/16:40 KST), `/paper·/paper_perf·/paper_exit` 텔레그램 명령어 추가. `OPTIMAL_EXIT_PARAMS_ICHIMOKU` 그리드서치 검증 완료(val_sharpe 7.50, val_win_rate 55.8%). `/volume` 명령어가 `/top`(당일 거래금액 상위 10, KOSPI+KOSDAQ)으로 교체되었습니다. Supabase PgBouncer 호환(`statement_cache_size=0`), RLS 개별 적용(`_RLS_ALWAYS` / `_RLS_IF_EXISTS` DO 블록) 수정.
 > v0.7.3.0부터 **거래대금 워치리스트 일보**(Layer 6)가 추가되었습니다. Stage 1 진입 종목을 14캘린더일 동안 매일 17:00 KST에 추적합니다. 거래대금 건강도(vol_ratio = 오늘거래량/진입거래량), 외국인·기관 스트릭, Ichimoku 주봉 통과 여부를 통합하여 Telegram 일보를 발송합니다. Stage 1→2 전환 시 즉시 알림, vol_ratio < 0.6 3거래일 연속 시 랠리 소멸 경고. `watchlist_vol_log` 테이블로 일별 vol_ratio 이력 유지. `python run_scheduler.py --once watchlist|stage`로 즉시 실행 가능.
 
@@ -460,8 +460,7 @@ DATABASE_URL 환경변수 → DB_HOST/PORT/NAME/USER/PASSWORD 개별 변수
 | `/signals` | 최근 매매 신호 10건 (direction, strength, reason, 시각) |
 | `/signals buy\|sell\|watch` | 방향별 신호 필터링 조회 |
 | `/today` | 오늘 카테고리별 수집 건수 + 최신 기사 5건 한글 요약 |
-| `/backtest` | 판정별·유형별·종목별 적중률 백테스팅 리포트 |
-| `/backtest2 <mode> <start> <end> [--tp1 F] [--trail F] [--stop F]` | 통합 백테스트 — ichimoku/stage/cross 모드, 분할 청산 파라미터 지원 (v0.8.0.0~) |
+| `/backtest <mode> <start> <end> [--tp1 F] [--trail F] [--stop F]` | 통합 백테스트 — ichimoku/stage/cross 모드, 분할 청산 파라미터 지원 |
 | `/scan` | 주봉 스크리닝 즉시 실행 |
 | `/screener` | 최신 주봉 차트 스크리닝 결과 — DM + 채널 동시 발송 |
 | `/top` | 당일 거래금액 상위 10 종목 (KOSPI+KOSDAQ 합산, fdr.StockListing) (v0.9.0.0~) |
@@ -636,7 +635,7 @@ test_feed/
 ├── stage_classifier.py            # 일봉 3단계 분류기 — Stage 1/2/3 + 피크아웃 신호 (v0.6.0.0~)
 ├── backtest_engine.py             # 통합 백테스트 엔진 — ichimoku/stage/cross 3모드 (v0.7.0.0~)
 ├── generate_html_report.py        # 차트 스크리닝 결과를 HTML 파일로 저장
-├── telegram_bot.py                # 봇 명령어 처리 (/status /signals /today /backtest /backtest2 /screener /help)
+├── telegram_bot.py                # 봇 명령어 처리 (/status /signals /today /backtest /screener /help)
 ├── telegram_notify.py             # 신호 알림 전송 + Ichimoku/Stage 비교 메시지
 ├── volume_pattern.py              # 거래량 패턴 분석 (resolve_ticker, fetch_data, build_report)
 ├── krx_sync.py                    # KRX 전체 종목 DB 동기화 (KOSPI+KOSDAQ ~2500종목)

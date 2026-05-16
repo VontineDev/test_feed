@@ -279,7 +279,7 @@ to:
 
 ## P3: backtest_engine — Non-Standard Measurement Period (on-the-fly N-week)
 
-**What:** When `/backtest2 stage 8` is called and 8w is not a stored period, compute the actual return on-the-fly from the stored price snapshot instead of falling back to the nearest standard period (4w). Currently the MVP falls back to nearest standard period with a "(closest: 4w)" note.
+**What:** When `/backtest stage 8` is called and 8w is not a stored period, compute the actual return on-the-fly from the stored price snapshot instead of falling back to the nearest standard period (4w). Currently the MVP falls back to nearest standard period with a "(closest: 4w)" note.
 
 **Why:** Users may want specific horizons (6w, 8w, 10w) that don't map cleanly to the stored 1/4/13 week checkpoints. The stored OHLCV data is already present in signals2.json — on-the-fly computation is straightforward.
 
@@ -313,7 +313,7 @@ Stage 2 conditions to replay:
 - In `backtest_engine.py`, add `_replay_stage2(ticker, name, daily_df, market, config)` that first calls `_replay_stage()` (or inlines Stage 1 check) to find S1 dates, then for each S1 signal date scans the next 14 days for Stage 2 conditions.
 - Add `"stage2"` to `BacktestConfig.mode` valid values.
 - Add `test_replay_stage2.py` with at least: S1 prerequisite check, each condition independently, 14-day lookback boundary, condition 4 skipped gracefully.
-- (Note: `run_backtest.py` was removed — `/backtest2 stage2` Telegram command is the intended interface)
+- (Note: `run_backtest.py` was removed — `/backtest stage2` Telegram command is the intended interface)
 
 **Pros:** Validates the full 3-stage classifier pipeline end-to-end. Can measure whether Stage 2 entries outperform raw Stage 1.
 **Cons:** Replaying Stage 2 requires Stage 1 history in the same data window — increases memory footprint for long backtests. The 수급 skip means Stage 2 replay is 3/4 conditions, same limitation as Stage 1.
