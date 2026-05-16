@@ -47,7 +47,7 @@ from summarizer import summarize, Backend
 from db import (
     create_pool, get_dsn, init_db, save_article, save_signal, save_cross_analysis,
     load_seen_hashes, save_chart_signals, load_chart_signals_latest,
-    get_stage1_history, save_stage_classifications, save_daily_flow, get_prev_streak,
+    get_stage1_history, save_stage_classifications,
     get_stage1_watchlist, upsert_watchlist_vol_log, get_watchlist_vol_log,
 )
 from telegram_notify import (
@@ -520,52 +520,9 @@ async def _daily_stage_job() -> None:
     logger.info("[3단계] 분류 대상: %d종목 / SCREENER_WORKERS=%s",
                 len(all_tickers), os.environ.get("SCREENER_WORKERS", "1"))
 
-    # 2a. fetch_daily_flow() → streak 계산 → save_daily_flow() (D3)
-    from market_data import fetch_daily_flow as _fetch_daily_flow
     from datetime import date as _date
 
     today = _date.today()
-
-    async def _upsert_flow(ticker: str) -> None:
-        """당일 수급 데이터 1건 fetch → streak 계산 → DB upsert."""
-        try:
-            flow = await loop.run_in_executor(None, _fetch_daily_flow, ticker)
-            if flow.get("date") is None:
-                return
-            foreign_net = flow.get("foreign_net")
-            inst_net    = flow.get("inst_net")
-
-            prev_f, prev_i = await get_prev_streak(_db_pool, ticker, today)
-            prev_f = prev_f or 0
-            prev_i = prev_i or 0
-
-            def _next_streak(prev: int, net: Optional[int]) -> Optional[int]:
-                if net is None:
-                    return None
-                if net > 0:
-                    return max(prev, 0) + 1
-                if net < 0:
-                    return min(prev, 0) - 1
-                return 0
-
-            f_streak = _next_streak(prev_f, foreign_net)
-            i_streak = _next_streak(prev_i, inst_net)
-
-            await save_daily_flow(
-                _db_pool, ticker, today.isoformat(),
-                foreign_net, inst_net, f_streak, i_streak,
-            )
-        except Exception as e:
-            logger.debug("[3단계] flow 저장 실패 (%s): %s", ticker, e)
-
-    semaphore = asyncio.Semaphore(int(os.environ.get("SCREENER_WORKERS", "1")))
-
-    async def _bounded_upsert(ticker: str) -> None:
-        async with semaphore:
-            await _upsert_flow(ticker)
-
-    await asyncio.gather(*[_bounded_upsert(t) for t, _, _ in all_tickers])
-    logger.info("[3단계] daily_flow 적재 완료")
 
     # 2b. daily OHLCV (60일, yfinance, 병렬)
     import yfinance as _yf
@@ -1241,6 +1198,40 @@ async def main(interval: int, enable_summary: bool) -> None:
         _watchlist_brief_job,
         CronTrigger(day_of_week="mon-fri", hour=8, minute=0, timezone="UTC"),
         id="daily_watchlist_brief",
+        max_instances=1,
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+
+    # ── 수급 증분 sync: 평일 18:00 KST (09:00 UTC) ───────────────
+    # krx_flow_sync.py --incremental (전일 전 종목 수급 → daily_flow)
+    # 장 마감(15:30) + KRX 데이터 게시 여유(~2h) 확보.
+    # stage_classifier(16:30 KST)는 DB에 이미 적재된 전일 데이터를 읽으므로 순서 무관.
+    async def _daily_flow_sync_job():
+        import sys as _sys
+        logger.info("[flow-sync] krx_flow_sync --incremental 시작")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                _sys.executable, "krx_flow_sync.py", "--incremental",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            out, _ = await proc.communicate()
+            if proc.returncode == 0:
+                logger.info("[flow-sync] 완료 (exit=0)")
+            else:
+                logger.warning("[flow-sync] 비정상 종료 (exit=%d)", proc.returncode)
+            if out:
+                for line in out.decode("utf-8", errors="replace").splitlines():
+                    if line.strip():
+                        logger.debug("[flow-sync] %s", line)
+        except Exception as e:
+            logger.warning("[flow-sync] 실행 실패: %s", e)
+
+    scheduler.add_job(
+        _daily_flow_sync_job,
+        CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone="UTC"),  # = 18:00 KST
+        id="daily_flow_sync",
         max_instances=1,
         misfire_grace_time=3600,
         replace_existing=True,

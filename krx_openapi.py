@@ -2,7 +2,7 @@
 krx_openapi.py — KRX Open API 클라이언트 (공식 REST API)
 
 Base URL : https://data-dbg.krx.co.kr/svc/apis
-인증     : Authorization: Bearer {KRX_OPENAPI_KEY}  (환경변수)
+인증     : AUTH_KEY: {KRX_OPENAPI_KEY}  (환경변수)
 요청 형식 : GET ?basDd=YYYYMMDD
 응답 형식 : {"OutBlock_1": [...]}
 
@@ -56,7 +56,7 @@ class KRXOpenAPIClient:
     def _get(self, path: str, bas_dd: str, timeout: int = 30) -> list[dict]:
         """GET 요청. 실패 시 빈 리스트 반환."""
         url = f"{_BASE}{path}"
-        headers = {"Authorization": f"Bearer {self._appkey}"}
+        headers = {"AUTH_KEY": self._appkey}
         params = {"basDd": bas_dd}
         try:
             resp = self._session.get(url, headers=headers, params=params, timeout=timeout)

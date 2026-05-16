@@ -2,8 +2,8 @@
 # PowerShell 관리자 권한으로 실행하세요.
 # 실행: .\register_task.ps1
 
-# ── 설정 (실제 경로로 수정) ───────────────────────────────────
-$ProjectDir = "C:\Users\Jin\test_feed"
+# ── 설정 ─────────────────────────────────────────────────────
+$ProjectDir = Split-Path -Parent $PSScriptRoot
 $PythonExe  = "$ProjectDir\venv\Scripts\python.exe"
 $ScriptFile = "$ProjectDir\run_scheduler.py"
 $TaskName   = "NewsCrawler"

@@ -422,6 +422,43 @@ class BacktestResult:
             txt = f"{v * 100:.1f}%"
             return f'<td class="num {cls}" data-v="{dv}">{txt}</td>'
 
+        # ── 현재가 일괄 조회 ─────────────────────────────────────────
+        import yfinance as yf
+        cur_prices: dict[str, float] = {}
+        _unique_tks = list({s.ticker for s in self.signals if s.ticker})
+        if _unique_tks:
+            try:
+                _raw = yf.download(_unique_tks, period="5d", progress=False,
+                                   auto_adjust=True)
+                if not _raw.empty and "Close" in _raw.columns:
+                    _close = _raw["Close"]
+                    if isinstance(_close, pd.Series):
+                        _s = _close.dropna()
+                        if not _s.empty:
+                            cur_prices[_unique_tks[0]] = float(_s.iloc[-1])
+                    else:
+                        for _tk in _unique_tks:
+                            if _tk in _close.columns:
+                                _s = _close[_tk].dropna()
+                                if not _s.empty:
+                                    cur_prices[_tk] = float(_s.iloc[-1])
+            except Exception:
+                pass
+
+        # ── 필터용 고유값 수집 ─────────────────────────────────────
+        _uniq_sectors = sorted(
+            {s.sector[:12] for s in self.signals if s.sector}, key=str.lower
+        )
+        _uniq_exits = sorted(
+            {(s.final_exit_type if s.final_exit_type else s.sell_reason)
+             for s in self.signals
+             if (s.final_exit_type or s.sell_reason)},
+            key=str.lower,
+        )
+        _uniq_stages = sorted(
+            {_STAGE_LABEL.get(s.mode, (s.mode, ""))[0] for s in self.signals}
+        )
+
         table_rows: list[str] = []
         for sig in self.signals:
             mkt_b = "KS" if sig.market == "KOSPI" else "KQ"
@@ -460,6 +497,12 @@ class BacktestResult:
             # 최종 수익: blended_return 우선, 없으면 sell_return
             blended = sig.blended_return if sig.blended_return is not None else sig.sell_return
 
+            # 현재가 / 현재손익
+            _cur = cur_prices.get(sig.ticker)
+            _cur_fmt = f"{_cur:,.0f}" if _cur is not None else "—"
+            _cur_dv  = int(_cur) if _cur is not None else -1
+            _cur_ret = (_cur / sig.close_at_signal - 1) if _cur is not None else None
+
             table_rows.append(
                 f"<tr>"
                 f'<td data-v="{sig.signal_date.isoformat()}">{sig.signal_date}</td>'
@@ -468,6 +511,8 @@ class BacktestResult:
                 + f'<td class="muted">{sig.ticker} <span class="badge">{mkt_b}</span></td>'
                 + stage_td
                 + f'<td class="num" data-v="{sig.close_at_signal}">{ep}</td>'
+                + f'<td class="num" data-v="{_cur_dv}">{_cur_fmt}</td>'
+                + _ret_td(_cur_ret)
                 + _ret_td(sig.return_7d)
                 + _ret_td(sig.return_28d)
                 + _ret_td(sig.return_91d)
@@ -526,6 +571,24 @@ th:hover{{color:var(--accent)}} th.num,td.num{{text-align:right}}
 .sell-cloud{{color:#79c0ff;border-color:#79c0ff}} .sell-dc{{color:#d29922;border-color:#d29922}}
 .tbl-wrap{{overflow-x:auto}}
 footer{{margin-top:24px;padding-top:12px;border-top:1px solid var(--border);color:var(--muted);font-size:11px}}
+.filter-bar{{background:var(--bg-s);border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-bottom:10px}}
+.filter-row{{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}}
+.fi{{display:flex;flex-direction:column;gap:3px}}
+.fi label{{font-size:11px;color:var(--muted)}}
+.fi input,.fi select{{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:3px 7px;font-size:12px;font-family:var(--mono);min-width:110px;transition:border-color .15s}}
+.fi input:focus,.fi select:focus{{outline:none;border-color:var(--accent)}}
+.fi input.fi-on,.fi select.fi-on{{border-color:var(--accent);background:rgba(88,166,255,.06)}}
+.stg-btns,.wl-btns{{display:flex;gap:4px}}
+.stg-btn,.wl-btn{{background:var(--bg);border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:3px 10px;cursor:pointer;font-size:12px;font-family:var(--mono);transition:all .15s}}
+.stg-btn.stg-on{{border-color:var(--accent);color:var(--accent)}}
+.wl-btn.wl-on.wl-all{{border-color:var(--muted);color:var(--text)}}
+.wl-btn.wl-on.wl-win{{border-color:var(--pos);color:var(--pos);background:rgba(63,185,80,.08)}}
+.wl-btn.wl-on.wl-loss{{border-color:var(--neg);color:var(--neg);background:rgba(248,81,73,.08)}}
+.btn-reset{{background:var(--bg);border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:4px 12px;cursor:pointer;font-size:12px;align-self:flex-end}}
+.btn-reset:hover{{border-color:var(--accent);color:var(--accent)}}
+.result-info{{align-self:flex-end;font-family:var(--mono);line-height:1.2}}
+#vis-count{{font-size:20px;font-weight:700;color:var(--accent)}}
+.cnt-tot{{font-size:11px;color:var(--muted)}}
 </style>
 </head>
 <body>
@@ -557,6 +620,19 @@ footer{{margin-top:24px;padding-top:12px;border-top:1px solid var(--border);colo
 <div style="margin-bottom:24px">{dist_svg}</div>
 
 <h2>종목별 결과 ({n_sigs}건)</h2>
+<div class="filter-bar">
+<div class="filter-row">
+  <div class="fi"><label>종목명</label><input type="text" id="f-name" placeholder="검색..." oninput="applyFilter()"></div>
+  <div class="fi"><label>업종</label><select id="f-sector" onchange="applyFilter()"><option value="">전체</option>{''.join(f'<option>{_html.escape(s)}</option>' for s in _uniq_sectors)}</select></div>
+  {'<div class="fi"><label>신호유형</label><div class="stg-btns">' + "".join(f'<button class="stg-btn stg-on" data-stg="{_html.escape(sl)}" onclick="toggleStage(this)">{_html.escape(sl)}</button>' for sl in _uniq_stages) + "</div></div>" if len(_uniq_stages) > 1 else ""}
+  <div class="fi"><label>수익 / 손실</label><div class="wl-btns"><button class="wl-btn wl-on wl-all" data-wl="" onclick="setWL(this)">전체</button><button class="wl-btn wl-win" data-wl="win" onclick="setWL(this)">수익</button><button class="wl-btn wl-loss" data-wl="loss" onclick="setWL(this)">손실</button></div></div>
+  <div class="fi"><label>청산유형</label><select id="f-exit" onchange="applyFilter()"><option value="">전체</option>{''.join(f'<option>{_html.escape(e)}</option>' for e in _uniq_exits)}</select></div>
+  <div class="fi"><label>최종수익(%)</label><div style="display:flex;gap:4px;align-items:center"><input type="number" id="f-ret-min" step="1" placeholder="최소" oninput="applyFilter()" style="width:65px"><span style="color:var(--muted)">~</span><input type="number" id="f-ret-max" step="1" placeholder="최대" oninput="applyFilter()" style="width:65px"></div></div>
+  <div class="fi"><label>보유일</label><div style="display:flex;gap:4px;align-items:center"><input type="number" id="f-hd-min" step="1" placeholder="최소" oninput="applyFilter()" style="width:60px"><span style="color:var(--muted)">~</span><input type="number" id="f-hd-max" step="1" placeholder="최대" oninput="applyFilter()" style="width:60px"></div></div>
+  <button class="btn-reset" onclick="resetFilter()">초기화</button>
+  <div class="result-info"><span id="vis-count">{n_sigs}</span><br><span class="cnt-tot">/ {n_sigs}건 표시</span></div>
+</div>
+</div>
 <div class="tbl-wrap">
 <table id="tbl" data-sc="-1" data-sd="asc">
 <thead><tr>
@@ -566,19 +642,21 @@ footer{{margin-top:24px;padding-top:12px;border-top:1px solid var(--border);colo
   <th onclick="sort(3,false)">티커</th>
   <th onclick="sort(4,false)">단계</th>
   <th class="num" onclick="sort(5,true)">진입가</th>
-  <th class="num" onclick="sort(6,true)">7d</th>
-  <th class="num" onclick="sort(7,true)">28d</th>
-  <th class="num" onclick="sort(8,true)">91d</th>
-  <th class="num" onclick="sort(9,true)">초과(28d)</th>
-  <th onclick="sort(10,false)">S2진행일</th>
-  <th onclick="sort(11,false)">S3진행일</th>
-  <th onclick="sort(12,false)">청산유형</th>
-  <th onclick="sort(13,false)">1차TP일</th>
-  <th onclick="sort(14,false)">최종청산일</th>
-  <th class="num" onclick="sort(15,true)">보유일</th>
-  <th class="num" onclick="sort(16,true)">1차TP수익</th>
-  <th class="num" onclick="sort(17,true)">최종수익(blended)</th>
-  <th class="num" onclick="sort(18,true)">MDD(91d)</th>
+  <th class="num" onclick="sort(6,true)">현재가</th>
+  <th class="num" onclick="sort(7,true)">현재손익</th>
+  <th class="num" onclick="sort(8,true)">7d</th>
+  <th class="num" onclick="sort(9,true)">28d</th>
+  <th class="num" onclick="sort(10,true)">91d</th>
+  <th class="num" onclick="sort(11,true)">초과(28d)</th>
+  <th onclick="sort(12,false)">S2진행일</th>
+  <th onclick="sort(13,false)">S3진행일</th>
+  <th onclick="sort(14,false)">청산유형</th>
+  <th onclick="sort(15,false)">1차TP일</th>
+  <th onclick="sort(16,false)">최종청산일</th>
+  <th class="num" onclick="sort(17,true)">보유일</th>
+  <th class="num" onclick="sort(18,true)">1차TP수익</th>
+  <th class="num" onclick="sort(19,true)">최종수익(blended)</th>
+  <th class="num" onclick="sort(20,true)">MDD(91d)</th>
 </tr></thead>
 <tbody>
 {chr(10).join(table_rows)}
@@ -592,7 +670,8 @@ function sort(col,num){{
   const p=parseInt(t.dataset.sc);
   const d=(p===col&&t.dataset.sd==='asc')?'desc':'asc';
   t.dataset.sc=col; t.dataset.sd=d;
-  const rows=[...t.querySelectorAll('tbody tr')];
+  const rows=[...t.querySelectorAll('tbody tr')].filter(r=>r.style.display!=='none');
+  const hidden=[...t.querySelectorAll('tbody tr')].filter(r=>r.style.display==='none');
   rows.sort((a,b)=>{{
     const av=a.cells[col].dataset.v??a.cells[col].textContent.trim();
     const bv=b.cells[col].dataset.v??b.cells[col].textContent.trim();
@@ -601,10 +680,68 @@ function sort(col,num){{
   }});
   const tb=t.querySelector('tbody');
   rows.forEach(r=>tb.appendChild(r));
+  hidden.forEach(r=>tb.appendChild(r));
   t.querySelectorAll('th').forEach((h,i)=>{{
     h.textContent=h.textContent.replace(/ [▲▼]$/,'');
     if(i===col)h.textContent+=d==='asc'?' ▲':' ▼';
   }});
+}}
+let _wl='';
+function setWL(btn){{
+  _wl=btn.dataset.wl;
+  document.querySelectorAll('.wl-btn').forEach(b=>b.classList.remove('wl-on'));
+  btn.classList.add('wl-on');
+  applyFilter();
+}}
+function toggleStage(btn){{
+  btn.classList.toggle('stg-on');
+  applyFilter();
+}}
+function applyFilter(){{
+  const name=(document.getElementById('f-name').value||'').toLowerCase();
+  const sector=document.getElementById('f-sector').value;
+  const exit=document.getElementById('f-exit').value;
+  const stages=[...document.querySelectorAll('.stg-btn.stg-on')].map(b=>b.dataset.stg);
+  const allStages=document.querySelectorAll('.stg-btn').length===0;
+  const retMin=document.getElementById('f-ret-min').value;
+  const retMax=document.getElementById('f-ret-max').value;
+  const hdMin=document.getElementById('f-hd-min').value;
+  const hdMax=document.getElementById('f-hd-max').value;
+  ['f-name','f-sector','f-exit','f-ret-min','f-ret-max','f-hd-min','f-hd-max'].forEach(id=>{{
+    const el=document.getElementById(id);
+    if(el)el.classList.toggle('fi-on',el.value!=='');
+  }});
+  let vis=0;
+  document.querySelectorAll('#tbl tbody tr').forEach(row=>{{
+    const c=row.cells;
+    const rv=(parseFloat(c[19].dataset.v)||-1e9)/10000*100;
+    const ok=(
+      (!name||c[1].textContent.toLowerCase().includes(name))&&
+      (!sector||c[2].textContent.trim()===sector)&&
+      (allStages||stages.length===0||stages.some(s=>c[4].textContent.includes(s)))&&
+      (!exit||c[14].textContent.includes(exit))&&
+      (!_wl||(_wl==='win'&&rv>0)||(_wl==='loss'&&rv<=0))&&
+      (retMin===''||rv>=parseFloat(retMin))&&
+      (retMax===''||rv<=parseFloat(retMax))&&
+      (hdMin===''||(parseFloat(c[17].dataset.v)||0)>=parseFloat(hdMin))&&
+      (hdMax===''||(parseFloat(c[17].dataset.v)||0)<=parseFloat(hdMax))
+    );
+    row.style.display=ok?'':'none';
+    if(ok)vis++;
+  }});
+  document.getElementById('vis-count').textContent=vis;
+}}
+function resetFilter(){{
+  _wl='';
+  document.getElementById('f-name').value='';
+  document.getElementById('f-sector').value='';
+  document.getElementById('f-exit').value='';
+  document.querySelectorAll('.stg-btn').forEach(b=>b.classList.add('stg-on'));
+  document.querySelectorAll('.wl-btn').forEach(b=>b.classList.remove('wl-on'));
+  const allBtn=document.querySelector('.wl-btn.wl-all');
+  if(allBtn)allBtn.classList.add('wl-on');
+  ['f-ret-min','f-ret-max','f-hd-min','f-hd-max'].forEach(id=>document.getElementById(id).value='');
+  applyFilter();
 }}
 </script>
 </body>
@@ -966,7 +1103,16 @@ def _replay_ichimoku(
     signals: list[SignalRecord] = []
 
     for i in range(1, len(weekly)):
-        row_date = weekly.index[i].date()
+        # Use the UTC date of the last daily row for this week so that signal_date
+        # is consistent with the idx_map built from ohlcv_cache timestamps.
+        # ohlcv_cache stores KST midnight as UTC (e.g. KST 2024-01-05 → UTC 2024-01-04T15:00Z).
+        # weekly.index[i].date() returns the KST Friday, causing a 1-day mismatch.
+        week_ts = weekly.index[i]
+        _daily_before = daily_df.index[daily_df.index <= week_ts]
+        if _daily_before.empty:
+            continue
+        row_date = _daily_before[-1].date()
+
         if row_date < config.start or row_date > config.end:
             continue
 
