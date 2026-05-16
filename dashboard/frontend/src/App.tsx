@@ -1,0 +1,71 @@
+import { Suspense, lazy } from 'react'
+
+const Heatmap    = lazy(() => import('./components/Heatmap'))
+const Positions  = lazy(() => import('./components/Positions'))
+const SignalFeed = lazy(() => import('./components/SignalFeed'))
+const Scheduler  = lazy(() => import('./components/Scheduler'))
+
+const Loading = () => (
+  <div style={{ padding: 24, color: '#64748b', textAlign: 'center' as const }}>로딩 중…</div>
+)
+
+export default function App() {
+  return (
+    <div style={styles.root}>
+      {/* 헤더 */}
+      <header style={styles.header}>
+        <span style={styles.logo}>📈 Trading Dashboard</span>
+        <span style={styles.sub}>KOSPI + KOSDAQ Stage 시스템</span>
+      </header>
+
+      {/* 메인 레이아웃 */}
+      <main style={styles.main}>
+        {/* 히트맵: 왼쪽 큰 영역 */}
+        <section style={styles.heatmapPane}>
+          <Suspense fallback={<Loading />}>
+            <Heatmap />
+          </Suspense>
+        </section>
+
+        {/* 오른쪽 패널 */}
+        <aside style={styles.sidebar}>
+          {/* 신호 피드 */}
+          <div style={styles.panel}>
+            <Suspense fallback={<Loading />}>
+              <SignalFeed />
+            </Suspense>
+          </div>
+
+          {/* 포지션 */}
+          <div style={styles.panel}>
+            <Suspense fallback={<Loading />}>
+              <Positions />
+            </Suspense>
+          </div>
+
+          {/* 스케줄러 컨트롤 */}
+          <div style={styles.schedulerPanel}>
+            <Suspense fallback={<Loading />}>
+              <Scheduler />
+            </Suspense>
+          </div>
+        </aside>
+      </main>
+    </div>
+  )
+}
+
+const styles: Record<string, React.CSSProperties> = {
+  root: { display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', background: '#0f1117' },
+  header: {
+    display: 'flex', alignItems: 'center', gap: 12, padding: '10px 20px',
+    background: '#1a1d2e', borderBottom: '1px solid #1e293b', flexShrink: 0,
+  },
+  logo: { fontWeight: 700, fontSize: 16, letterSpacing: 0.5 },
+  sub: { fontSize: 12, color: '#475569' },
+  main: { display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' },
+  heatmapPane: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', borderRight: '1px solid #1e293b' },
+  sidebar: { width: 380, display: 'flex', flexDirection: 'column', overflowY: 'auto', flexShrink: 0 },
+  panel: { flex: 1, minHeight: 200, borderBottom: '1px solid #1e293b', overflow: 'auto' },
+  schedulerPanel: { flexShrink: 0 },
+}

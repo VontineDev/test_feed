@@ -1544,6 +1544,60 @@ async def main(interval: int, enable_summary: bool) -> None:
         )
         logger.info("[paper] T+1 진입 잡 등록 완료 (09:05 KST)")
 
+    # ── 대시보드 → 스케줄러 트리거 폴러 ─────────────────────────
+    # dashboard POST /api/scheduler/trigger → scheduler_triggers INSERT
+    # 이 잡이 30초마다 pending 행을 1개씩 꺼내 실행하고 status='done'으로 갱신.
+    # FOR UPDATE SKIP LOCKED: 동시 실행 방지 (max_instances=1로도 충분하나 DB 레벨 보장)
+    async def _trigger_watcher_job():
+        if not _db_pool:
+            return
+        try:
+            async with _db_pool.acquire() as conn:
+                async with conn.transaction():
+                    row = await conn.fetchrow(
+                        "SELECT id, job_name FROM scheduler_triggers"
+                        " WHERE status = 'pending'"
+                        " ORDER BY requested_at ASC LIMIT 1"
+                        " FOR UPDATE SKIP LOCKED"
+                    )
+                    if not row:
+                        return
+                    trig_id = row["id"]
+                    job_name = row["job_name"]
+                    await conn.execute(
+                        "UPDATE scheduler_triggers"
+                        " SET status='running', executed_at=NOW()"
+                        " WHERE id=$1", trig_id
+                    )
+            logger.info("[trigger] 대시보드 요청 잡 실행: %s", job_name)
+            try:
+                if job_name == "stage":
+                    await _daily_stage_job()
+                elif job_name == "screener":
+                    await _weekly_screener_job()
+                elif job_name == "paper_sample":
+                    await _paper_eod_sampler_job()
+                else:
+                    logger.warning("[trigger] 알 수 없는 잡: %s", job_name)
+            finally:
+                async with _db_pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE scheduler_triggers SET status='done' WHERE id=$1",
+                        trig_id
+                    )
+        except Exception as e:
+            logger.warning("[trigger] 폴링 실패: %s", e)
+
+    scheduler.add_job(
+        _trigger_watcher_job,
+        trigger="interval",
+        seconds=30,
+        id="trigger_watcher",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+
     scheduler.start()
 
     try:

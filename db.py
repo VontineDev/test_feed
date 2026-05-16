@@ -277,6 +277,19 @@ CREATE INDEX IF NOT EXISTS idx_trade_log_open
     ON trade_log (exit_date) WHERE exit_date IS NULL;
 """
 
+_CREATE_SCHEDULER_TRIGGERS = """
+CREATE TABLE IF NOT EXISTS scheduler_triggers (
+    id           SERIAL       PRIMARY KEY,
+    job_name     VARCHAR(50)  NOT NULL,
+    requested_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    executed_at  TIMESTAMPTZ,
+    status       VARCHAR(20)  NOT NULL DEFAULT 'pending'
+);
+CREATE INDEX IF NOT EXISTS idx_sched_trig_status
+    ON scheduler_triggers (status, requested_at ASC)
+    WHERE status = 'pending';
+"""
+
 _CREATE_KRX_TABLE = """
 CREATE TABLE IF NOT EXISTS krx_listings (
     isin_code       TEXT PRIMARY KEY,
@@ -324,6 +337,7 @@ _RLS_ALWAYS: list[str] = [
     "intraday_volumes",
     "krx_listings",
     "trade_log",
+    "scheduler_triggers",
 ]
 
 # init_db 호출 시점에 아직 없을 수 있는 테이블 — DO 블록으로 안전하게 처리
@@ -338,6 +352,7 @@ async def init_db(pool: asyncpg.Pool) -> None:
         await conn.execute(_CREATE_TABLE)
         await conn.execute(_CREATE_TRADE_LOG)
         await conn.execute(_CREATE_KRX_TABLE)
+        await conn.execute(_CREATE_SCHEDULER_TRIGGERS)
         await conn.execute(
             "ALTER TABLE chart_signals ADD COLUMN IF NOT EXISTS sector VARCHAR(80) DEFAULT ''"
         )
