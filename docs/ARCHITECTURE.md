@@ -1,5 +1,5 @@
 # 한국 주식 뉴스 기반 매매 신호 알림 시스템
-## 아키텍처 문서 v3.0
+## 아키텍처 문서 v3.1
 
 > **v2.x → v3.0 전면 재작성 안내**
 > 기존 설계서(v2.1)는 기술적 지표(MA·RSI·볼린저) 기반 시스템을 기술했으나,
@@ -18,6 +18,8 @@
 > v0.6.0.0부터 일봉 3단계 분류기(`stage_classifier.py`)가 추가되었습니다. 매일 16:30 KST에 KOSPI + KOSDAQ 전 종목을 Stage 1(랠리 초입) / Stage 2(중간 조정) / Stage 3(과열 재가속)으로 분류하고 `stage_classifications` 테이블에 저장합니다. 주봉 Ichimoku 결과와 교차 비교한 결과를 텔레그램으로 자동 발송합니다.
 > v0.7.0.0부터 통합 백테스트 엔진(`backtest_engine.py`)이 추가되었습니다. 이치모쿠(주봉) / 3단계 Stage 1(일봉) / 교차(두 신호 동일 주 발동) 3개 모드로 과거 구간 백테스트를 실행합니다. 지표: 승률(7d/28d/91d), 평균·중앙값 수익률, KOSPI 초과수익률, 샤프비율(연환산), MDD. KRX 왕복 거래비용(기본 0.21%) 반영. `/backtest2 ichimoku 2025-01-01 2026-01-01` 텔레그램 명령어로 온디맨드 실행 가능.
 > v0.7.1.0부터 데이터 인프라 레이어가 추가되었습니다. **KRX OpenAPI 클라이언트**(`krx_openapi.py`): `data-dbg.krx.co.kr` 공식 REST API로 종목 마스터·OHLCV·지수 시세 수집(Bearer 토큰). **OHLCV DB 캐시**(`ohlcv_cache.py`): psycopg2 기반 캐시 레이어, yfinance 반복 다운로드 감소. **수급 데이터 파이프라인**(`krx_flow_sync.py`): `data.krx.co.kr`에서 외국인·기관 순매수 이력을 `daily_flow` 테이블에 적재, 백테스트 조건 5(외국인·기관 순매수 > 0) 연결. 샤프비율 7d·91d 추가(`sharpe_7d`·`sharpe_91d`). 단위 테스트 총 65개.
+> v0.8.0.0부터 **통합 백테스트 엔진 v2**가 추가되었습니다. `/backtest2`에 `--tp1 / --tp1-ratio / --trail / --stop` 파라미터가 추가되었고, `OPTIMAL_EXIT_PARAMS` (KOSPI/KOSDAQ/Cross) 3개 상수가 그리드서치로 검증되어 코드에 고정됩니다. 1차 익절(TP1) + 트레일링 스탑 분할 청산 로직, blended_return(가중 수익률) 지표가 추가되었습니다.
+> v0.9.0.0부터 **키움 모의투자 자동주문 시스템**(`kiwoom_paper_trader.py`)이 추가되었습니다. Stage/KOSDAQ/Cross/Ichimoku 4개 모델로 T+1 시가 매수주문을 키움 모의투자 서버(mockapi.kiwoom.com)에 제출하고 슬리피지를 측정합니다. `paper_positions` DB 테이블, 3개 스케줄 잡(09:05/16:10/16:40 KST), `/paper·/paper_perf·/paper_exit` 텔레그램 명령어 추가. `OPTIMAL_EXIT_PARAMS_ICHIMOKU` 그리드서치 검증 완료(val_sharpe 7.50, val_win_rate 55.8%). `/volume` 명령어가 `/top`(당일 거래금액 상위 10, KOSPI+KOSDAQ)으로 교체되었습니다. Supabase PgBouncer 호환(`statement_cache_size=0`), RLS 개별 적용(`_RLS_ALWAYS` / `_RLS_IF_EXISTS` DO 블록) 수정.
 > v0.7.3.0부터 **거래대금 워치리스트 일보**(Layer 6)가 추가되었습니다. Stage 1 진입 종목을 14캘린더일 동안 매일 17:00 KST에 추적합니다. 거래대금 건강도(vol_ratio = 오늘거래량/진입거래량), 외국인·기관 스트릭, Ichimoku 주봉 통과 여부를 통합하여 Telegram 일보를 발송합니다. Stage 1→2 전환 시 즉시 알림, vol_ratio < 0.6 3거래일 연속 시 랠리 소멸 경고. `watchlist_vol_log` 테이블로 일별 vol_ratio 이력 유지. `python run_scheduler.py --once watchlist|stage`로 즉시 실행 가능.
 
 ---
@@ -375,6 +377,46 @@ CREATE TABLE krx_listings (
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 -- 인덱스: name_ko, name_ko_abbr, short_code, updated_at
+
+-- 시간외 단일가 스냅샷 (v0.7.x~, kiwoom/krx_aftermarket_sync.py)
+CREATE TABLE aftermarket_snap (
+    trade_date    DATE           NOT NULL,
+    ticker        VARCHAR(12)    NOT NULL,   -- yfinance 심볼 (005930.KS 등)
+    reg_close     NUMERIC(12,0),             -- 정규장 종가
+    after_close   NUMERIC(12,0),             -- 시간외 체결가
+    after_volume  BIGINT,
+    after_value   BIGINT,
+    after_chg_pct NUMERIC(6,2),
+    fetched_at    TIMESTAMPTZ    NOT NULL DEFAULT now(),
+    PRIMARY KEY (trade_date, ticker)
+);
+
+-- 키움 모의투자 포지션 (v0.9.0.0~, kiwoom_paper_trader.py)
+CREATE TABLE paper_positions (
+    id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    model           VARCHAR(20)  NOT NULL,   -- stage|kosdaq|cross|ichimoku
+    ticker          VARCHAR(20)  NOT NULL,
+    signal_date     DATE         NOT NULL,
+    entry_theory    FLOAT        NOT NULL,   -- T+0 종가 (백테스트 가정 진입가)
+    entry_actual    FLOAT,                   -- T+1 시가 (Kiwoom 실제 체결가)
+    slippage_pct    FLOAT,                   -- (entry_actual - entry_theory) / entry_theory
+    qty             INTEGER,
+    kiwoom_buy_no   VARCHAR(20),
+    kiwoom_sell_no  VARCHAR(20),
+    tp1_pct         FLOAT        NOT NULL DEFAULT 0.15,
+    tp1_ratio       FLOAT        NOT NULL DEFAULT 0.50,
+    trail_pct       FLOAT        NOT NULL DEFAULT 0.10,
+    hard_stop_pct   FLOAT        NOT NULL DEFAULT 0.10,
+    tp1_date        DATE,
+    tp1_price       FLOAT,
+    watermark       FLOAT,                   -- 고점 추적 (트레일링 스탑용)
+    exit_date       DATE,
+    exit_price      FLOAT,
+    exit_type       VARCHAR(20),             -- tp1|trailing|hard_stop|max_hold|manual
+    blended_return  FLOAT,                   -- tp1_ratio×tp1_ret + (1-tp1_ratio)×final_ret
+    status          VARCHAR(20)  NOT NULL DEFAULT 'pending',  -- pending|open|closed
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
 ```
 
 **주요 함수**:
@@ -416,13 +458,16 @@ DATABASE_URL 환경변수 → DB_HOST/PORT/NAME/USER/PASSWORD 개별 변수
 |--------|------|
 | `/status` | 업타임, 누적 수집 건수, 최근 24h 수집·신호 건수 |
 | `/signals` | 최근 매매 신호 10건 (direction, strength, reason, 시각) |
-| `/signals buy` | BUY 신호만 필터링하여 조회 |
-| `/signals sell` | SELL 신호만 필터링하여 조회 |
-| `/signals watch` | WATCH 신호만 필터링하여 조회 |
+| `/signals buy\|sell\|watch` | 방향별 신호 필터링 조회 |
 | `/today` | 오늘 카테고리별 수집 건수 + 최신 기사 5건 한글 요약 |
-| `/backtest` | 판정별·유형별·종목별 적중률 백테스팅 리포트 (48h 데이터 신선도 경고 포함) |
-| `/backtest2 <mode> <start> <end>` | 통합 백테스트 — ichimoku/stage/cross 모드, 기간 지정 (v0.7.0.0~) |
+| `/backtest` | 판정별·유형별·종목별 적중률 백테스팅 리포트 |
+| `/backtest2 <mode> <start> <end> [--tp1 F] [--trail F] [--stop F]` | 통합 백테스트 — ichimoku/stage/cross 모드, 분할 청산 파라미터 지원 (v0.8.0.0~) |
+| `/scan` | 주봉 스크리닝 즉시 실행 |
 | `/screener` | 최신 주봉 차트 스크리닝 결과 — DM + 채널 동시 발송 |
+| `/top` | 당일 거래금액 상위 10 종목 (KOSPI+KOSDAQ 합산, fdr.StockListing) (v0.9.0.0~) |
+| `/paper` | 모의투자 현재 포지션 현황 (모델별 open·pending, 미실현 수익률) (v0.9.0.0~) |
+| `/paper_perf` | 모의투자 누적 성과 — 실전 승률·평균 수익·슬리피지 (v0.9.0.0~) |
+| `/paper_exit <종목코드>` | 모의투자 특정 종목 수동 강제 청산 (v0.9.0.0~) |
 | `/help` | 명령어 목록 |
 
 **알림 예시 (`/signals`)**:
@@ -528,7 +573,31 @@ class ScreenResult:
 
 ---
 
-### 3-9. `telegram_notify.py` — 신호 알림 전송
+### 3-9. `kiwoom_paper_trader.py` — 키움 모의투자 자동주문 (v0.9.0.0~)
+
+**역할**: 키움 모의투자 서버(mockapi.kiwoom.com)에 실제 주문을 제출하고, 백테스트 진입가(T+0 종가)와 실전 진입가(T+1 시가 체결가) 사이의 슬리피지를 측정합니다.
+
+**4개 모델 파라미터** (그리드서치 검증값):
+
+| 모델 | 신호 소스 | 슬롯 | tp1 | tp1_ratio | trail | stop | val_sharpe |
+|------|----------|------|-----|-----------|-------|------|-----------|
+| `stage` | Stage 1 (KOSPI) | 10 | 25% | 50% | 10% | 10% | 4.70 |
+| `kosdaq` | Stage 1 (KOSDAQ) | 10 | 25% | 50% | 15% | 10% | 5.48 |
+| `cross` | Stage 1 ∩ Ichimoku | 5 | 15% | 50% | 10% | 10% | 5.11 |
+| `ichimoku` | 주봉 Ichimoku 7조건 | 10 | 25% | **70%** | 10% | 10% | **7.50** |
+
+**스케줄 잡 3개** (`run_scheduler.py`):
+- `09:05 KST` — `open_entry`: pending → T+1 시가로 키움 모의투자 매수주문
+- `16:10 KST` — `exit_checker`: open 포지션 EOD 가격 → 손절/익절/트레일 매도주문
+- `16:40 KST` — `eod_sampler`: Stage1·Ichimoku·Cross 신호 샘플링 → pending 삽입
+
+**exit_type 분류**: `hard_stop` → `tp1` 기록 → `trailing` → `max_hold`(91일) → `manual`
+
+**슬리피지 측정 목표**: `-0.5% ~ +0.5%` 범위 내 유지 시 백테스트 엣지 유효 판정
+
+---
+
+### 3-10. `telegram_notify.py` — 신호 알림 전송
 
 **역할**: 유효 신호 감지 시 즉시 텔레그램 전송. 주봉 스크리닝 결과는 DM + 채널 동시 발송 (v0.2.7.0~: 섹터별 그룹 포맷 — 상위 5개 섹터 × 섹터당 상위 3종목).
 
@@ -569,33 +638,45 @@ test_feed/
 ├── generate_html_report.py        # 차트 스크리닝 결과를 HTML 파일로 저장
 ├── telegram_bot.py                # 봇 명령어 처리 (/status /signals /today /backtest /backtest2 /screener /help)
 ├── telegram_notify.py             # 신호 알림 전송 + Ichimoku/Stage 비교 메시지
-├── volume_pattern.py              # 거래량 패턴 분석
+├── volume_pattern.py              # 거래량 패턴 분석 (resolve_ticker, fetch_data, build_report)
 ├── krx_sync.py                    # KRX 전체 종목 DB 동기화 (KOSPI+KOSDAQ ~2500종목)
 ├── krx_openapi.py                 # KRX Open API REST 클라이언트 — OHLCV·종목마스터·지수 (v0.7.1.0~)
+├── krx_aftermarket_sync.py        # KRX 시간외 단일가 → aftermarket_snap 적재
+├── kiwoom_aftermarket_sync.py     # Kiwoom REST API 시간외 단일가 → aftermarket_snap 적재
+├── kiwoom_paper_trader.py         # 키움 모의투자 자동주문 — 4모델, paper_positions 테이블 (v0.9.0.0~)
 ├── ohlcv_cache.py                 # OHLCV DB 캐시 레이어 (psycopg2, daily_ohlcv 테이블) (v0.7.1.0~)
 ├── krx_flow_sync.py               # 외국인·기관 순매수 파이프라인 → daily_flow 테이블 (v0.7.1.0~)
 ├── ticker_cache.py                # 종목명→yfinance 심볼 인메모리 캐시 (startup 로드, 20:00 KST 갱신)
 │
-├── batch_run.py                   # 배치 OHLCV 내보내기 + 분석 스크립트
-│
 ├── tests/
 │   ├── conftest.py                # pytest sys.path 설정
-│   ├── test_backtest.py           # pytest — 백테스팅 로직 (23개)
-│   ├── test_telegram_routing.py   # pytest — 텔레그램 신호 라우팅 회귀 (4개)
+│   ├── test_backtest.py           # pytest — 뉴스 백테스팅 로직
+│   ├── test_backtest_engine.py    # pytest — 통합 백테스트 엔진 (ichimoku/stage/cross)
+│   ├── test_exit_model.py         # pytest — TP1·트레일링·하드스탑 분할 청산 로직
+│   ├── test_telegram_routing.py   # pytest — 텔레그램 신호 라우팅 회귀
 │   ├── test_summarizer_regression_1.py # pytest — LLM 헬스체크·Qwen3 thinking 회귀
-│   ├── test_krx_sync.py           # pytest — KRX 동기화 + 티커 캐시 (31개)
-│   ├── test_ticker_cache_integration.py # pytest — market_data·volume_pattern 캐시 통합 (7개)
-│   ├── test_article_type.py       # pytest — 기사 유형 분류 (17개)
-│   ├── test_db_dsn.py             # pytest — DB DSN 설정 (7개)
-│   ├── test_macro_signal.py       # pytest — MACD/BB/MA 교차분석 스코어링 (29개)
-│   ├── test_signal_prompt.py      # pytest — 신호 감지 프롬프트 · WATCH 임계값 회귀 (10개)
-│   ├── test_chart_screener.py     # pytest — 스크리너 조건 A~G + KIND 섹터 (26개)
-│   ├── test_screener_telegram_regression_1.py # pytest — 스크리너 텔레그램 포맷 회귀 (14개)
-│   ├── test_fundamental.py        # pytest — PER/PBR/EPS 펀더멘털 레이어 (41개)
-│   ├── test_generate_html_report.py # pytest — HTML 리포트 생성 (10개)
-│   ├── test_stage_classifier.py   # pytest — 일봉 3단계 분류기 전 코드패스 (29개)
-│   ├── test_backtest_engine.py    # pytest — 통합 백테스트 엔진 (65개)
-│   └── test_watchlist_brief.py    # pytest — 워치리스트 일보 포맷 + DB 헬퍼 (22개) (v0.7.3.0~)
+│   ├── test_krx_sync.py           # pytest — KRX 동기화 + 티커 캐시
+│   ├── test_ticker_cache_integration.py # pytest — market_data·volume_pattern 캐시 통합
+│   ├── test_article_type.py       # pytest — 기사 유형 분류
+│   ├── test_db_dsn.py             # pytest — DB DSN 설정
+│   ├── test_macro_signal.py       # pytest — MACD/BB/MA 교차분석 스코어링
+│   ├── test_signal_prompt.py      # pytest — 신호 감지 프롬프트 · WATCH 임계값 회귀
+│   ├── test_chart_screener.py     # pytest — 스크리너 조건 A~G + KIND 섹터
+│   ├── test_screener_telegram_regression_1.py # pytest — 스크리너 텔레그램 포맷 회귀
+│   ├── test_fundamental.py        # pytest — PER/PBR/EPS 펀더멘털 레이어
+│   ├── test_generate_html_report.py # pytest — HTML 리포트 생성
+│   ├── test_stage_classifier.py   # pytest — 일봉 3단계 분류기
+│   ├── test_trade_integration.py  # pytest — trade_log GENERATED COLUMN DB 검증
+│   ├── test_trade_journal.py      # pytest — /buy /sell /port /pnl 거래 저널
+│   ├── test_volume_integration.py # pytest — _send_plain, fetch_data 시간대 회귀
+│   └── test_watchlist_brief.py    # pytest — 워치리스트 일보 포맷 + DB 헬퍼 (v0.7.3.0~)
+│
+├── scripts/
+│   ├── register_task.ps1          # Windows 작업 스케줄러 등록 (NewsCrawler)
+│   ├── register_aftermarket_task.ps1 # 시간외 단일가 수집 태스크 등록
+│   ├── restart_scheduler.bat      # NewsCrawler 재시작 (DB 스키마 변경 후 사용)
+│   ├── check_aftermarket_log.ps1  # 시간외 수집 로그 확인
+│   └── run_sweep.py               # 파라미터 그리드서치 스위프 (288 조합)
 │
 ├── VERSION                        # 현재 버전 (SemVer 4자리)
 ├── CHANGELOG.md                   # 변경 이력
@@ -607,9 +688,7 @@ test_feed/
 ├── pytest.ini                     # testpaths = tests
 │
 ├── sql/pgadmin_queries.sql        # DB 관리 쿼리
-├── scripts/register_task.ps1      # Windows 작업 스케줄러 등록
-├── scripts/Run.ps1                # Windows 실행 스크립트
-└── scripts/start_crawler.bat      # 배치 실행 파일
+└── start_crawler.bat              # NewsCrawler 배치 실행 (Task Scheduler 연결)
 ```
 
 ---
@@ -658,6 +737,14 @@ KRX_OPENAPI_KEY=your_krx_openapi_key
 # KRX 포털 계정 — 수급 데이터 (data.krx.co.kr, krx_flow_sync.py)
 KRX_ID=your_krx_id
 KRX_PW=your_krx_password
+
+# Kiwoom REST API — 실전 (시간외 단일가 수집)
+KIWOOM_APP_KEY=your_kiwoom_app_key
+KIWOOM_APP_SECRET=your_kiwoom_app_secret
+
+# Kiwoom 모의투자 — paper trading (KIWOOM_MOCK_APPKEY 설정 시 자동 활성화)
+KIWOOM_MOCK_APPKEY=your_mock_appkey
+KIWOOM_MOCK_APPSECRET=your_mock_appsecret
 ```
 
 ### 6-2. 로컬 LLM 실행
@@ -721,7 +808,10 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 | DB 비밀번호 로그에 미노출 (host/db만 출력) | ✅ |
 | Telegram Token 환경변수로만 관리 | ✅ |
 | 신호는 참고용임을 메시지에 항상 명시 | ✅ |
-| 자동 주문 기능 없음 | ✅ |
+| 실거래 자동 주문 기능 없음 | ✅ |
+| Supabase RLS 활성화 — 전 테이블 PostgREST anon 노출 차단 | ✅ (v0.9.0.0~) |
+| asyncpg `statement_cache_size=0` — Supabase PgBouncer 호환 | ✅ (v0.9.0.0~) |
+| 모의투자는 키움 가상 계좌 전용 (실자산 영향 없음) | ✅ |
 
 ---
 
@@ -742,4 +832,4 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 
 ---
 
-*현재 코드베이스 v0.7.1.0 (2026-05-05) 기준*
+*현재 코드베이스 v0.9.0.0 (2026-05-16) 기준*
