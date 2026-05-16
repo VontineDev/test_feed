@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import pytest
+import pytest_asyncio
 from datetime import date, timedelta
 
 # DB 접근 불가 시 전체 모듈 skip
@@ -28,7 +29,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@pytest.fixture(scope="module")
+@pytest_asyncio.fixture
 async def pool():
     import asyncpg
     from db import get_dsn, _CREATE_TRADE_LOG
@@ -44,7 +45,7 @@ async def pool():
     await p.close()
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def clean_trade(pool):
     """테스트 전후 test ticker의 trade_log 정리."""
     ticker = "000000.TS"  # 실존하지 않는 테스트 ticker
