@@ -450,8 +450,8 @@ async def _handle_backtest2(
             await _send_plain(http, chat_id, f"백테스트 실행 중 오류: {e}")
 
 
-async def _handle_volume(http: httpx.AsyncClient, chat_id: str, args: list[str]) -> None:
-    """/volume — 당일 거래금액 상위 10개 종목 (KOSPI+KOSDAQ 합산)"""
+async def _handle_top(http: httpx.AsyncClient, chat_id: str, args: list[str]) -> None:
+    """/top — 당일 거래금액 상위 10개 종목 (KOSPI+KOSDAQ 합산)"""
     import pandas as _pd
     import FinanceDataReader as _fdr
     from datetime import date as _date
@@ -494,7 +494,7 @@ async def _handle_volume(http: httpx.AsyncClient, chat_id: str, args: list[str])
         msg = await loop.run_in_executor(None, _fetch)
         await _send_plain(http, chat_id, msg)
     except Exception as e:
-        logger.warning("[봇] /volume 오류: %s", e)
+        logger.warning("[봇] /top 오류: %s", e)
         await _send_plain(http, chat_id, f"오류: {e}")
 
 
@@ -824,7 +824,7 @@ async def _handle_help(http: httpx.AsyncClient, chat_id: str) -> None:
         "/backtest2 \\<mode\\> \\<start\\> \\<end\\> — 통합 백테스트 \\(이치모쿠/3단계/교차\\)",
         "  예\\) /backtest2 ichimoku 2025\\-01\\-01 2026\\-01\\-01",
         "  모드\\: ichimoku \\| stage \\| cross",
-        "/volume — 당일 거래금액 상위 10 \\(KOSPI\\+KOSDAQ\\)",
+        "/top — 당일 거래금액 상위 10 \\(KOSPI\\+KOSDAQ\\)",
         "/screener — 최신 주봉 차트 스크리닝 결과 \\(DB 조회\\)",
         "/scan — 주봉 스크리닝 즉시 실행 \\(전 종목 실시간 스캔, 약 10\\~20분\\)",
         "/paper — 모의투자 오픈 포지션 현황",
@@ -884,8 +884,8 @@ async def _process_update(http: httpx.AsyncClient, update: dict, pool) -> None:
         await _handle_backtest(http, chat_id, pool)
     elif cmd == "/backtest2":
         await _handle_backtest2(http, chat_id, args)
-    elif cmd == "/volume":
-        await _handle_volume(http, chat_id, args)
+    elif cmd == "/top":
+        await _handle_top(http, chat_id, args)
     elif cmd == "/screener":
         await _handle_screener(http, chat_id, pool)
     elif cmd == "/scan":
@@ -926,7 +926,7 @@ async def _register_commands(http: httpx.AsyncClient) -> None:
         {"command": "today",    "description": "오늘 수집 현황 + 최신 기사"},
         {"command": "backtest",  "description": "교차분석 백테스팅 리포트"},
         {"command": "backtest2", "description": "통합 백테스트 (이치모쿠/3단계/교차) — /backtest2 ichimoku 2025-01-01 2026-01-01"},
-        {"command": "volume",    "description": "당일 거래금액 상위 10 (KOSPI+KOSDAQ)"},
+        {"command": "top",       "description": "당일 거래금액 상위 10 (KOSPI+KOSDAQ)"},
         {"command": "screener", "description": "최신 주봉 차트 스크리닝 결과 (DB 조회)"},
         {"command": "scan",     "description": "주봉 스크리닝 즉시 실행 (전 종목 실시간 스캔)"},
         {"command": "buy",      "description": "진입 기록 — /buy 005930 70000 100 [YYYYMMDD]"},
