@@ -237,7 +237,7 @@ async def send_signal(
             "CONFIRM": "✅", "CAUTION": "⚠️",
             "FILTER": "🚫", "NEUTRAL": "➖",
         }.get(cross.verdict, "")
-        score_line = f"📊 교차분석: {verdict_icon} {esc(cross.verdict)} {cross.score}/10"
+        score_line = f"📊 교차분석: {verdict_icon} {esc(cross.verdict)} {cross.score}/10 \\(신호시점 당일\\)"
         for ctx in cross.price_contexts[:3]:
             sign = "▲" if ctx.change_pct >= 0 else "▼"
             rsi_str = f" RSI\\:{esc(str(ctx.rsi))}" if ctx.rsi else ""
