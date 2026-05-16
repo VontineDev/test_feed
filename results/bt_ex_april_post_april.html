@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>백테스트 리포트 — 이치모쿠×3단계 2026-05-01~2026-05-16</title>
+<style>
+:root {
+  --bg:#0d1117; --bg-s:#161b22; --text:#e6edf3; --muted:#7d8590;
+  --border:#30363d; --accent:#58a6ff; --pos:#3fb950; --neg:#f85149;
+  --ui:system-ui,-apple-system,'Segoe UI',sans-serif;
+  --mono:'JetBrains Mono','Consolas',monospace;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--ui);font-size:14px;padding:24px}
+header{border-bottom:1px solid var(--border);padding-bottom:12px;margin-bottom:20px}
+header h1{font-size:18px;font-weight:600;margin-bottom:4px}
+.meta{color:var(--muted);font-size:12px}
+h2{font-size:14px;font-weight:600;margin:24px 0 8px;color:var(--accent)}
+.cards{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:24px}
+.card{background:var(--bg-s);border:1px solid var(--border);border-radius:6px;padding:12px 16px;min-width:130px}
+.card .lbl{font-size:11px;color:var(--muted);margin-bottom:4px}
+.card .val{font-size:20px;font-weight:600;font-family:var(--mono)}
+.pos{color:var(--pos)} .neg{color:var(--neg)} .muted{color:var(--muted)}
+table{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:13px;margin-top:8px}
+th,td{padding:6px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+th{background:var(--bg-s);color:var(--muted);font-weight:500;cursor:pointer;user-select:none}
+th:hover{color:var(--accent)} th.num,td.num{text-align:right}
+.badge{font-size:10px;background:var(--bg-s);border:1px solid var(--border);border-radius:3px;padding:1px 4px}
+.s1{color:#58a6ff;border-color:#58a6ff} .s2{color:#3fb950;border-color:#3fb950}
+.cross{color:#d29922;border-color:#d29922} .ichi{color:#a371f7;border-color:#a371f7}
+.sell-ma{color:#f85149;border-color:#f85149} .sell-sl{color:#b03060;border-color:#b03060}
+.sell-cloud{color:#79c0ff;border-color:#79c0ff} .sell-dc{color:#d29922;border-color:#d29922}
+.tbl-wrap{overflow-x:auto}
+footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--border);color:var(--muted);font-size:11px}
+.filter-bar{background:var(--bg-s);border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-bottom:10px}
+.filter-row{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+.fi{display:flex;flex-direction:column;gap:3px}
+.fi label{font-size:11px;color:var(--muted)}
+.fi input,.fi select{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:3px 7px;font-size:12px;font-family:var(--mono);min-width:110px;transition:border-color .15s}
+.fi input:focus,.fi select:focus{outline:none;border-color:var(--accent)}
+.fi input.fi-on,.fi select.fi-on{border-color:var(--accent);background:rgba(88,166,255,.06)}
+.stg-btns,.wl-btns{display:flex;gap:4px}
+.stg-btn,.wl-btn{background:var(--bg);border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:3px 10px;cursor:pointer;font-size:12px;font-family:var(--mono);transition:all .15s}
+.stg-btn.stg-on{border-color:var(--accent);color:var(--accent)}
+.wl-btn.wl-on.wl-all{border-color:var(--muted);color:var(--text)}
+.wl-btn.wl-on.wl-win{border-color:var(--pos);color:var(--pos);background:rgba(63,185,80,.08)}
+.wl-btn.wl-on.wl-loss{border-color:var(--neg);color:var(--neg);background:rgba(248,81,73,.08)}
+.btn-reset{background:var(--bg);border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:4px 12px;cursor:pointer;font-size:12px;align-self:flex-end}
+.btn-reset:hover{border-color:var(--accent);color:var(--accent)}
+.result-info{align-self:flex-end;font-family:var(--mono);line-height:1.2}
+#vis-count{font-size:20px;font-weight:700;color:var(--accent)}
+.cnt-tot{font-size:11px;color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <h1>백테스트 리포트 &nbsp;│&nbsp; 이치모쿠×3단계</h1>
+  <p class="meta">기간: 2026-05-01 ~ 2026-05-16 &nbsp;│&nbsp; 시장: ALL &nbsp;│&nbsp; 신호: 11건 &nbsp;│&nbsp; 거래비용(RT): 0.210% &nbsp;│&nbsp; 산출: 2026-05-16T16:16</p>
+</header>
+
+<h2>요약</h2>
+<div class="cards">
+  <div class="card"><div class="lbl">신호 수</div><div class="val">11</div></div>
+  <div class="card"><div class="lbl">승률 7d</div><div class="val neg">+42.9%</div></div>
+  <div class="card"><div class="lbl">승률 28d</div><div class="val neg">—</div></div>
+  <div class="card"><div class="lbl">승률 91d</div><div class="val neg">—</div></div>
+  <div class="card"><div class="lbl">평균수익 28d</div><div class="val pos">—</div></div>
+  <div class="card"><div class="lbl">평균수익 91d</div><div class="val pos">—</div></div>
+  <div class="card"><div class="lbl">KOSPI 초과 28d</div><div class="val pos">—</div></div>
+  <div class="card"><div class="lbl">샤프비율 28d</div><div class="val">—</div></div>
+  <div class="card"><div class="lbl">MDD</div><div class="val neg">—</div></div>
+  <div class="card"><div class="lbl">MA20/손절 승률</div><div class="val neg">+27.3%</div></div>
+  <div class="card"><div class="lbl">평균 매도수익</div><div class="val neg">-3.3%</div></div>
+  <div class="card"><div class="lbl">평균 보유일</div><div class="val">5.2일</div></div>
+  
+  
+  <div class="card"><div class="lbl">평균 종목MDD(91d)</div><div class="val neg">-7.9%</div></div>
+</div>
+
+<h2>28d 수익률 분포</h2>
+<div style="margin-bottom:24px"><span class='muted'>28d 데이터 없음</span></div>
+
+<h2>종목별 결과 (11건)</h2>
+<div class="filter-bar">
+<div class="filter-row">
+  <div class="fi"><label>종목명</label><input type="text" id="f-name" placeholder="검색..." oninput="applyFilter()"></div>
+  <div class="fi"><label>업종</label><select id="f-sector" onchange="applyFilter()"><option value="">전체</option><option>고무제품 제조업</option><option>금융 지원 서비스업</option><option>기타 운송관련 서비스업</option><option>보험업</option><option>자동차 신품 부품 제조</option><option>자동차용 엔진 및 자동</option><option>자료처리, 호스팅, 포</option><option>전자부품 제조업</option><option>컴퓨터 프로그래밍, 시</option><option>항공 여객 운송업</option></select></div>
+  
+  <div class="fi"><label>수익 / 손실</label><div class="wl-btns"><button class="wl-btn wl-on wl-all" data-wl="" onclick="setWL(this)">전체</button><button class="wl-btn wl-win" data-wl="win" onclick="setWL(this)">수익</button><button class="wl-btn wl-loss" data-wl="loss" onclick="setWL(this)">손실</button></div></div>
+  <div class="fi"><label>청산유형</label><select id="f-exit" onchange="applyFilter()"><option value="">전체</option><option>hard_stop</option><option>period_end</option></select></div>
+  <div class="fi"><label>최종수익(%)</label><div style="display:flex;gap:4px;align-items:center"><input type="number" id="f-ret-min" step="1" placeholder="최소" oninput="applyFilter()" style="width:65px"><span style="color:var(--muted)">~</span><input type="number" id="f-ret-max" step="1" placeholder="최대" oninput="applyFilter()" style="width:65px"></div></div>
+  <div class="fi"><label>보유일</label><div style="display:flex;gap:4px;align-items:center"><input type="number" id="f-hd-min" step="1" placeholder="최소" oninput="applyFilter()" style="width:60px"><span style="color:var(--muted)">~</span><input type="number" id="f-hd-max" step="1" placeholder="최대" oninput="applyFilter()" style="width:60px"></div></div>
+  <button class="btn-reset" onclick="resetFilter()">초기화</button>
+  <div class="result-info"><span id="vis-count">11</span><br><span class="cnt-tot">/ 11건 표시</span></div>
+</div>
+</div>
+<div class="tbl-wrap">
+<table id="tbl" data-sc="-1" data-sd="asc">
+<thead><tr>
+  <th onclick="sort(0,false)">신호일</th>
+  <th onclick="sort(1,false)">종목명</th>
+  <th onclick="sort(2,false)">업종</th>
+  <th onclick="sort(3,false)">티커</th>
+  <th onclick="sort(4,false)">단계</th>
+  <th class="num" onclick="sort(5,true)">진입가</th>
+  <th class="num" onclick="sort(6,true)">현재가</th>
+  <th class="num" onclick="sort(7,true)">현재손익</th>
+  <th class="num" onclick="sort(8,true)">7d</th>
+  <th class="num" onclick="sort(9,true)">28d</th>
+  <th class="num" onclick="sort(10,true)">91d</th>
+  <th class="num" onclick="sort(11,true)">초과(28d)</th>
+  <th onclick="sort(12,false)">S2진행일</th>
+  <th onclick="sort(13,false)">S3진행일</th>
+  <th onclick="sort(14,false)">청산유형</th>
+  <th onclick="sort(15,false)">1차TP일</th>
+  <th onclick="sort(16,false)">최종청산일</th>
+  <th class="num" onclick="sort(17,true)">보유일</th>
+  <th class="num" onclick="sort(18,true)">1차TP수익</th>
+  <th class="num" onclick="sort(19,true)">최종수익(blended)</th>
+  <th class="num" onclick="sort(20,true)">MDD(91d)</th>
+</tr></thead>
+<tbody>
+<tr><td data-v="2026-05-05">2026-05-05</td><td>키움증권</td><td class="muted">금융 지원 서비스업</td><td class="muted">039490.KS <span class="badge">KS</span></td><td><span class="badge cross">교차</span></td><td class="num" data-v="484500.0">484,500</td><td class="num" data-v="396000">396,000</td><td class="num neg" data-v="-1826.6253869969041">-18.3%</td><td class="num neg" data-v="-1548.3477812177505">-15.5%</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="muted" data-v="">—</td><td class="muted" data-v="">—</td><td class="muted">hard_stop</td><td class="muted" data-v="">—</td><td data-v="2026-05-11">2026-05-11</td><td class="num" data-v="6">6d</td><td class="num " data-v="-99999">—</td><td class="num neg" data-v="-1352.269349845201">-13.5%</td><td class="num neg" data-v="-1826.6253869969041">-18.3%</td></tr>
+<tr><td data-v="2026-05-05">2026-05-05</td><td>다우기술</td><td class="muted">자료처리, 호스팅, 포</td><td class="muted">023590.KS <span class="badge">KS</span></td><td><span class="badge cross">교차</span></td><td class="num" data-v="50100.0">50,100</td><td class="num" data-v="43600">43,600</td><td class="num neg" data-v="-1297.4051896207584">-13.0%</td><td class="num neg" data-v="-1388.2654690618756">-13.9%</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="muted" data-v="">—</td><td class="muted" data-v="">—</td><td class="muted">hard_stop</td><td class="muted" data-v="">—</td><td data-v="2026-05-11">2026-05-11</td><td class="num" data-v="6">6d</td><td class="num " data-v="-99999">—</td><td class="num neg" data-v="-1188.6646706586826">-11.9%</td><td class="num neg" data-v="-1367.2654690618763">-13.7%</td></tr>
+<tr><td data-v="2026-05-06">2026-05-06</td><td>대한항공</td><td class="muted">항공 여객 운송업</td><td class="muted">003490.KS <span class="badge">KS</span></td><td><span class="badge cross">교차</span></td><td class="num" data-v="26350.0">26,350</td><td class="num" data-v="26050">26,050</td><td class="num neg" data-v="-113.85199240986688">-1.1%</td><td class="num pos" data-v="339.5313092979135">+3.4%</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="muted" data-v="">—</td><td class="muted" data-v="">—</td><td class="muted">period_end</td><td class="muted" data-v="">—</td><td data-v="2026-05-14">2026-05-14</td><td class="num" data-v="8">8d</td><td class="num " data-v="-99999">—</td><td class="num neg" data-v="-134.85199240986688">-1.3%</td><td class="num neg" data-v="-813.3086876155269">-8.1%</td></tr>
+<tr><td data-v="2026-05-06">2026-05-06</td><td>한국타이어앤테크놀로지</td><td class="muted">고무제품 제조업</td><td class="muted">161390.KS <span class="badge">KS</span></td><td><span class="badge cross">교차</span></td><td class="num" data-v="64700.0">64,700</td><td class="num" data-v="62200">62,200</td><td class="num neg" data-v="-386.3987635239563">-3.9%</td><td class="num neg" data-v="-469.2225656877903">-4.7%</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="muted" data-v="">—</td><td class="muted" data-v="">—</td><td class="muted">period_end</td><td class="muted" data-v="">—</td><td data-v="2026-05-14">2026-05-14</td><td class="num" data-v="8">8d</td><td class="num " data-v="-99999">—</td><td class="num neg" data-v="-407.3987635239563">-4.1%</td><td class="num neg" data-v="-865.533230293663">-8.7%</td></tr>
+<tr><td data-v="2026-05-07">2026-05-07</td><td>현대글로비스</td><td class="muted">기타 운송관련 서비스업</td><td class="muted">086280.KS <span class="badge">KS</span></td><td><span class="badge cross">교차</span></td><td class="num" data-v="251000.0">251,000</td><td class="num" data-v="242000">242,000</td><td class="num neg" data-v="-358.5657370517925">-3.6%</td><td class="num neg" data-v="-379.5657370517925">-3.8%</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="muted" data-v="">—</td><td class="muted" data-v="">—</td><td class="muted">period_end</td><td class="muted" data-v="">—</td><td data-v="2026-05-14">2026-05-14</td><td class="num" data-v="7">7d</td><td class="num " data-v="-99999">—</td><td class="num neg" data-v="-379.5657370517925">-3.8%</td><td class="num neg" data-v="-1478.8732394366198">-14.8%</td></tr>
+<tr><td data-v="2026-05-07">2026-05-07</td><td>현대차2우B</td><td class="muted">—</td><td class="muted">005387.KS <span class="badge">KS</span></td><td><span class="badge cross">교차</span></td><td class="num" data-v="271500.0">271,500</td><td class="num" data-v="279500">279,500</td><td class="num pos" data-v="294.65930018416134">+2.9%</td><td class="num pos" data-v="273.6593001841613">+2.7%</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="muted" data-v="">—</td><td class="muted" data-v="">—</td><td class="muted">period_end</td><td class="muted" data-v="">—</td><td data-v="2026-05-14">2026-05-14</td><td class="num" data-v="7">7d</td><td class="num " data-v="-99999">—</td><td class="num pos" data-v="273.6593001841613">+2.7%</td><td class="num neg" data-v="-227.27272727272728">-2.3%</td></tr>
+<tr><td data-v="2026-05-07">2026-05-07</td><td>현대위아</td><td class="muted">자동차 신품 부품 제조</td><td class="muted">011210.KS <span class="badge">KS</span></td><td><span class="badge cross">교차</span></td><td class="num" data-v="90500.0">90,500</td><td class="num" data-v="92300">92,300</td><td class="num pos" data-v="198.89502762430845">+2.0%</td><td class="num pos" data-v="177.89502762430843">+1.8%</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="muted" data-v="">—</td><td class="muted" data-v="">—</td><td class="muted">period_end</td><td class="muted" data-v="">—</td><td data-v="2026-05-14">2026-05-14</td><td class="num" data-v="7">7d</td><td class="num " data-v="-99999">—</td><td class="num pos" data-v="177.89502762430843">+1.8%</td><td class="num neg" data-v="-533.3333333333334">-5.3%</td></tr>
+<tr><td data-v="2026-05-10">2026-05-10</td><td>기아</td><td class="muted">자동차용 엔진 및 자동</td><td class="muted">000270.KS <span class="badge">KS</span></td><td><span class="badge cross">교차</span></td><td class="num" data-v="174700.0">174,700</td><td class="num" data-v="168000">168,000</td><td class="num neg" data-v="-383.5145964510589">-3.8%</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="muted" data-v="">—</td><td class="muted" data-v="">—</td><td class="muted">period_end</td><td class="muted" data-v="">—</td><td data-v="2026-05-14">2026-05-14</td><td class="num" data-v="4">4d</td><td class="num " data-v="-99999">—</td><td class="num neg" data-v="-404.5145964510589">-4.0%</td><td class="num neg" data-v="-640.6685236768802">-6.4%</td></tr>
+<tr><td data-v="2026-05-12">2026-05-12</td><td>LG디스플레이</td><td class="muted">전자부품 제조업</td><td class="muted">034220.KS <span class="badge">KS</span></td><td><span class="badge cross">교차</span></td><td class="num" data-v="14170.0">14,170</td><td class="num" data-v="14100">14,100</td><td class="num neg" data-v="-49.40014114325986">-0.5%</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="muted" data-v="">—</td><td class="muted" data-v="">—</td><td class="muted">period_end</td><td class="muted" data-v="">—</td><td data-v="2026-05-14">2026-05-14</td><td class="num" data-v="2">2d</td><td class="num " data-v="-99999">—</td><td class="num neg" data-v="-70.40014114325984">-0.7%</td><td class="num neg" data-v="-808.3441981747067">-8.1%</td></tr>
+<tr><td data-v="2026-05-13">2026-05-13</td><td>LG씨엔에스</td><td class="muted">컴퓨터 프로그래밍, 시</td><td class="muted">064400.KS <span class="badge">KS</span></td><td><span class="badge cross">교차</span></td><td class="num" data-v="86100.0">86,100</td><td class="num" data-v="86600">86,600</td><td class="num pos" data-v="58.07200929152101">+0.6%</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="muted" data-v="">—</td><td class="muted" data-v="">—</td><td class="muted">period_end</td><td class="muted" data-v="">—</td><td data-v="2026-05-14">2026-05-14</td><td class="num" data-v="1">1d</td><td class="num " data-v="-99999">—</td><td class="num pos" data-v="37.07200929152101">+0.4%</td><td class="num " data-v="-0.0">-0.0%</td></tr>
+<tr><td data-v="2026-05-13">2026-05-13</td><td>한화생명</td><td class="muted">보험업</td><td class="muted">088350.KS <span class="badge">KS</span></td><td><span class="badge cross">교차</span></td><td class="num" data-v="5490.0">5,490</td><td class="num" data-v="5390">5,390</td><td class="num neg" data-v="-182.1493624772308">-1.8%</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="num " data-v="-99999">—</td><td class="muted" data-v="">—</td><td class="muted" data-v="">—</td><td class="muted">period_end</td><td class="muted" data-v="">—</td><td data-v="2026-05-14">2026-05-14</td><td class="num" data-v="1">1d</td><td class="num " data-v="-99999">—</td><td class="num neg" data-v="-203.1493624772308">-2.0%</td><td class="num neg" data-v="-182.14936247723134">-1.8%</td></tr>
+</tbody>
+</table>
+</div>
+<footer>생성: 2026-05-16T16:16:09.720081+09:00 &nbsp;│&nbsp; S1 조건 5(외·기관 순매수 OR) 적용 | S3 조건 5(외·기관 동시 순매수 AND) 적용 — 970건 기준</footer>
+<script>
+function sort(col,num){
+  const t=document.getElementById('tbl');
+  const p=parseInt(t.dataset.sc);
+  const d=(p===col&&t.dataset.sd==='asc')?'desc':'asc';
+  t.dataset.sc=col; t.dataset.sd=d;
+  const rows=[...t.querySelectorAll('tbody tr')].filter(r=>r.style.display!=='none');
+  const hidden=[...t.querySelectorAll('tbody tr')].filter(r=>r.style.display==='none');
+  rows.sort((a,b)=>{
+    const av=a.cells[col].dataset.v??a.cells[col].textContent.trim();
+    const bv=b.cells[col].dataset.v??b.cells[col].textContent.trim();
+    const c=num?(parseFloat(av)||-1e9)-(parseFloat(bv)||-1e9):av.localeCompare(bv,'ko');
+    return d==='asc'?c:-c;
+  });
+  const tb=t.querySelector('tbody');
+  rows.forEach(r=>tb.appendChild(r));
+  hidden.forEach(r=>tb.appendChild(r));
+  t.querySelectorAll('th').forEach((h,i)=>{
+    h.textContent=h.textContent.replace(/ [▲▼]$/,'');
+    if(i===col)h.textContent+=d==='asc'?' ▲':' ▼';
+  });
+}
+let _wl='';
+function setWL(btn){
+  _wl=btn.dataset.wl;
+  document.querySelectorAll('.wl-btn').forEach(b=>b.classList.remove('wl-on'));
+  btn.classList.add('wl-on');
+  applyFilter();
+}
+function toggleStage(btn){
+  btn.classList.toggle('stg-on');
+  applyFilter();
+}
+function applyFilter(){
+  const name=(document.getElementById('f-name').value||'').toLowerCase();
+  const sector=document.getElementById('f-sector').value;
+  const exit=document.getElementById('f-exit').value;
+  const stages=[...document.querySelectorAll('.stg-btn.stg-on')].map(b=>b.dataset.stg);
+  const allStages=document.querySelectorAll('.stg-btn').length===0;
+  const retMin=document.getElementById('f-ret-min').value;
+  const retMax=document.getElementById('f-ret-max').value;
+  const hdMin=document.getElementById('f-hd-min').value;
+  const hdMax=document.getElementById('f-hd-max').value;
+  ['f-name','f-sector','f-exit','f-ret-min','f-ret-max','f-hd-min','f-hd-max'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el)el.classList.toggle('fi-on',el.value!=='');
+  });
+  let vis=0;
+  document.querySelectorAll('#tbl tbody tr').forEach(row=>{
+    const c=row.cells;
+    const rv=(parseFloat(c[19].dataset.v)||-1e9)/10000*100;
+    const ok=(
+      (!name||c[1].textContent.toLowerCase().includes(name))&&
+      (!sector||c[2].textContent.trim()===sector)&&
+      (allStages||stages.length===0||stages.some(s=>c[4].textContent.includes(s)))&&
+      (!exit||c[14].textContent.includes(exit))&&
+      (!_wl||(_wl==='win'&&rv>0)||(_wl==='loss'&&rv<=0))&&
+      (retMin===''||rv>=parseFloat(retMin))&&
+      (retMax===''||rv<=parseFloat(retMax))&&
+      (hdMin===''||(parseFloat(c[17].dataset.v)||0)>=parseFloat(hdMin))&&
+      (hdMax===''||(parseFloat(c[17].dataset.v)||0)<=parseFloat(hdMax))
+    );
+    row.style.display=ok?'':'none';
+    if(ok)vis++;
+  });
+  document.getElementById('vis-count').textContent=vis;
+}
+function resetFilter(){
+  _wl='';
+  document.getElementById('f-name').value='';
+  document.getElementById('f-sector').value='';
+  document.getElementById('f-exit').value='';
+  document.querySelectorAll('.stg-btn').forEach(b=>b.classList.add('stg-on'));
+  document.querySelectorAll('.wl-btn').forEach(b=>b.classList.remove('wl-on'));
+  const allBtn=document.querySelector('.wl-btn.wl-all');
+  if(allBtn)allBtn.classList.add('wl-on');
+  ['f-ret-min','f-ret-max','f-hd-min','f-hd-max'].forEach(id=>document.getElementById(id).value='');
+  applyFilter();
+}
+</script>
+</body>
+</html>
