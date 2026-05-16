@@ -308,26 +308,29 @@ CREATE INDEX IF NOT EXISTS idx_krx_listings_updated_at
 # ── RLS 활성화 (Supabase PostgREST 노출 차단) ────────────────────
 # 이 백엔드는 asyncpg 직접 연결(postgres/service_role)을 사용하므로 RLS 영향 없음.
 # anon/authenticated 롤이 PostgREST를 통해 테이블에 접근하는 것만 차단.
-# ENABLE ROW LEVEL SECURITY는 이미 활성화된 테이블에 재실행해도 무해함(no-op).
-_ENABLE_RLS = "\n".join(
-    f"ALTER TABLE {tbl} ENABLE ROW LEVEL SECURITY;"
-    for tbl in [
-        "news_articles",
-        "trade_signals",
-        "cross_analysis_results",
-        "cross_analysis_prices",
-        "price_outcomes",
-        "daily_ohlcv",
-        "daily_flow",
-        "chart_signals",
-        "stage_classifications",
-        "watchlist_vol_log",
-        "intraday_volumes",
-        "krx_listings",
-        "trade_log",        # 거래 저널 — PostgREST anon 노출 차단
-        "aftermarket_snap", # 시간외 스냅샷 — init_db 밖에서 생성되므로 여기서도 적용
-    ]
-)
+# 주의: 배치 실행 금지. 한 테이블이 없으면 나머지도 모두 실패하므로 개별 실행.
+# aftermarket_snap / paper_positions 는 별도 스크립트에서 생성 → 여기선 IF EXISTS 형태로 처리.
+_RLS_ALWAYS: list[str] = [
+    "news_articles",
+    "trade_signals",
+    "cross_analysis_results",
+    "cross_analysis_prices",
+    "price_outcomes",
+    "daily_ohlcv",
+    "daily_flow",
+    "chart_signals",
+    "stage_classifications",
+    "watchlist_vol_log",
+    "intraday_volumes",
+    "krx_listings",
+    "trade_log",
+]
+
+# init_db 호출 시점에 아직 없을 수 있는 테이블 — DO 블록으로 안전하게 처리
+_RLS_IF_EXISTS: list[str] = [
+    "aftermarket_snap",   # krx/kiwoom_aftermarket_sync.py ensure_table()에서 생성
+    "paper_positions",    # kiwoom_paper_trader.init_paper_positions()에서 생성
+]
 
 
 async def init_db(pool: asyncpg.Pool) -> None:
@@ -350,7 +353,25 @@ async def init_db(pool: asyncpg.Pool) -> None:
         await conn.execute(
             "ALTER TABLE stage_classifications ADD COLUMN IF NOT EXISTS s1_volume BIGINT"
         )
-        await conn.execute(_ENABLE_RLS)
+        # RLS: 반드시 존재하는 테이블은 개별 실행 (한 번에 보내면 한 테이블 실패 시 전체 롤백)
+        for _tbl in _RLS_ALWAYS:
+            await conn.execute(
+                f"ALTER TABLE {_tbl} ENABLE ROW LEVEL SECURITY;"
+            )
+        # RLS: init_db 시점에 아직 없을 수 있는 테이블 — IF EXISTS 가드
+        for _tbl in _RLS_IF_EXISTS:
+            await conn.execute(
+                f"""
+                DO $$ BEGIN
+                  IF EXISTS (
+                    SELECT FROM information_schema.tables
+                    WHERE table_schema = 'public' AND table_name = '{_tbl}'
+                  ) THEN
+                    ALTER TABLE {_tbl} ENABLE ROW LEVEL SECURITY;
+                  END IF;
+                END $$;
+                """
+            )
     logger.info("DB 테이블 준비 완료 (news_articles, stage_classifications, krx_listings, …)")
 
 
