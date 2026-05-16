@@ -1,64 +1,29 @@
-import { Suspense, lazy, useState } from 'react'
+import { Suspense, lazy } from 'react'
 
 const Heatmap    = lazy(() => import('./components/Heatmap'))
 const Positions  = lazy(() => import('./components/Positions'))
 const SignalFeed = lazy(() => import('./components/SignalFeed'))
 const Scheduler  = lazy(() => import('./components/Scheduler'))
-const Backtest   = lazy(() => import('./components/Backtest'))
 
 const Loading = () => (
   <div style={{ padding: 24, color: '#64748b', textAlign: 'center' as const }}>로딩 중…</div>
 )
 
-type LeftTab = 'heatmap' | 'backtest'
-
 export default function App() {
-  const [leftTab, setLeftTab] = useState<LeftTab>('heatmap')
-
   return (
     <div style={styles.root}>
-      {/* 헤더 */}
       <header style={styles.header}>
         <span style={styles.logo}>📈 Trading Dashboard</span>
         <span style={styles.sub}>KOSPI + KOSDAQ Stage 시스템</span>
       </header>
 
-      {/* 메인 레이아웃 */}
       <main style={styles.main}>
-        {/* 좌측 패널 */}
-        <section style={styles.leftPane}>
-          {/* 탭 */}
-          <div style={styles.tabBar}>
-            <button
-              style={{ ...styles.tab, ...(leftTab === 'heatmap' ? styles.tabActive : {}) }}
-              onClick={() => setLeftTab('heatmap')}
-            >
-              히트맵
-            </button>
-            <button
-              style={{ ...styles.tab, ...(leftTab === 'backtest' ? styles.tabActive : {}) }}
-              onClick={() => setLeftTab('backtest')}
-            >
-              백테스트
-            </button>
-          </div>
-
-          {/* 탭 콘텐츠 */}
-          <div style={styles.tabContent}>
-            {leftTab === 'heatmap' && (
-              <Suspense fallback={<Loading />}>
-                <Heatmap />
-              </Suspense>
-            )}
-            {leftTab === 'backtest' && (
-              <Suspense fallback={<Loading />}>
-                <Backtest />
-              </Suspense>
-            )}
-          </div>
+        <section style={styles.heatmapPane}>
+          <Suspense fallback={<Loading />}>
+            <Heatmap />
+          </Suspense>
         </section>
 
-        {/* 오른쪽 패널 */}
         <aside style={styles.sidebar}>
           <div style={styles.panel}>
             <Suspense fallback={<Loading />}>
@@ -92,18 +57,7 @@ const styles: Record<string, React.CSSProperties> = {
   logo: { fontWeight: 700, fontSize: 16, letterSpacing: 0.5 },
   sub: { fontSize: 12, color: '#475569' },
   main: { display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' },
-  leftPane: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', borderRight: '1px solid #1e293b' },
-  tabBar: {
-    display: 'flex', gap: 0, borderBottom: '1px solid #1e293b', flexShrink: 0,
-    background: '#1a1d2e',
-  },
-  tab: {
-    padding: '8px 20px', border: 'none', background: 'transparent',
-    color: '#64748b', cursor: 'pointer', fontSize: 13, fontWeight: 600,
-    borderBottom: '2px solid transparent', transition: 'color 0.15s',
-  },
-  tabActive: { color: '#93c5fd', borderBottom: '2px solid #3b82f6' },
-  tabContent: { flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' },
+  heatmapPane: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', borderRight: '1px solid #1e293b' },
   sidebar: { width: 380, display: 'flex', flexDirection: 'column', overflowY: 'auto', flexShrink: 0 },
   panel: { flex: 1, minHeight: 200, borderBottom: '1px solid #1e293b', overflow: 'auto' },
   schedulerPanel: { flexShrink: 0 },

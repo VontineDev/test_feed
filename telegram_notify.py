@@ -200,12 +200,8 @@ async def send_signal(
     summary_ko: str,
     signal,                          # TradeSignal
     http=None,
-    cross=None,                      # CrossAnalysis (optional)
 ) -> bool:
-    """
-    매매 신호 감지 시 별도 강조 메시지 전송.
-    cross 교차 분석 결과가 있으면 시세 컨텍스트도 포함.
-    """
+    """매매 신호 감지 시 별도 강조 메시지 전송."""
     try:
         token   = _get_token()
         chat_id = _get_chat_id()
@@ -224,61 +220,16 @@ async def send_signal(
     tickers_str = " ".join(f"`{t}`" for t in signal.tickers) if signal.tickers else "\\-"
     source  = SOURCE_LABEL.get(art["source"], art["source"].upper())
 
-    # 기사 유형 배지 (other 제외)
     article_type = getattr(signal, "article_type", "other") or "other"
     type_badge = TYPE_BADGE.get(article_type, "")
     badge_prefix = f"{type_badge} " if article_type != "other" and type_badge else ""
 
-    # 교차 분석 점수 표시
-    score_line = ""
-    price_lines = []
-    if cross:
-        verdict_icon = {
-            "CONFIRM": "✅", "CAUTION": "⚠️",
-            "FILTER": "🚫", "NEUTRAL": "➖",
-        }.get(cross.verdict, "")
-        score_line = f"📊 교차분석: {verdict_icon} {esc(cross.verdict)} {cross.score}/10 \\(신호시점 당일\\)"
-        for ctx in cross.price_contexts[:3]:
-            sign = "▲" if ctx.change_pct >= 0 else "▼"
-            rsi_str = f" RSI\\:{esc(str(ctx.rsi))}" if ctx.rsi else ""
-            macd_str = ""
-            if ctx.macd_cross == "bullish_cross":
-                macd_str = " MACD\\:▲▲"
-            elif ctx.macd_cross == "bearish_cross":
-                macd_str = " MACD\\:▼▼"
-            elif ctx.macd_hist is not None:
-                macd_str = " MACD\\:▲" if ctx.macd_hist > 0 else " MACD\\:▼"
-            bb_str = f" BB\\:{ctx.bb_pct:.0f}%" if ctx.bb_pct is not None else ""
-            ma_str = ""
-            if ctx.above_ma20 is not None and ctx.above_ma50 is not None:
-                ma_str = f" {'↑' if ctx.above_ma20 else '↓'}MA20 {'↑' if ctx.above_ma50 else '↓'}MA50"
-            per_str = ""
-            pbr_str = ""
-            if getattr(ctx, "eps", None) is not None and ctx.eps < 0:
-                per_str = " 적자"
-            elif getattr(ctx, "per", None) is not None:
-                arrow = "↓" if ctx.per < 15 else ("↑" if ctx.per > 50 else "")
-                if arrow:
-                    per_str = f" PER\\:{ctx.per:.0f}{arrow}"
-            if getattr(ctx, "pbr", None) is not None:
-                if ctx.pbr > 5:
-                    pbr_str = f" PBR\\:{ctx.pbr:.1f}↑"
-                elif ctx.pbr < 1:
-                    pbr_str = f" PBR\\:{ctx.pbr:.1f}↓"
-            price_lines.append(
-                f"  {sign} {esc(ctx.ticker)} {esc(str(abs(ctx.change_pct)))}%{rsi_str}{macd_str}{bb_str}{ma_str}{per_str}{pbr_str}"
-            )
-
     lines = [
         f"{badge_prefix}{icon} *매매 신호 감지 \\- {esc(signal.direction)}*",
         f"강도: {bar} {signal.strength}/5",
-    ]
-    if score_line:
-        lines.append(score_line)
-    lines += ["", f"📰 {esc(art['title'][:70])}", ""]
-    if price_lines:
-        lines += ["💹 시세:"] + price_lines + [""]
-    lines += [
+        "",
+        f"📰 {esc(art['title'][:70])}",
+        "",
         f"💬 {esc(signal.reason)}",
         f"🏷 종목: {tickers_str}",
         f"📡 출처: {esc(source)} \\| {esc(art['published'])}",
