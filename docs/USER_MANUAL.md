@@ -369,9 +369,9 @@ reuters: 23건 / yfinance_news: 15건 / yonhap: 8건
 | `stage` (KOSDAQ) | KOSDAQ — 변동성 크므로 trail 넓게 | 25% | 15% | 10% | 46.7% | 67.7% |
 | `cross` | Ichimoku × Stage 동시 통과 — 신호 적지만 승률 최고 | 15% | 10% | 10% | 54.3% | 46.6% |
 | `stage2` | Stage 2 재매집 구간 진입 전략 | — | — | — | 미검증 | — |
-| `ichimoku` | 주봉 Ichimoku 7조건 + MA20/손절 기존 방식 | — | — | 8% | — | — |
+| `ichimoku` | 주봉 Ichimoku 7조건 단독 | 25% | 10% | 10% | **55.8%** | — |
 
-> 파라미터는 `backtest_engine.OPTIMAL_EXIT_PARAMS` / `OPTIMAL_EXIT_PARAMS_KOSDAQ` / `OPTIMAL_EXIT_PARAMS_CROSS`로 코드에서 import 가능합니다.
+> 파라미터는 `backtest_engine.OPTIMAL_EXIT_PARAMS` / `OPTIMAL_EXIT_PARAMS_KOSDAQ` / `OPTIMAL_EXIT_PARAMS_CROSS` / `OPTIMAL_EXIT_PARAMS_ICHIMOKU`로 코드에서 import 가능합니다.
 
 ---
 
@@ -524,6 +524,23 @@ Stage별:
 
 목표 슬리피지 범위: -0.5% ~ +0.5%
 ```
+
+---
+
+### 모의투자 모델별 파라미터
+
+4개 모델 각각의 진입 신호 소스와 검증된 청산 파라미터입니다.
+
+| 모델 | 신호 소스 | 슬롯 | 포지션 | tp1 | tp1_ratio | trail | stop | val_sharpe | val_승률 |
+|------|----------|------|--------|-----|-----------|-------|------|-----------|---------|
+| `stage` | 일봉 Stage 1 (KOSPI) | 10 | 1,000만원 | 25% | 50% | 10% | 10% | 4.70 | 45.7% |
+| `kosdaq` | 일봉 Stage 1 (KOSDAQ) | 10 | 1,000만원 | 25% | 50% | **15%** | 10% | 5.48 | 46.7% |
+| `cross` | Stage 1 ∩ Ichimoku | 5 | 2,000만원 | **15%** | 50% | 10% | 10% | 5.11 | 54.3% |
+| `ichimoku` | 주봉 Ichimoku 7조건 | 10 | 1,000만원 | 25% | **70%** | 10% | 10% | **7.50** | **55.8%** |
+
+- `tp1_ratio 70%` (ichimoku): 주봉 전략 특성상 TP1 도달 시 70%를 조기 청산하는 것이 그리드서치에서 최적으로 검증됨.
+- `trail 15%` (kosdaq): KOSDAQ 변동성이 커서 트레일링 스탑을 넓게 설정.
+- `tp1 15%` (cross): 신호 수가 적어 과적합을 피하기 위해 보수적으로 설정.
 
 ---
 
