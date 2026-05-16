@@ -12,6 +12,7 @@ KOSPI/KOSDAQ 전 종목을 자동 분석하여 매매 시그널을 Telegram으�
 2. [최초 설치](#2-최초-설치)
 3. [환경변수 설정](#3-환경변수-설정)
 4. [시스템 시작](#4-시스템-시작)
+   - [4-b. 웹 대시보드](#4-b-웹-대시보드)
 5. [Telegram 명령어](#5-telegram-명령어)
    - 정보 조회: /status · /signals · /today · /screener · /top
    - 분석: /backtest · /backtest2 · /scan
@@ -179,6 +180,71 @@ python run_scheduler.py --once stage      # Stage 분류 1회 실행 후 종료
 ### 백그라운드 실행 (Windows)
 
 별도 PowerShell 창을 띄우거나, 작업 스케줄러에 등록하세요.
+
+---
+
+## 4-b. 웹 대시보드
+
+브라우저에서 시스템 상태를 시각적으로 확인하고, 스케줄러 잡을 수동으로 실행할 수 있는 웹 인터페이스입니다.
+
+### 구성 요소
+
+| 컴포넌트 | 설명 |
+|----------|------|
+| **히트맵** | 오늘 Stage 1/2/3 분류 결과를 거래대금 기준 타일 히트맵으로 표시 (30분 캐시) |
+| **포지션** | 모의투자 오픈/대기 포지션 목록과 미실현 수익률 |
+| **신호 피드** | 뉴스 매매 신호 실시간 SSE 스트림 (15초 폴링) |
+| **스케줄러** | Stage 분류·차트 스크리너·모의투자 샘플링 잡 수동 트리거 + 최근 실행 이력 |
+
+### 시작 방법
+
+**방법 1 — 개발 모드 (백엔드 + 프런트엔드 분리 실행)**
+
+```powershell
+# 터미널 1: FastAPI 백엔드
+venv\Scripts\activate
+cd dashboard\backend
+uvicorn main:app --reload --port 8000
+
+# 터미널 2: Vite 프런트엔드 (핫 리로드)
+cd dashboard\frontend
+npm install          # 최초 1회
+npm run dev          # http://localhost:5173
+```
+
+**방법 2 — 프로덕션 모드 (정적 빌드 → FastAPI 서빙)**
+
+```powershell
+# 1. 프런트엔드 빌드
+cd dashboard\frontend
+npm install
+npm run build        # dist/ 폴더 생성
+
+# 2. 백엔드만 기동 (http://localhost:8000)
+cd ..\backend
+venv\Scripts\activate
+uvicorn main:app --port 8000
+```
+
+### 백엔드 환경변수
+
+백엔드는 프로젝트 루트의 `.env`를 그대로 사용합니다 (`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`).
+
+### 스케줄러 트리거 동작 원리
+
+대시보드에서 버튼을 누르면 `scheduler_triggers` 테이블에 `pending` 행이 삽입됩니다.  
+`run_scheduler.py` 가 30초마다 이 행을 감지해 해당 잡을 실행하고 `done`으로 갱신합니다.  
+따라서 **`run_scheduler.py`가 실행 중이어야** 버튼이 실제로 동작합니다.
+
+### API 엔드포인트 요약
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| `GET` | `/api/heatmap` | Stage 히트맵 데이터 (30분 캐시) |
+| `GET` | `/api/positions` | 오픈·대기 포지션 목록 |
+| `GET` | `/api/signals/stream` | 신호 SSE 스트림 |
+| `POST` | `/api/scheduler/trigger` | 잡 수동 트리거 (`{"job": "stage"\|"screener"\|"paper_sample"}`) |
+| `GET` | `/api/scheduler/status` | 최근 트리거 이력 10건 |
 
 ---
 

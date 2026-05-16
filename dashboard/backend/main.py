@@ -39,9 +39,25 @@ _HEATMAP_TTL = 1800  # 초
 
 
 # ── lifespan ──────────────────────────────────────────────────
+_INIT_SQL = """
+CREATE TABLE IF NOT EXISTS scheduler_triggers (
+    id           SERIAL       PRIMARY KEY,
+    job_name     VARCHAR(50)  NOT NULL,
+    requested_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    executed_at  TIMESTAMPTZ,
+    status       VARCHAR(20)  NOT NULL DEFAULT 'pending'
+);
+CREATE INDEX IF NOT EXISTS idx_sched_trig_status
+    ON scheduler_triggers (status, requested_at ASC)
+    WHERE status = 'pending';
+"""
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await get_pool()
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(_INIT_SQL)
     logger.info("DB 풀 준비 완료")
     yield
     await close_pool()
