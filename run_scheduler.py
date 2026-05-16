@@ -941,11 +941,6 @@ async def main(interval: int, enable_summary: bool) -> None:
     else:
         logger.info("[paper] KIWOOM_MOCK_APPKEY 미설정 — 모의투자 비활성")
 
-    _ks_symbols = [v for v in YFINANCE_MAP.values() if v.endswith((".KS", ".KQ"))]
-    if _ks_symbols:
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, prewarm_fundamentals, _ks_symbols)
-
     # 요약 워커 초기화
     worker_task = None
     if enable_summary:
@@ -975,16 +970,6 @@ async def main(interval: int, enable_summary: bool) -> None:
         next_run_time=datetime.now(timezone.utc) + timedelta(seconds=3),  # 스케줄러 시작 후 3초 뒤 첫 실행
         max_instances=1,                            # 중복 실행 방지
         coalesce=True,                              # 밀린 잡 합치기
-        replace_existing=True,
-    )
-
-    scheduler.add_job(
-        _track_outcomes_job,
-        trigger="interval",
-        minutes=30,
-        id="price_tracker",
-        max_instances=1,
-        coalesce=True,
         replace_existing=True,
     )
 
