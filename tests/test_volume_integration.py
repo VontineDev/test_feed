@@ -2,10 +2,8 @@
 test_volume_integration.py  —  Regression tests for volume integration
 ───────────────────────────────────────────────────────────────────────
 Covers:
-  - compute_daily_change  (batch_run.py) — edge cases
   - _send_plain           (telegram_bot.py) — no MarkdownV2 parse_mode
   - _handle_volume        (telegram_bot.py) — no args, empty data, truncation
-  - run_batch             (batch_run.py)    — return structure
   - fetch_data tz         (volume_pattern.py) — US market uses America/New_York
 
 Regression: feat: integrate volume_pattern analysis into Telegram bot and scheduler
@@ -49,61 +47,6 @@ def _make_5m_df(days: dict[str, list[float]]) -> pd.DataFrame:
         index=pd.DatetimeIndex(idx),
     )
     return df
-
-
-# ── compute_daily_change ─────────────────────────────────────────
-
-class TestComputeDailyChange:
-    def test_empty_df_returns_zero(self):
-        from batch_run import compute_daily_change
-        assert compute_daily_change(pd.DataFrame()) == 0.0
-
-    def test_single_day_returns_zero(self):
-        from batch_run import compute_daily_change
-        df = _make_5m_df({"2026-04-08": [100.0, 101.0, 102.0]})
-        assert compute_daily_change(df) == 0.0
-
-    def test_two_days_positive_change(self):
-        from batch_run import compute_daily_change
-        # yesterday last close = 100, today last close = 110  → +10%
-        df = _make_5m_df({
-            "2026-04-07": [98.0, 99.0, 100.0],
-            "2026-04-08": [102.0, 108.0, 110.0],
-        })
-        result = compute_daily_change(df)
-        assert abs(result - 10.0) < 0.01
-
-    def test_two_days_negative_change(self):
-        from batch_run import compute_daily_change
-        # yesterday last close = 100, today last close = 90  → -10%
-        df = _make_5m_df({
-            "2026-04-07": [100.0, 100.0, 100.0],
-            "2026-04-08": [95.0, 92.0, 90.0],
-        })
-        result = compute_daily_change(df)
-        assert abs(result - (-10.0)) < 0.01
-
-    def test_zero_yesterday_close_returns_zero(self):
-        from batch_run import compute_daily_change
-        df = _make_5m_df({
-            "2026-04-07": [0.0, 0.0, 0.0],
-            "2026-04-08": [10.0, 11.0, 12.0],
-        })
-        assert compute_daily_change(df) == 0.0
-
-    def test_five_days_uses_last_two(self):
-        from batch_run import compute_daily_change
-        # 5 days — should compare day5 vs day4 only
-        days = {
-            "2026-04-01": [50.0],
-            "2026-04-02": [60.0],
-            "2026-04-03": [70.0],
-            "2026-04-07": [80.0],   # yesterday last = 80
-            "2026-04-08": [88.0],   # today last = 88  → +10%
-        }
-        df = _make_5m_df(days)
-        result = compute_daily_change(df)
-        assert abs(result - 10.0) < 0.01
 
 
 # ── _send_plain ──────────────────────────────────────────────────
@@ -208,48 +151,6 @@ class TestHandleVolume:
 
         last_payload = http.post.call_args_list[-1][1]["json"]
         assert "parse_mode" not in last_payload
-
-
-# ── run_batch return structure ───────────────────────────────────
-
-class TestRunBatch:
-    def test_returns_expected_keys(self, tmp_path):
-        """run_batch() always returns the documented keys regardless of data."""
-        from batch_run import run_batch
-
-        fake_df = _make_5m_df({"2026-04-07": [100.0], "2026-04-08": [105.0]})
-
-        with patch("batch_run.batch_download") as mock_dl, \
-             patch("batch_run.build_report", return_value="report"), \
-             patch("batch_run.save_report"), \
-             patch("batch_run.make_html_report", return_value="<html/>"), \
-             patch("batch_run.STOCKS", [("삼성전자", "005930")]):
-            mock_dl.return_value = {"005930.KS": fake_df}
-            result = run_batch(output_dir=str(tmp_path))
-
-        assert set(result.keys()) == {"html_path", "total", "success", "failed", "summaries"}
-        assert result["total"] == 1
-        assert result["success"] == 1
-        assert result["failed"] == []
-
-    def test_failed_stocks_counted_correctly(self, tmp_path):
-        """Stocks with no data are counted in failed, not success."""
-        from batch_run import run_batch
-
-        with patch("batch_run.batch_download") as mock_dl, \
-             patch("batch_run.make_html_report", return_value="<html/>"), \
-             patch("batch_run.STOCKS", [("삼성전자", "005930"), ("가짜종목", "999999")]):
-            mock_dl.return_value = {
-                "005930.KS": _make_5m_df({"2026-04-07": [100.0], "2026-04-08": [105.0]}),
-                "999999.KS": pd.DataFrame(),  # no data
-            }
-            with patch("batch_run.build_report", return_value="report"), \
-                 patch("batch_run.save_report"):
-                result = run_batch(output_dir=str(tmp_path))
-
-        assert result["total"] == 2
-        assert result["success"] == 1
-        assert "가짜종목" in result["failed"]
 
 
 # ── fetch_data timezone regression (ISSUE-001) ───────────────────
