@@ -288,7 +288,7 @@ async def signals_stream(request: Request):
 
 
 # ── POST /api/scheduler/trigger ───────────────────────────────
-_VALID_JOBS = {"stage", "screener", "paper_sample"}
+_VALID_JOBS = {"stage", "screener", "paper_sample", "backtest_track"}
 
 
 class TriggerBody(BaseModel):
@@ -334,6 +334,33 @@ async def scheduler_status():
             """,
         )
     return {"data": [dict(r) for r in rows]}
+
+
+# ── GET /api/backtest ─────────────────────────────────────────
+@app.get("/api/backtest")
+async def get_backtest():
+    """교차분석 백테스팅 지표 반환 (calculate_metrics 결과)."""
+    pool = await get_pool()
+    try:
+        from backtest import calculate_metrics  # project root via sys.path (database.py)
+        metrics = await calculate_metrics(pool)
+        if metrics.get("message"):
+            return {"data": None, "message": metrics["message"]}
+        by_vc = [
+            {"verdict": verdict, "checkpoint": cp, **m}
+            for (verdict, cp), m in metrics["by_verdict_checkpoint"].items()
+        ]
+        return {
+            "data": {
+                "rows": metrics["rows"],
+                "by_verdict_checkpoint": by_vc,
+                "score_correlation": metrics.get("score_correlation", {}),
+                "market_baseline": metrics.get("market_baseline"),
+            }
+        }
+    except Exception as e:
+        logger.error("[backtest] 조회 실패: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── React 정적 파일 서빙 (프로덕션) ──────────────────────────

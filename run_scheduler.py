@@ -1577,6 +1577,10 @@ async def main(interval: int, enable_summary: bool) -> None:
                     await _weekly_screener_job()
                 elif job_name == "paper_sample":
                     await _paper_eod_sampler_job()
+                elif job_name == "backtest_track":
+                    from backtest import track_outcomes
+                    result = await track_outcomes(_db_pool)
+                    logger.info("[trigger] backtest_track 완료 — filled=%d", result.get("filled", 0))
                 else:
                     logger.warning("[trigger] 알 수 없는 잡: %s", job_name)
             finally:
