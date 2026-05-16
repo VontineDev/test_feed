@@ -178,7 +178,7 @@ async def get_positions():
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT p.id, p.ticker, p.model, p.entry_date,
+                SELECT p.id, p.ticker, p.model, p.signal_date,
                        p.entry_actual, p.qty, p.status,
                        p.tp1_pct, p.trail_pct,
                        o.close AS current_price
@@ -189,7 +189,7 @@ async def get_positions():
                     ORDER  BY date DESC LIMIT 1
                 ) o ON TRUE
                 WHERE  p.status IN ('open', 'pending')
-                ORDER  BY p.entry_date DESC
+                ORDER  BY p.signal_date DESC
                 """
             )
         positions = []
