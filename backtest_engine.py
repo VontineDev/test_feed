@@ -88,6 +88,18 @@ OPTIMAL_EXIT_PARAMS_CROSS: dict = {
     "use_stage3_peak": False,
 }
 
+# Ichimoku 단독 모드 (주봉 7조건, ALL시장, 신호 ~1097건/전체, val 439건)
+#   val_sharpe=7.50, val_win_rate=55.8%, overfit_gap=0.24
+#   tp1_ratio=0.70: 1차 익절에서 70% 청산 — 주봉 전략 특성상 조기 익절 비중 높임.
+#   use_stage3_peak=False: Stage3 peakout 데이터 없어도 결과 동일.
+OPTIMAL_EXIT_PARAMS_ICHIMOKU: dict = {
+    "tp1_pct":         0.25,
+    "tp1_ratio":       0.70,
+    "trail_pct":       0.10,
+    "hard_stop_pct":   0.10,
+    "use_stage3_peak": False,
+}
+
 
 # ── 데이터 클래스 ─────────────────────────────────────────────────
 

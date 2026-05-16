@@ -1413,9 +1413,10 @@ async def main(interval: int, enable_summary: bool) -> None:
             MODEL_CONFIG, insert_pending, get_open_slot_count,
         )
         from backtest_engine import (
-            OPTIMAL_EXIT_PARAMS          as _KOSPI_P,
-            OPTIMAL_EXIT_PARAMS_KOSDAQ   as _KOSDAQ_P,
-            OPTIMAL_EXIT_PARAMS_CROSS    as _CROSS_P,
+            OPTIMAL_EXIT_PARAMS           as _KOSPI_P,
+            OPTIMAL_EXIT_PARAMS_KOSDAQ    as _KOSDAQ_P,
+            OPTIMAL_EXIT_PARAMS_CROSS     as _CROSS_P,
+            OPTIMAL_EXIT_PARAMS_ICHIMOKU  as _ICHI_P,
         )
 
         today = _date.today()
@@ -1457,7 +1458,7 @@ async def main(interval: int, enable_summary: bool) -> None:
             ("stage",    stage_kospi,   _KOSPI_P),
             ("kosdaq",   stage_kosdaq,  _KOSDAQ_P),
             ("cross",    cross_signals, _CROSS_P),
-            ("ichimoku", ichi_signals,  _CROSS_P),
+            ("ichimoku", ichi_signals,  _ICHI_P),
         ]
 
         total_inserted = 0
