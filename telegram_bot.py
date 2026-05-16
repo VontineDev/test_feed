@@ -451,47 +451,51 @@ async def _handle_backtest2(
 
 
 async def _handle_volume(http: httpx.AsyncClient, chat_id: str, args: list[str]) -> None:
-    """/volume <종목명|티커> — 시간대별 거래량 패턴 분석"""
-    import functools
-    from volume_pattern import resolve_ticker, fetch_data, build_report
+    """/volume — 당일 거래금액 상위 10개 종목 (KOSPI+KOSDAQ 합산)"""
+    import pandas as _pd
+    import FinanceDataReader as _fdr
+    from datetime import date as _date
 
-    if not args:
-        await _send_plain(http, chat_id,
-            "사용법: /volume <종목명 또는 티커>\n"
-            "예) /volume 삼성전자\n"
-            "    /volume AAPL\n"
-            "    /volume 005930"
-        )
-        return
+    await _send_plain(http, chat_id, "📊 당일 거래금액 상위 10 조회 중...")
 
-    raw_input = " ".join(args)
-    await _send_plain(http, chat_id, f"📊 {raw_input} 거래량 패턴 조회 중...")
+    def _fetch() -> str:
+        kospi  = _fdr.StockListing("KOSPI")
+        kosdaq = _fdr.StockListing("KOSDAQ")
+        df = _pd.concat([kospi, kosdaq], ignore_index=True)
+        df["Amount"]      = _pd.to_numeric(df["Amount"],      errors="coerce").fillna(0)
+        df["Close"]       = _pd.to_numeric(df["Close"],       errors="coerce").fillna(0)
+        df["ChagesRatio"] = _pd.to_numeric(df["ChagesRatio"], errors="coerce").fillna(0)
+
+        top = df.nlargest(10, "Amount").reset_index(drop=True)
+
+        def _fmt_amount(v: float) -> str:
+            if v >= 1e12:
+                return f"{v/1e12:.1f}조"
+            if v >= 1e8:
+                return f"{v/1e8:.0f}억"
+            return f"{v:,.0f}원"
+
+        def _fmt_pct(v: float) -> str:
+            return f"+{v:.2f}%" if v > 0 else f"{v:.2f}%"
+
+        today = _date.today().strftime("%m/%d")
+        lines = [f"📊 거래금액 상위 10  ({today}  KOSPI+KOSDAQ)\n"]
+        for i, row in top.iterrows():
+            pct = _fmt_pct(row["ChagesRatio"])
+            amt = _fmt_amount(row["Amount"])
+            price = f"{int(row['Close']):,}"
+            lines.append(
+                f"{i+1:2d}. {row['Name']:<10}  {price:>10}  {pct:>8}  {amt}"
+            )
+        return "\n".join(lines)
 
     try:
-        ticker, display_name, market = resolve_ticker(raw_input)
-
         loop = asyncio.get_running_loop()
-        df, full_name, data_source = await loop.run_in_executor(
-            None,
-            functools.partial(fetch_data, ticker, market),
-        )
-
-        if df is None or df.empty:
-            await _send_plain(http, chat_id,
-                f"'{raw_input}'에 대한 데이터를 가져올 수 없습니다.\n"
-                "티커/종목명을 확인해 주세요."
-            )
-            return
-
-        report = build_report(df, ticker, display_name, full_name, market, data_source)
-        _suffix = "\n...(생략)"
-        if len(report) > 4096 - len(_suffix):
-            report = report[:4096 - len(_suffix)] + _suffix
-
-        await _send_plain(http, chat_id, report)
+        msg = await loop.run_in_executor(None, _fetch)
+        await _send_plain(http, chat_id, msg)
     except Exception as e:
         logger.warning("[봇] /volume 오류: %s", e)
-        await _send_plain(http, chat_id, f"오류가 발생했습니다: {e}")
+        await _send_plain(http, chat_id, f"오류: {e}")
 
 
 async def _handle_screener(http: httpx.AsyncClient, chat_id: str, pool) -> None:
@@ -820,7 +824,7 @@ async def _handle_help(http: httpx.AsyncClient, chat_id: str) -> None:
         "/backtest2 \\<mode\\> \\<start\\> \\<end\\> — 통합 백테스트 \\(이치모쿠/3단계/교차\\)",
         "  예\\) /backtest2 ichimoku 2025\\-01\\-01 2026\\-01\\-01",
         "  모드\\: ichimoku \\| stage \\| cross",
-        "/volume \\<종목명\\|티커\\> — 시간대별 거래량 패턴 분석",
+        "/volume — 당일 거래금액 상위 10 \\(KOSPI\\+KOSDAQ\\)",
         "/screener — 최신 주봉 차트 스크리닝 결과 \\(DB 조회\\)",
         "/scan — 주봉 스크리닝 즉시 실행 \\(전 종목 실시간 스캔, 약 10\\~20분\\)",
         "/paper — 모의투자 오픈 포지션 현황",
@@ -922,7 +926,7 @@ async def _register_commands(http: httpx.AsyncClient) -> None:
         {"command": "today",    "description": "오늘 수집 현황 + 최신 기사"},
         {"command": "backtest",  "description": "교차분석 백테스팅 리포트"},
         {"command": "backtest2", "description": "통합 백테스트 (이치모쿠/3단계/교차) — /backtest2 ichimoku 2025-01-01 2026-01-01"},
-        {"command": "volume",    "description": "시간대별 거래량 패턴 분석"},
+        {"command": "volume",    "description": "당일 거래금액 상위 10 (KOSPI+KOSDAQ)"},
         {"command": "screener", "description": "최신 주봉 차트 스크리닝 결과 (DB 조회)"},
         {"command": "scan",     "description": "주봉 스크리닝 즉시 실행 (전 종목 실시간 스캔)"},
         {"command": "buy",      "description": "진입 기록 — /buy 005930 70000 100 [YYYYMMDD]"},

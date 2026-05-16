@@ -3,7 +3,6 @@ test_volume_integration.py  —  Regression tests for volume integration
 ───────────────────────────────────────────────────────────────────────
 Covers:
   - _send_plain           (telegram_bot.py) — no MarkdownV2 parse_mode
-  - _handle_volume        (telegram_bot.py) — no args, empty data, truncation
   - fetch_data tz         (volume_pattern.py) — US market uses America/New_York
 
 Regression: feat: integrate volume_pattern analysis into Telegram bot and scheduler
@@ -77,80 +76,6 @@ class TestSendPlain:
 
         payload = http.post.call_args[1]["json"]
         assert payload["text"] == "hello world"
-
-
-# ── _handle_volume ───────────────────────────────────────────────
-
-class TestHandleVolume:
-    @pytest.mark.asyncio
-    async def test_no_args_sends_usage_message(self):
-        """/volume with no arguments → usage hint, no data fetch."""
-        os.environ.setdefault("TELEGRAM_TOKEN", "test_token")
-        from telegram_bot import _handle_volume
-
-        http = AsyncMock()
-        http.post = AsyncMock(return_value=MagicMock(json=lambda: {"ok": True}))
-
-        with patch("volume_pattern.fetch_data") as mock_fetch:
-            await _handle_volume(http, "99999", [])
-            mock_fetch.assert_not_called()
-
-        payload = http.post.call_args[1]["json"]
-        assert "사용법" in payload["text"]
-
-    @pytest.mark.asyncio
-    async def test_empty_data_sends_error_message(self):
-        """/volume <ticker> when yfinance returns nothing → informative error."""
-        os.environ.setdefault("TELEGRAM_TOKEN", "test_token")
-        from telegram_bot import _handle_volume
-
-        http = AsyncMock()
-        http.post = AsyncMock(return_value=MagicMock(json=lambda: {"ok": True}))
-
-        with patch("volume_pattern.fetch_data", return_value=(pd.DataFrame(), "", "yfinance")):
-            await _handle_volume(http, "99999", ["XXXX_FAKE"])
-
-        # Two calls: "조회 중..." + "가져올 수 없습니다"
-        assert http.post.call_count == 2
-        last_payload = http.post.call_args_list[-1][1]["json"]
-        assert "가져올 수 없습니다" in last_payload["text"]
-
-    @pytest.mark.asyncio
-    async def test_long_report_truncated_to_4090(self):
-        """/volume report longer than 4090 chars is truncated before sending."""
-        os.environ.setdefault("TELEGRAM_TOKEN", "test_token")
-        from telegram_bot import _handle_volume
-
-        http = AsyncMock()
-        http.post = AsyncMock(return_value=MagicMock(json=lambda: {"ok": True}))
-
-        fake_df = _make_5m_df({"2026-04-07": [100.0], "2026-04-08": [105.0]})
-        long_report = "X" * 5000  # exceeds 4090
-
-        with patch("volume_pattern.fetch_data", return_value=(fake_df, "Fake Co", "yfinance")), \
-             patch("volume_pattern.build_report", return_value=long_report):
-            await _handle_volume(http, "99999", ["삼성전자"])
-
-        last_payload = http.post.call_args_list[-1][1]["json"]
-        assert len(last_payload["text"]) <= 4096
-        assert last_payload["text"].endswith("...(생략)")
-
-    @pytest.mark.asyncio
-    async def test_valid_report_sent_without_parse_mode(self):
-        """/volume with valid data → plain text (no MarkdownV2) sent."""
-        os.environ.setdefault("TELEGRAM_TOKEN", "test_token")
-        from telegram_bot import _handle_volume
-
-        http = AsyncMock()
-        http.post = AsyncMock(return_value=MagicMock(json=lambda: {"ok": True}))
-
-        fake_df = _make_5m_df({"2026-04-07": [100.0], "2026-04-08": [105.0]})
-        with patch("volume_pattern.fetch_data", return_value=(fake_df, "Samsung", "yfinance")), \
-             patch("volume_pattern.build_report", return_value="report text with █ bars"):
-            await _handle_volume(http, "99999", ["삼성전자"])
-
-        last_payload = http.post.call_args_list[-1][1]["json"]
-        assert "parse_mode" not in last_payload
 
 
 # ── fetch_data timezone regression (ISSUE-001) ───────────────────
