@@ -15,7 +15,7 @@ KOSPI/KOSDAQ 전 종목을 자동 분석하여 매매 시그널을 Telegram으�
    - [4-b. 웹 대시보드](#4-b-웹-대시보드)
 5. [Telegram 명령어](#5-telegram-명령어)
    - 정보 조회: /status · /signals · /today · /screener · /top
-   - 분석: /backtest2 · /scan
+   - 분석: /backtest · /scan
    - 거래 저널: /buy · /sell · /port · /pnl
    - 모의투자: /paper · /paper_perf · /paper_exit
 6. [자동 실행 일정](#6-자동-실행-일정)
@@ -33,7 +33,7 @@ KOSPI/KOSDAQ 전 종목을 자동 분석하여 매매 시그널을 Telegram으�
 평일 09:05 모의투자 T+1 매수주문           /status   — 시스템 상태
 평일 15:40 거래량 일보 전송                /signals  — 최근 매매 신호
 평일 16:10 모의투자 Exit 체크              /screener — 주봉 스크리닝 결과
-평일 16:30 전 종목 Stage 분류              /backtest2 — 전략 백테스트
+평일 16:30 전 종목 Stage 분류              /backtest — 전략 백테스트
 평일 16:40 모의투자 신호 샘플링            /buy /sell /port /pnl — 거래 기록
 평일 17:00 감시 종목 워치리스트 전송       /paper /paper_perf — 모의투자 현황
 매일 16:05 시간외 단일가 수집
@@ -363,12 +363,12 @@ reuters: 23건 / yfinance_news: 15건 / yonhap: 8건
 
 ---
 
-### /backtest2
+### /backtest
 
 차트 전략(이치모쿠/Stage/교차)을 지정 기간으로 백테스트합니다. 결과는 Telegram + HTML 파일(`reports/backtest/`)로 저장됩니다. HTML 보고서는 종목별 상세 결과(1차 익절일·수익, 최종 청산일·수익, blended 가중수익)를 포함합니다.
 
 ```
-/backtest2 <mode> <start> <end> [market] [--max N] [--tx-cost F] [--tp1 F] [--tp1-ratio F] [--trail F] [--stop F]
+/backtest <mode> <start> <end> [market] [--max N] [--tx-cost F] [--tp1 F] [--tp1-ratio F] [--trail F] [--stop F]
 ```
 
 | 파라미터 | 설명 | 기본값 |
@@ -388,16 +388,16 @@ reuters: 23건 / yfinance_news: 15건 / yonhap: 8건
 
 ```
 # Stage/KOSPI — tp1=25%, trail=10%, stop=10%
-/backtest2 stage 2024-01-01 2026-05-12 KOSPI --tp1 0.25 --trail 0.10 --stop 0.10
+/backtest stage 2024-01-01 2026-05-12 KOSPI --tp1 0.25 --trail 0.10 --stop 0.10
 
 # Stage/KOSDAQ — KOSDAQ은 trail을 15%로 넓게
-/backtest2 stage 2024-01-01 2026-05-12 KOSDAQ --tp1 0.25 --trail 0.15 --stop 0.10
+/backtest stage 2024-01-01 2026-05-12 KOSDAQ --tp1 0.25 --trail 0.15 --stop 0.10
 
 # Cross (Ichimoku × Stage) — 승률 54%, tp1=15%가 과적합 없이 최적
-/backtest2 cross 2024-01-01 2026-05-12 ALL --tp1 0.15 --trail 0.10 --stop 0.10 --max 100
+/backtest cross 2024-01-01 2026-05-12 ALL --tp1 0.15 --trail 0.10 --stop 0.10 --max 100
 
 # 기존 방식 (분할 청산 없음, MA20 이탈 기준)
-/backtest2 ichimoku 2025-01-01 2026-01-01
+/backtest ichimoku 2025-01-01 2026-01-01
 ```
 
 데이터 다운로드 포함 2~20분 소요됩니다. 완료 후 결과가 전송됩니다.
@@ -809,12 +809,12 @@ yfinance 일시 장애 또는 네트워크 문제입니다. 미실현 손익 계
 
 ---
 
-### /backtest2 실행 중 오류
+### /backtest 실행 중 오류
 
 데이터 다운로드 타임아웃이 원인인 경우가 많습니다. `--max` 값을 줄여 재시도하세요.
 
 ```
-/backtest2 ichimoku 2025-06-01 2026-01-01 KOSPI --max 50
+/backtest ichimoku 2025-06-01 2026-01-01 KOSPI --max 50
 ```
 
 ---
@@ -837,7 +837,7 @@ yfinance 일시 장애 또는 네트워크 문제입니다. 미실현 손익 계
 FIFO 방식으로 가장 오래된 포지션 하나씩 청산됩니다. 전량 청산하려면 보유 수량만큼 반복 실행하세요.
 
 **Q. 뉴스 신호 적중률은 얼마나 되나요?**
-뉴스 신호는 시장이 이미 반영한 후에 생성되는 후행 지표 특성상 방향성 예측 도구로는 유의미하지 않습니다. 시스템의 실제 알파는 Stage 분류기 + Ichimoku 스크리너에 있으며, `/backtest2` 로 차트 전략 백테스트를 실행할 수 있습니다.
+뉴스 신호는 시장이 이미 반영한 후에 생성되는 후행 지표 특성상 방향성 예측 도구로는 유의미하지 않습니다. 시스템의 실제 알파는 Stage 분류기 + Ichimoku 스크리너에 있으며, `/backtest` 로 차트 전략 백테스트를 실행할 수 있습니다.
 
 **Q. Kiwoom API 없이도 시스템이 동작하나요?**
 네. `KIWOOM_APP_KEY` 없이는 시간외 단일가 수집(16:05 KST)만 비활성화됩니다. `KIWOOM_MOCK_APPKEY` 없이는 모의투자 잡 3개(09:05/16:10/16:40 KST)가 비활성화됩니다. 나머지 기능은 모두 정상입니다.

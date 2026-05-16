@@ -39,7 +39,7 @@ python run_scheduler.py
 | `/signals sell` | SELL 신호만 조회 |
 | `/signals watch` | WATCH 신호만 조회 |
 | `/today` | 오늘 카테고리별 수집 건수 + 최신 기사 5건 |
-| `/backtest2 <mode> <start> <end>` | 통합 백테스트 — ichimoku / stage / cross 모드, 기간 지정 가능 |
+| `/backtest <mode> <start> <end>` | 통합 백테스트 — ichimoku / stage / cross 모드, 기간 지정 가능 |
 | `/watchlist` | 거래대금 워치리스트 현황 (Stage 1 추적 종목, 거래대금 비율·수급·Ichimoku) |
 | `/screener` | 최신 주봉 차트 스크리닝 결과 (DM + 채널) |
 | `/scan` | 주봉 스크리닝 즉시 실행 (전 종목 실시간 스캔, 약 10~20분) |
