@@ -558,6 +558,253 @@ async def _handle_scan(http: httpx.AsyncClient, chat_id: str, pool) -> None:
             await _send(http, chat_id, f"스크리닝 실행 중 오류가 발생했습니다\\: {esc(str(e))}")
 
 
+async def _handle_paper(http: httpx.AsyncClient, chat_id: str, pool) -> None:
+    """/paper — 모의투자 오픈 포지션 현황"""
+    if not pool:
+        await _send(http, chat_id, "DB 미연결 상태입니다\\.")
+        return
+
+    rows = await pool.fetch(
+        """
+        SELECT model, ticker, signal_date, entry_theory, entry_actual,
+               slippage_pct, qty, tp1_date, watermark, status, created_at
+        FROM paper_positions
+        WHERE status IN ('pending','open')
+        ORDER BY model, signal_date
+        """
+    )
+    if not rows:
+        await _send(http, chat_id, "📭 현재 오픈 포지션이 없습니다\\.")
+        return
+
+    from datetime import date as _date
+    import asyncio as _asyncio
+
+    today = _date.today()
+
+    # 현재가 일괄 조회 (KiwoomPaperTrader 또는 yfinance fallback)
+    tickers = list({r["ticker"] for r in rows if r["status"] == "open"})
+    price_map: dict[str, int] = {}
+
+    try:
+        from kiwoom_paper_trader import KiwoomPaperTrader
+        _trader = KiwoomPaperTrader()
+        loop = _asyncio.get_running_loop()
+        for _t in tickers:
+            _p = await loop.run_in_executor(None, _trader.get_current_price, _t)
+            if _p:
+                price_map[_t] = _p
+    except Exception:
+        try:
+            import yfinance as yf
+            loop = _asyncio.get_running_loop()
+            def _fetch_prices():
+                _map = {}
+                for _t in tickers:
+                    try:
+                        _df = yf.Ticker(_t).history(period="2d", interval="1d")
+                        if not _df.empty:
+                            _map[_t] = int(_df["Close"].iloc[-1])
+                    except Exception:
+                        pass
+                return _map
+            price_map = await loop.run_in_executor(None, _fetch_prices)
+        except Exception:
+            pass
+
+    # 모델별 그룹
+    from collections import defaultdict as _dd
+    by_model: dict[str, list] = _dd(list)
+    for r in rows:
+        by_model[r["model"]].append(r)
+
+    MODEL_ICON = {"stage": "🔵", "kosdaq": "🟣", "cross": "⭐", "ichimoku": "🌊"}
+    lines = ["📊 *모의투자 포지션 현황*", ""]
+
+    for model, pos_list in sorted(by_model.items()):
+        icon = MODEL_ICON.get(model, "•")
+        lines.append(f"{icon} *{esc(model.upper())}* \\({len(pos_list)}건\\)")
+        for r in pos_list:
+            ticker_code = r["ticker"].split(".")[0]
+            days = (today - r["signal_date"]).days
+            entry = r["entry_actual"] or r["entry_theory"] or 0
+            cur   = price_map.get(r["ticker"])
+            status_tag = "⏳" if r["status"] == "pending" else ""
+
+            if cur and entry:
+                ret_pct = (cur - entry) / entry * 100
+                ret_str = f"{ret_pct:+.1f}%"
+                cur_str = f"{cur:,}"
+            else:
+                ret_str = "\\-"
+                cur_str = "\\-"
+
+            tp1_tag = " ✅TP1" if r["tp1_date"] else ""
+            lines.append(
+                f"  {status_tag}`{esc(ticker_code)}` D\\+{days} "
+                f"진입={int(entry):,} 현재={cur_str} *{esc(ret_str)}*{esc(tp1_tag)}"
+            )
+        lines.append("")
+
+    await _send(http, chat_id, "\n".join(lines))
+
+
+async def _handle_paper_perf(http: httpx.AsyncClient, chat_id: str, pool) -> None:
+    """/paper_perf — 모의투자 누적 성과 (이론 vs 실전)"""
+    if not pool:
+        await _send(http, chat_id, "DB 미연결 상태입니다\\.")
+        return
+
+    # 모델별 집계
+    model_stats = await pool.fetch(
+        """
+        SELECT
+            model,
+            COUNT(*) FILTER (WHERE status='closed')                          AS closed,
+            COUNT(*) FILTER (WHERE status='open')                            AS open_cnt,
+            COUNT(*) FILTER (WHERE status='pending')                         AS pending_cnt,
+            AVG(blended_return) FILTER (WHERE status='closed')               AS avg_ret,
+            AVG(CASE WHEN blended_return > 0 AND status='closed' THEN 1.0
+                     WHEN status='closed' THEN 0.0 END)                      AS win_rate,
+            AVG(slippage_pct) FILTER (WHERE status IN ('open','closed'))     AS avg_slip,
+            COUNT(*) FILTER (WHERE tp1_date IS NOT NULL)                     AS tp1_hits
+        FROM paper_positions
+        GROUP BY model
+        ORDER BY model
+        """
+    )
+
+    if not model_stats or all(r["closed"] == 0 for r in model_stats):
+        # 전체 건수만 표시
+        total = await pool.fetchval("SELECT COUNT(*) FROM paper_positions")
+        pending = await pool.fetchval("SELECT COUNT(*) FROM paper_positions WHERE status='pending'")
+        open_cnt = await pool.fetchval("SELECT COUNT(*) FROM paper_positions WHERE status='open'")
+        await _send(
+            http, chat_id,
+            f"📈 *모의투자 성과*\n\n"
+            f"총 {total}건 \\| pending {pending} \\| open {open_cnt}\n"
+            f"아직 청산된 포지션이 없습니다\\."
+        )
+        return
+
+    # 전체 합계
+    total_closed = sum(r["closed"] for r in model_stats)
+    total_open   = sum(r["open_cnt"] for r in model_stats)
+    total_pend   = sum(r["pending_cnt"] for r in model_stats)
+
+    MODEL_ICON = {"stage": "🔵", "kosdaq": "🟣", "cross": "⭐", "ichimoku": "🌊"}
+
+    lines = [
+        "📈 *모의투자 누적 성과*",
+        f"청산 {total_closed}건 \\| 보유 {total_open}건 \\| 대기 {total_pend}건",
+        "",
+        "```",
+        f"{'모델':<10} {'청산':>4} {'승률':>6} {'평균수익':>8} {'슬리피지':>8}",
+        "─" * 42,
+    ]
+
+    for r in model_stats:
+        if r["closed"] == 0:
+            continue
+        model     = r["model"]
+        win_rate  = (r["win_rate"] or 0) * 100
+        avg_ret   = (r["avg_ret"]  or 0) * 100
+        avg_slip  = (r["avg_slip"] or 0) * 100
+        lines.append(
+            f"{model:<10} {r['closed']:>4} {win_rate:>5.1f}% {avg_ret:>+7.2f}% {avg_slip:>+7.2f}%"
+        )
+
+    lines.append("─" * 42)
+
+    # 전체 평균 (청산된 것만)
+    all_closed = await pool.fetch(
+        "SELECT blended_return, slippage_pct FROM paper_positions WHERE status='closed'"
+    )
+    if all_closed:
+        _rets  = [r["blended_return"] for r in all_closed if r["blended_return"] is not None]
+        _slips = [r["slippage_pct"]   for r in all_closed if r["slippage_pct"] is not None]
+        _wins  = sum(1 for x in _rets if x > 0)
+        avg_r  = (sum(_rets) / len(_rets)   * 100) if _rets  else 0
+        avg_s  = (sum(_slips) / len(_slips) * 100) if _slips else 0
+        wr_all = (_wins / len(_rets) * 100) if _rets else 0
+        lines.append(
+            f"{'전체':<10} {len(_rets):>4} {wr_all:>5.1f}% {avg_r:>+7.2f}% {avg_s:>+7.2f}%"
+        )
+
+    lines += ["```", ""]
+
+    # 슬리피지 해석
+    if all_closed and _slips:
+        avg_slip_pct = avg_s
+        if abs(avg_slip_pct) <= 0.5:
+            slip_comment = "슬리피지 정상 범위 \\(\\-0\\.5%\\~\\+0\\.5%\\)"
+        elif avg_slip_pct > 0.5:
+            slip_comment = "⚠️ 슬리피지 과다 — 진입 불리"
+        else:
+            slip_comment = "✅ 슬리피지 유리 — 갭업 진입"
+        lines.append(slip_comment)
+
+    await _send(http, chat_id, "\n".join(lines))
+
+
+async def _handle_paper_exit(http: httpx.AsyncClient, chat_id: str, pool, args: list[str]) -> None:
+    """/paper_exit <ticker> — 특정 종목 수동 강제 청산"""
+    if not pool:
+        await _send(http, chat_id, "DB 미연결 상태입니다\\.")
+        return
+    if not args:
+        await _send(http, chat_id, "사용법: /paper\\_exit \\<종목코드\\>\n예\\) /paper\\_exit 005930")
+        return
+
+    raw = args[0].upper().replace("-", ".")
+    # 6자리 숫자면 .KS/.KQ 자동 추론 (DB에서 확인)
+    row = await pool.fetchrow(
+        "SELECT id, ticker, qty, entry_actual, model FROM paper_positions "
+        "WHERE status='open' AND (ticker=$1 OR ticker LIKE $2 OR ticker LIKE $3) LIMIT 1",
+        raw, f"{raw}.KS", f"{raw}.KQ",
+    )
+    if not row:
+        await _send(http, chat_id, f"`{esc(raw)}` 오픈 포지션을 찾을 수 없습니다\\.")
+        return
+
+    import asyncio as _asyncio
+    loop = _asyncio.get_running_loop()
+    sell_ord = ""
+
+    try:
+        from kiwoom_paper_trader import KiwoomPaperTrader, update_to_closed
+        _trader = KiwoomPaperTrader()
+        qty = row["qty"] or 1
+        sell_ord = await loop.run_in_executor(None, _trader.place_sell, row["ticker"], qty)
+    except Exception as _e:
+        sell_ord = f"MANUAL:{_e}"
+
+    # 현재가 조회 (blended_return 계산)
+    cur_price = None
+    try:
+        import yfinance as yf
+        _df = await loop.run_in_executor(
+            None, lambda: yf.Ticker(row["ticker"]).history(period="2d", interval="1d")
+        )
+        if not _df.empty:
+            cur_price = float(_df["Close"].iloc[-1])
+    except Exception:
+        pass
+
+    entry = row["entry_actual"] or 0
+    blended = (cur_price - entry) / entry if (cur_price and entry) else None
+
+    from kiwoom_paper_trader import update_to_closed as _utc
+    await _utc(pool, row["id"], cur_price or entry, "manual", sell_ord, blended)
+
+    ret_str = f"{blended*100:+.2f}%" if blended is not None else "N/A"
+    await _send(
+        http, chat_id,
+        f"✅ *{esc(row['ticker'])}* 수동 청산 완료\n"
+        f"수익률: {esc(ret_str)} \\| 주문번호: `{esc(sell_ord)}`"
+    )
+
+
 async def _handle_help(http: httpx.AsyncClient, chat_id: str) -> None:
     """/help — 명령어 목록"""
     lines = [
@@ -576,6 +823,9 @@ async def _handle_help(http: httpx.AsyncClient, chat_id: str) -> None:
         "/volume \\<종목명\\|티커\\> — 시간대별 거래량 패턴 분석",
         "/screener — 최신 주봉 차트 스크리닝 결과 \\(DB 조회\\)",
         "/scan — 주봉 스크리닝 즉시 실행 \\(전 종목 실시간 스캔, 약 10\\~20분\\)",
+        "/paper — 모의투자 오픈 포지션 현황",
+        "/paper\\_perf — 모의투자 누적 성과 \\(승률·수익·슬리피지\\)",
+        "/paper\\_exit \\<종목코드\\> — 수동 강제 청산",
         "/help — 이 도움말",
     ]
     await _send(http, chat_id, "\n".join(lines))
@@ -648,6 +898,12 @@ async def _process_update(http: httpx.AsyncClient, update: dict, pool) -> None:
     elif cmd == "/pnl":
         from telegram_trade import handle_pnl
         await handle_pnl(http, _get_token(), chat_id, args, pool)
+    elif cmd == "/paper":
+        await _handle_paper(http, chat_id, pool)
+    elif cmd == "/paper_perf":
+        await _handle_paper_perf(http, chat_id, pool)
+    elif cmd == "/paper_exit":
+        await _handle_paper_exit(http, chat_id, pool, args)
     elif cmd in ("/help", "/start"):
         await _handle_help(http, chat_id)
     else:
@@ -672,8 +928,11 @@ async def _register_commands(http: httpx.AsyncClient) -> None:
         {"command": "buy",      "description": "진입 기록 — /buy 005930 70000 100 [YYYYMMDD]"},
         {"command": "sell",     "description": "청산 기록 (FIFO) — /sell 005930 73500"},
         {"command": "port",     "description": "보유 현황 + 미실현 P&L"},
-        {"command": "pnl",      "description": "실현 P&L 요약 — /pnl [week|month|all]"},
-        {"command": "help",     "description": "명령어 목록"},
+        {"command": "pnl",         "description": "실현 P&L 요약 — /pnl [week|month|all]"},
+        {"command": "paper",       "description": "모의투자 오픈 포지션 현황"},
+        {"command": "paper_perf",  "description": "모의투자 누적 성과 (승률·수익·슬리피지)"},
+        {"command": "paper_exit",  "description": "수동 강제 청산 — /paper_exit 005930"},
+        {"command": "help",        "description": "명령어 목록"},
     ]
     try:
         resp = await http.post(url, json={"commands": commands}, timeout=10)
