@@ -169,6 +169,7 @@ HEADERS = {
 _seen_hashes: set[str] = set()       # 중복 방지 (인메모리)
 _summary_queue: asyncio.Queue = None # 수집 → 요약 워커 전달용
 _db_pool = None                      # asyncpg 커넥션 풀
+_paper_trader = None                 # KiwoomPaperTrader (모의투자, 선택적)
 
 # ── 매크로 컨텍스트 TTL 캐시 (5분) ──────────────────────────
 _macro_cache: Optional[MacroContext] = None
@@ -960,6 +961,20 @@ async def main(interval: int, enable_summary: bool) -> None:
     bot_task = asyncio.create_task(bot_polling_loop(_db_pool))
     logger.info("Telegram 봇 시작 — /status /signals /today /help")
 
+    # ── 키움 모의투자 클라이언트 초기화 (선택적) ─────────────────
+    global _paper_trader
+    if _db_pool and os.environ.get("KIWOOM_MOCK_APPKEY"):
+        try:
+            from kiwoom_paper_trader import KiwoomPaperTrader, init_paper_positions
+            _paper_trader = KiwoomPaperTrader()
+            await init_paper_positions(_db_pool)
+            logger.info("[paper] 모의투자 클라이언트 초기화 완료")
+        except Exception as _pe:
+            logger.warning("[paper] 모의투자 초기화 실패 (스킵): %s", _pe)
+            _paper_trader = None
+    else:
+        logger.info("[paper] KIWOOM_MOCK_APPKEY 미설정 — 모의투자 비활성")
+
     # ── 펀더멘털 캐시 예열 ─────────────────────────────────────
     from market_data import prewarm_fundamentals, YFINANCE_MAP
     _ks_symbols = [v for v in YFINANCE_MAP.values() if v.endswith((".KS", ".KQ"))]
@@ -1236,6 +1251,206 @@ async def main(interval: int, enable_summary: bool) -> None:
         misfire_grace_time=3600,
         replace_existing=True,
     )
+
+    # ── 모의투자 EOD 샘플러: 평일 16:40 KST (07:40 UTC) ─────────────
+    # stage_classifier(16:30) 완료 후 10분 대기, 오늘 신호를 sampling → pending 삽입
+    async def _paper_eod_sampler_job() -> None:
+        if not _db_pool or not _paper_trader:
+            logger.debug("[paper-sampler] 미초기화 — 스킵")
+            return
+
+        import random as _random
+        from datetime import date as _date
+        from kiwoom_paper_trader import (
+            MODEL_CONFIG, insert_pending, get_open_slot_count,
+        )
+        from backtest_engine import (
+            OPTIMAL_EXIT_PARAMS          as _KOSPI_P,
+            OPTIMAL_EXIT_PARAMS_KOSDAQ   as _KOSDAQ_P,
+            OPTIMAL_EXIT_PARAMS_CROSS    as _CROSS_P,
+        )
+
+        today = _date.today()
+        logger.info("[paper-sampler] EOD 샘플링 시작 (%s)", today)
+
+        # 오늘 Stage 1 진입 종목
+        try:
+            async with _db_pool.acquire() as _conn:
+                _stage1_rows = await _conn.fetch(
+                    "SELECT ticker, s1_high FROM stage_classifications "
+                    "WHERE classified_date=$1 AND stage=1",
+                    today,
+                )
+        except Exception as _e:
+            logger.warning("[paper-sampler] stage_classifications 조회 실패: %s", _e)
+            return
+
+        stage1_all = [{"ticker": r["ticker"], "price": float(r["s1_high"] or 0)}
+                      for r in _stage1_rows]
+        logger.info("[paper-sampler] Stage1 %d종목", len(stage1_all))
+
+        # 최신 Ichimoku 통과 종목
+        try:
+            _week, _ichi_rows = await load_chart_signals_latest(_db_pool)
+            _ichi_tickers = {r["ticker"] for r in _ichi_rows}
+            _ichi_price   = {r["ticker"]: float(r.get("close") or 0) for r in _ichi_rows}
+        except Exception as _e:
+            logger.warning("[paper-sampler] Ichimoku 조회 실패: %s", _e)
+            _ichi_tickers, _ichi_price = set(), {}
+
+        # Cross = Stage1 ∩ Ichimoku
+        cross_signals  = [s for s in stage1_all if s["ticker"] in _ichi_tickers]
+        stage_kospi    = [s for s in stage1_all if s["ticker"].endswith(".KS")]
+        stage_kosdaq   = [s for s in stage1_all if s["ticker"].endswith(".KQ")]
+        ichi_signals   = [{"ticker": t, "price": _ichi_price.get(t, 0)}
+                          for t in _ichi_tickers]
+
+        model_queue = [
+            ("stage",    stage_kospi,   _KOSPI_P),
+            ("kosdaq",   stage_kosdaq,  _KOSDAQ_P),
+            ("cross",    cross_signals, _CROSS_P),
+            ("ichimoku", ichi_signals,  _CROSS_P),
+        ]
+
+        total_inserted = 0
+        seed_base = int(today.strftime("%Y%m%d"))
+
+        for _model, _signals, _params in model_queue:
+            if not _signals:
+                continue
+            _cfg       = MODEL_CONFIG.get(_model, {"max_slots": 10, "position_krw": 10_000_000})
+            _open_cnt  = await get_open_slot_count(_db_pool, _model)
+            _available = _cfg["max_slots"] - _open_cnt
+            if _available <= 0:
+                logger.info("[paper-sampler] [%s] 슬롯 없음 (%d/%d)", _model, _open_cnt, _cfg["max_slots"])
+                continue
+
+            _random.seed(seed_base ^ (hash(_model) & 0xFFFFFFFF))
+            _selected = _random.sample(_signals, min(_available, len(_signals)))
+
+            for _sig in _selected:
+                try:
+                    _pid = await insert_pending(
+                        _db_pool,
+                        model=_model,
+                        ticker=_sig["ticker"],
+                        signal_date=today,
+                        entry_theory=_sig["price"],
+                        tp1_pct=_params.get("tp1_pct", 0.15),
+                        tp1_ratio=_params.get("tp1_ratio", 0.50),
+                        trail_pct=_params.get("trail_pct", 0.10),
+                        hard_stop_pct=_params.get("hard_stop_pct", 0.10),
+                    )
+                    total_inserted += 1
+                    logger.info("[paper-sampler] [%s] %s pending (id=%d, theory=%.0f)",
+                                _model, _sig["ticker"], _pid, _sig["price"])
+                except Exception as _e:
+                    logger.warning("[paper-sampler] [%s] %s 삽입 실패: %s", _model, _sig["ticker"], _e)
+
+        logger.info("[paper-sampler] 완료 — %d건 pending 삽입", total_inserted)
+
+        if total_inserted > 0:
+            try:
+                from telegram_notify import _get_token, _get_chat_id, _post_message
+                import httpx as _hx
+                _msg = (
+                    f"📋 모의투자 EOD 샘플링 ({today})\n"
+                    f"Stage KOSPI {len(stage_kospi)}건 / KOSDAQ {len(stage_kosdaq)}건 / "
+                    f"Cross {len(cross_signals)}건 / Ichimoku {len(ichi_signals)}건\n"
+                    f"→ pending 삽입: {total_inserted}건"
+                )
+                async with _hx.AsyncClient() as _http:
+                    await _post_message(_http, _get_token(), _get_chat_id(),
+                                        _msg, label="paper-sampler", parse_mode=None)
+            except Exception as _e:
+                logger.warning("[paper-sampler] 텔레그램 알림 실패: %s", _e)
+
+    if _paper_trader:
+        scheduler.add_job(
+            _paper_eod_sampler_job,
+            CronTrigger(day_of_week="mon-fri", hour=7, minute=40, timezone="UTC"),  # 16:40 KST
+            id="paper_eod_sampler",
+            max_instances=1,
+            misfire_grace_time=1800,
+            replace_existing=True,
+        )
+        logger.info("[paper] EOD 샘플러 등록 완료 (16:40 KST)")
+
+    # ── 모의투자 T+1 진입 잡: 평일 09:05 KST (00:05 UTC) ────────────
+    # 장 시작(09:00) 후 시가 확정 → 매수주문 제출
+    async def _paper_open_entry_job() -> None:
+        if not _db_pool or not _paper_trader:
+            return
+
+        from datetime import date as _date, timedelta as _td
+        from kiwoom_paper_trader import (
+            get_pending_positions, update_to_open,
+            _qty_from_price, MODEL_CONFIG,
+        )
+
+        today = _date.today()
+        # 오늘 pending이 없으면 전 영업일(금→월 포함) pending 처리
+        for _delta in range(0, 4):
+            _target = today - _td(days=_delta)
+            if _target.weekday() < 5:   # 평일만
+                _pending = await get_pending_positions(_db_pool, _target)
+                if _pending:
+                    break
+        else:
+            logger.info("[paper-entry] pending 없음")
+            return
+
+        logger.info("[paper-entry] %d건 pending → 매수주문 시작 (신호일=%s)", len(_pending), _target)
+        _loop = asyncio.get_running_loop()
+
+        for _pos in _pending:
+            _ticker = _pos["ticker"]
+            _model  = _pos["model"]
+            _pos_id = _pos["id"]
+
+            # 시가 조회 (ka10001 open_pric)
+            _open_px = await _loop.run_in_executor(None, _paper_trader.get_open_price, _ticker)
+            if not _open_px:
+                _open_px = await _loop.run_in_executor(None, _paper_trader.get_current_price, _ticker)
+            if not _open_px:
+                logger.warning("[paper-entry] %s 가격 조회 실패 — 스킵", _ticker)
+                continue
+
+            _cfg = MODEL_CONFIG.get(_model, {"max_slots": 10, "position_krw": 10_000_000})
+            _qty = _qty_from_price(_cfg["position_krw"], _open_px)
+            if _qty <= 0:
+                logger.warning("[paper-entry] %s qty=0 (price=%d) — 스킵", _ticker, _open_px)
+                continue
+
+            # 매수주문 제출
+            try:
+                _ord_no = await _loop.run_in_executor(
+                    None, _paper_trader.place_buy, _ticker, _qty
+                )
+            except Exception as _e:
+                logger.warning("[paper-entry] %s 매수주문 실패: %s", _ticker, _e)
+                continue
+
+            # pending → open
+            try:
+                await update_to_open(_db_pool, _pos_id, float(_open_px), _qty, _ord_no)
+                logger.info("[paper-entry] %s %d주 매수 완료 (시가=%d, 주문번호=%s)",
+                            _ticker, _qty, _open_px, _ord_no)
+            except Exception as _e:
+                logger.warning("[paper-entry] %s DB 업데이트 실패: %s", _ticker, _e)
+
+        logger.info("[paper-entry] 완료")
+
+    if _paper_trader:
+        scheduler.add_job(
+            _paper_open_entry_job,
+            CronTrigger(day_of_week="mon-fri", hour=0, minute=5, timezone="UTC"),  # 09:05 KST
+            id="paper_open_entry",
+            max_instances=1,
+            misfire_grace_time=900,
+            replace_existing=True,
+        )
+        logger.info("[paper] T+1 진입 잡 등록 완료 (09:05 KST)")
 
     scheduler.start()
 
