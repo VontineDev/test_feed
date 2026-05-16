@@ -336,6 +336,55 @@ async def scheduler_status():
     return {"data": [dict(r) for r in rows]}
 
 
+# ── GET /api/scheduler/stream  (SSE) ──────────────────────────
+async def _scheduler_stream_generator(request: Request) -> AsyncGenerator[str, None]:
+    pool = await get_pool()
+    last_payload: str = ""
+
+    async def _fetch() -> str:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, job_name, requested_at, executed_at, status
+                FROM   scheduler_triggers
+                ORDER  BY requested_at DESC LIMIT 10
+                """
+            )
+        return json.dumps([dict(r) for r in rows], default=str)
+
+    # 초기 전송
+    try:
+        last_payload = await _fetch()
+        yield f"data: {last_payload}\n\n"
+    except Exception as e:
+        logger.warning("[scheduler-sse] 초기 조회 실패: %s", e)
+
+    # 3초마다 변경 시에만 push
+    while True:
+        try:
+            if await request.is_disconnected():
+                break
+        except Exception:
+            break
+        await asyncio.sleep(3)
+        try:
+            payload = await _fetch()
+            if payload != last_payload:
+                last_payload = payload
+                yield f"data: {payload}\n\n"
+        except Exception as e:
+            logger.warning("[scheduler-sse] 조회 실패: %s", e)
+
+
+@app.get("/api/scheduler/stream")
+async def scheduler_stream(request: Request):
+    return StreamingResponse(
+        _scheduler_stream_generator(request),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 # ── React 정적 파일 서빙 (프로덕션) ──────────────────────────
 _DIST = Path(__file__).parent.parent / "frontend" / "dist"
 if _DIST.exists():
