@@ -1252,6 +1252,154 @@ async def main(interval: int, enable_summary: bool) -> None:
         replace_existing=True,
     )
 
+    # ── 모의투자 Exit Checker: 평일 16:10 KST (07:10 UTC) ───────────
+    # 장 마감 직후 — 오픈 포지션 전체에 대해 exit 조건 판정 → 매도주문
+    async def _paper_exit_checker_job() -> None:
+        if not _db_pool or not _paper_trader:
+            return
+
+        from datetime import date as _date, timedelta as _td
+        from kiwoom_paper_trader import get_open_positions, update_to_closed
+
+        today = _date.today()
+        _loop = asyncio.get_running_loop()
+
+        _open_positions = await get_open_positions(_db_pool)
+        if not _open_positions:
+            logger.info("[paper-exit] 오픈 포지션 없음")
+            return
+
+        logger.info("[paper-exit] 오픈 포지션 %d건 exit 체크 시작", len(_open_positions))
+
+        _closed, _tp1_fired, _watermark_updated = 0, 0, 0
+
+        for _pos in _open_positions:
+            _pos_id       = _pos["id"]
+            _ticker       = _pos["ticker"]
+            _entry        = _pos["entry_actual"] or _pos["entry_theory"]
+            _hard_stop    = _pos["hard_stop_pct"]
+            _tp1_pct      = _pos["tp1_pct"]
+            _tp1_ratio    = _pos["tp1_ratio"]
+            _trail_pct    = _pos["trail_pct"]
+            _tp1_done     = _pos["tp1_date"] is not None
+            _watermark    = _pos["watermark"] or _entry
+            _signal_date  = _pos["signal_date"]
+            _qty          = _pos["qty"] or 0
+
+            if not _entry or _entry <= 0:
+                continue
+
+            # 현재가 조회 (EOD ≈ 종가)
+            _close = await _loop.run_in_executor(None, _paper_trader.get_current_price, _ticker)
+            if not _close or _close <= 0:
+                logger.warning("[paper-exit] %s 현재가 조회 실패 — 스킵", _ticker)
+                continue
+
+            _ret = (_close - _entry) / _entry  # 수익률 (미실현)
+
+            # 워터마크 갱신 (고점 추적)
+            if _close > _watermark:
+                _watermark = float(_close)
+                _watermark_updated += 1
+                try:
+                    async with _db_pool.acquire() as _conn:
+                        await _conn.execute(
+                            "UPDATE paper_positions SET watermark=$1 WHERE id=$2",
+                            _watermark, _pos_id,
+                        )
+                except Exception as _e:
+                    logger.warning("[paper-exit] %s 워터마크 업데이트 실패: %s", _ticker, _e)
+
+            # ── exit 조건 판정 ────────────────────────────────────
+            _exit_type = None
+            _blended   = None
+
+            # 1. 최대 보유일 (91일)
+            if (today - _signal_date).days >= 91:
+                _exit_type = "period_end"
+
+            # 2. 하드 스탑
+            elif _close <= _entry * (1 - _hard_stop):
+                _exit_type = "hard_stop"
+
+            # 3. 1차 익절 (TP1 미발동 시)
+            elif not _tp1_done and _close >= _entry * (1 + _tp1_pct):
+                # TP1 발동: 절반 청산 기록만 (잔여분은 계속 보유)
+                _exit_type = None   # 전량 청산 아님
+                _tp1_fired += 1
+                try:
+                    async with _db_pool.acquire() as _conn:
+                        await _conn.execute(
+                            "UPDATE paper_positions SET tp1_date=$1, tp1_price=$2 WHERE id=$3",
+                            today, float(_close), _pos_id,
+                        )
+                    logger.info("[paper-exit] %s TP1 발동 +%.1f%% (잔여분 트레일링 계속)",
+                                _ticker, _ret * 100)
+                except Exception as _e:
+                    logger.warning("[paper-exit] %s TP1 기록 실패: %s", _ticker, _e)
+
+            # 4. 트레일링 스탑 (TP1 발동 후)
+            elif _tp1_done and _close <= _watermark * (1 - _trail_pct):
+                _exit_type = "trail"
+
+            if _exit_type is None:
+                continue
+
+            # ── 매도주문 제출 ─────────────────────────────────────
+            _sell_ord = ""
+            if _qty > 0:
+                try:
+                    _sell_ord = await _loop.run_in_executor(
+                        None, _paper_trader.place_sell, _ticker, _qty
+                    )
+                except Exception as _e:
+                    logger.warning("[paper-exit] %s 매도주문 실패: %s", _ticker, _e)
+                    _sell_ord = f"FAILED:{_e}"
+
+            # blended_return 계산 (TP1 발동 시 가중평균)
+            if _tp1_done:
+                _tp1_ret = (_pos["tp1_price"] - _entry) / _entry if _pos.get("tp1_price") else 0
+                _final   = _ret
+                _blended = _tp1_ratio * _tp1_ret + (1 - _tp1_ratio) * _final
+            else:
+                _blended = _ret
+
+            try:
+                await update_to_closed(_db_pool, _pos_id, float(_close), _exit_type, _sell_ord, _blended)
+                _closed += 1
+                logger.info("[paper-exit] %s 청산 [%s] 수익=%.2f%% 주문번호=%s",
+                            _ticker, _exit_type, _blended * 100, _sell_ord)
+            except Exception as _e:
+                logger.warning("[paper-exit] %s DB 청산 업데이트 실패: %s", _ticker, _e)
+
+        logger.info("[paper-exit] 완료 — 청산=%d TP1발동=%d 워터마크갱신=%d",
+                    _closed, _tp1_fired, _watermark_updated)
+
+        if _closed > 0:
+            try:
+                from telegram_notify import _get_token, _get_chat_id, _post_message
+                import httpx as _hx
+                _msg = (
+                    f"📤 모의투자 청산 완료 ({today})\n"
+                    f"청산: {_closed}건 | TP1발동: {_tp1_fired}건"
+                )
+                async with _hx.AsyncClient() as _http:
+                    await _post_message(_http, _get_token(), _get_chat_id(),
+                                        _msg, label="paper-exit", parse_mode=None)
+            except Exception as _e:
+                logger.warning("[paper-exit] 텔레그램 알림 실패: %s", _e)
+
+    if _paper_trader:
+        scheduler.add_job(
+            _paper_exit_checker_job,
+            CronTrigger(day_of_week="mon-fri", hour=7, minute=10, timezone="UTC"),  # 16:10 KST
+            id="paper_exit_checker",
+            max_instances=1,
+            misfire_grace_time=1800,
+            replace_existing=True,
+        )
+        logger.info("[paper] Exit Checker 등록 완료 (16:10 KST)")
+
     # ── 모의투자 EOD 샘플러: 평일 16:40 KST (07:40 UTC) ─────────────
     # stage_classifier(16:30) 완료 후 10분 대기, 오늘 신호를 sampling → pending 삽입
     async def _paper_eod_sampler_job() -> None:
