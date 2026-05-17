@@ -276,6 +276,14 @@ CREATE INDEX IF NOT EXISTS idx_krx_listings_updated_at
     ON krx_listings (updated_at);
 """
 
+_CREATE_TICKER_NAMES = """
+CREATE TABLE IF NOT EXISTS ticker_names (
+    ticker      TEXT PRIMARY KEY,   -- yfinance 심볼: '005930.KS'
+    name_ko     TEXT NOT NULL,
+    updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+"""
+
 
 # ── RLS 활성화 (Supabase PostgREST 노출 차단) ────────────────────
 # 이 백엔드는 asyncpg 직접 연결(postgres/service_role)을 사용하므로 RLS 영향 없음.
@@ -292,6 +300,7 @@ _RLS_ALWAYS: list[str] = [
     "watchlist_vol_log",
     "intraday_volumes",
     "krx_listings",
+    "ticker_names",
     "trade_log",
     "scheduler_triggers",
 ]
@@ -308,6 +317,7 @@ async def init_db(pool: asyncpg.Pool) -> None:
         await conn.execute(_CREATE_TABLE)
         await conn.execute(_CREATE_TRADE_LOG)
         await conn.execute(_CREATE_KRX_TABLE)
+        await conn.execute(_CREATE_TICKER_NAMES)
         await conn.execute(_CREATE_SCHEDULER_TRIGGERS)
         await conn.execute(
             "ALTER TABLE chart_signals ADD COLUMN IF NOT EXISTS sector VARCHAR(80) DEFAULT ''"
@@ -344,6 +354,67 @@ async def init_db(pool: asyncpg.Pool) -> None:
                 """
             )
     logger.info("DB 테이블 준비 완료 (news_articles, stage_classifications, krx_listings, …)")
+
+
+# ── ticker_names: pykrx 개별 조회로 종목명 캐시 ─────────────────
+async def upsert_ticker_names(pool: asyncpg.Pool, tickers: list[str]) -> int:
+    """
+    yfinance 심볼 목록(예: ['066570.KS', '035720.KQ'])에 대해
+    pykrx get_market_ticker_name()으로 이름을 조회하고 ticker_names 테이블에 upsert.
+    이미 존재하는 ticker는 건너뜀(updated_at 기준 7일 초과 시 갱신).
+    반환: 신규/갱신된 행 수.
+    """
+    if not tickers:
+        return 0
+
+    async with pool.acquire() as conn:
+        existing = await conn.fetch(
+            """
+            SELECT ticker FROM ticker_names
+            WHERE ticker = ANY($1)
+              AND updated_at > NOW() - INTERVAL '7 days'
+            """,
+            tickers,
+        )
+    skip = {r["ticker"] for r in existing}
+    to_fetch = [t for t in tickers if t not in skip]
+    if not to_fetch:
+        return 0
+
+    import asyncio as _aio
+    from concurrent.futures import ThreadPoolExecutor as _TPE
+
+    def _lookup(ticker: str) -> tuple[str, str] | None:
+        code = ticker.split(".")[0]
+        try:
+            import pykrx.stock as _ps
+            name = _ps.get_market_ticker_name(code)
+            return (ticker, name) if name else None
+        except Exception:
+            return None
+
+    loop = _aio.get_event_loop()
+    with _TPE(max_workers=4) as ex:
+        results = await loop.run_in_executor(
+            None,
+            lambda: [r for r in map(_lookup, to_fetch) if r],
+        )
+
+    if not results:
+        return 0
+
+    async with pool.acquire() as conn:
+        await conn.executemany(
+            """
+            INSERT INTO ticker_names (ticker, name_ko, updated_at)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT (ticker) DO UPDATE
+              SET name_ko = EXCLUDED.name_ko, updated_at = NOW()
+            """,
+            results,
+        )
+    logger.info("[ticker_names] %d/%d 종목명 upsert", len(results), len(to_fetch))
+    return len(results)
 
 
 # ── 중복 체크 ─────────────────────────────────────────────────

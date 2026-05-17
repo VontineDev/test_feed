@@ -618,6 +618,14 @@ async def _daily_stage_job() -> None:
     # 6. stage_classifications upsert
     await save_stage_classifications(_db_pool, upsert_rows)
 
+    # 6b. 분류된 종목 이름 캐시 갱신 (ticker_names)
+    try:
+        from db import upsert_ticker_names as _upsert_tn
+        stage_tickers = list(stage_results.keys())
+        await _upsert_tn(_db_pool, stage_tickers)
+    except Exception as e:
+        logger.warning("[3단계] ticker_names 업데이트 실패: %s", e)
+
     # 7. 텔레그램 비교 메세지 전송
     try:
         await tg_send_screener_comparison(

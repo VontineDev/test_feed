@@ -3,8 +3,9 @@ import { useEffect, useState } from 'react'
 interface Position {
   id: number
   ticker: string
+  name: string
   model: string
-  entry_date: string
+  signal_date: string
   entry_actual: number | null
   qty: number
   status: string
@@ -55,9 +56,12 @@ export default function Positions() {
         <tbody>
           {rows.map(r => (
             <tr key={r.id} style={styles.tr}>
-              <td style={styles.td}>{r.ticker}</td>
+              <td style={styles.td}>
+                <div style={{ fontWeight: 600 }}>{r.name}</div>
+                <div style={{ fontSize: 10, color: '#475569' }}>{r.ticker}</div>
+              </td>
               <td style={styles.td}><span style={styles.badge}>{r.model}</span></td>
-              <td style={styles.td}>{r.entry_date?.slice(0, 10)}</td>
+              <td style={styles.td}>{r.signal_date?.slice(0, 10)}</td>
               <td style={styles.td}>{r.entry_actual?.toLocaleString()}</td>
               <td style={styles.td}>{r.current_price?.toLocaleString() ?? '—'}</td>
               <td style={{ ...styles.td, color: pctColor(r.unrealized_pct), fontWeight: 600 }}>

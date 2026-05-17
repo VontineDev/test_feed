@@ -30,6 +30,11 @@ from pydantic import BaseModel
 
 from database import close_pool, get_pool
 
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+from db import upsert_ticker_names as _upsert_ticker_names  # noqa: E402
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -58,10 +63,45 @@ async def lifespan(app: FastAPI):
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(_INIT_SQL)
+        await conn.execute(
+            "CREATE TABLE IF NOT EXISTS ticker_names ("
+            "  ticker TEXT PRIMARY KEY, name_ko TEXT NOT NULL,"
+            "  updated_at TIMESTAMPTZ DEFAULT NOW()"
+            ")"
+        )
+        await conn.execute("ALTER TABLE ticker_names ENABLE ROW LEVEL SECURITY")
     logger.info("DB 풀 준비 완료")
+
+    # 오늘 stage 종목 중 이름 캐시 없는 것 채우기 (백그라운드)
+    asyncio.create_task(_seed_ticker_names(pool))
+
     yield
     await close_pool()
     logger.info("DB 풀 종료")
+
+
+async def _seed_ticker_names(pool) -> None:
+    try:
+        from datetime import date as _date
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT sc.ticker
+                FROM   stage_classifications sc
+                WHERE  sc.classified_date >= CURRENT_DATE - 7
+                  AND NOT EXISTS (
+                    SELECT 1 FROM ticker_names tn
+                    WHERE tn.ticker = sc.ticker
+                      AND tn.updated_at > NOW() - INTERVAL '7 days'
+                  )
+                """
+            )
+        tickers = [r["ticker"] for r in rows]
+        if tickers:
+            logger.info("[ticker_names] %d종목 이름 조회 중...", len(tickers))
+            await _upsert_ticker_names(pool, tickers)
+    except Exception as e:
+        logger.warning("[ticker_names] 시드 실패: %s", e)
 
 
 app = FastAPI(title="Trading Dashboard", lifespan=lifespan)
@@ -88,12 +128,14 @@ async def _build_heatmap_data() -> list[dict]:
                 sc.s1_high,
                 sc.s1_volume,
                 sc.peakout_flag,
-                COALESCE(k.name_ko, cs.name, SPLIT_PART(sc.ticker, '.', 1)) AS name,
+                COALESCE(tn.name_ko, k.name_ko, cs.name,
+                         SPLIT_PART(sc.ticker, '.', 1))                      AS name,
                 CASE WHEN sc.ticker LIKE '%.KS' THEN 'KOSPI'
                      WHEN sc.ticker LIKE '%.KQ' THEN 'KOSDAQ'
                      ELSE '' END                                              AS market
             FROM   stage_classifications sc
-            LEFT JOIN krx_listings k ON k.yfinance_symbol = sc.ticker
+            LEFT JOIN ticker_names tn ON tn.ticker = sc.ticker
+            LEFT JOIN krx_listings k  ON k.yfinance_symbol = sc.ticker
             LEFT JOIN LATERAL (
                 SELECT name FROM chart_signals
                 WHERE  ticker = sc.ticker ORDER BY screened_at DESC LIMIT 1
@@ -149,11 +191,20 @@ async def get_positions():
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT p.id, p.ticker, p.model, p.signal_date,
+                SELECT p.id, p.ticker,
+                       COALESCE(tn.name_ko, k.name_ko,
+                                cs.name, SPLIT_PART(p.ticker, '.', 1)) AS name,
+                       p.model, p.signal_date,
                        p.entry_actual, p.qty, p.status,
                        p.tp1_pct, p.trail_pct,
                        o.close AS current_price
                 FROM   paper_positions p
+                LEFT JOIN ticker_names tn ON tn.ticker = p.ticker
+                LEFT JOIN krx_listings k  ON k.yfinance_symbol = p.ticker
+                LEFT JOIN LATERAL (
+                    SELECT name FROM chart_signals
+                    WHERE  ticker = p.ticker ORDER BY screened_at DESC LIMIT 1
+                ) cs ON TRUE
                 LEFT JOIN LATERAL (
                     SELECT close FROM daily_ohlcv
                     WHERE  symbol = p.ticker
@@ -381,12 +432,13 @@ async def get_stage_report():
         stage1 = await conn.fetch(
             """
             SELECT sc.ticker,
-                   COALESCE(k.name_ko,
+                   COALESCE(tn.name_ko, k.name_ko,
                             cs.name,
                             SPLIT_PART(sc.ticker, '.', 1)) AS name,
                    COALESCE(k.sector, cs.sector)           AS sector,
                    sc.s1_high, sc.s1_volume, sc.peakout_flag
             FROM   stage_classifications sc
+            LEFT JOIN ticker_names tn ON tn.ticker = sc.ticker
             LEFT JOIN krx_listings k  ON k.yfinance_symbol = sc.ticker
             LEFT JOIN LATERAL (
                 SELECT name, sector FROM chart_signals
@@ -488,12 +540,14 @@ async def get_paper_report():
         closed = await conn.fetch(
             """
             SELECT p.ticker,
-                   COALESCE(k.name_ko, cs.name, SPLIT_PART(p.ticker, '.', 1)) AS name,
+                   COALESCE(tn.name_ko, k.name_ko,
+                            cs.name, SPLIT_PART(p.ticker, '.', 1)) AS name,
                    p.model, p.signal_date, p.entry_actual,
                    p.exit_date, p.exit_price, p.exit_type,
                    p.blended_return, p.tp1_date
             FROM   paper_positions p
-            LEFT JOIN krx_listings k ON k.yfinance_symbol = p.ticker
+            LEFT JOIN ticker_names tn ON tn.ticker = p.ticker
+            LEFT JOIN krx_listings k  ON k.yfinance_symbol = p.ticker
             LEFT JOIN LATERAL (
                 SELECT name FROM chart_signals
                 WHERE  ticker = p.ticker ORDER BY screened_at DESC LIMIT 1
@@ -508,11 +562,13 @@ async def get_paper_report():
         open_pos = await conn.fetch(
             """
             SELECT p.ticker,
-                   COALESCE(k.name_ko, cs.name, SPLIT_PART(p.ticker, '.', 1)) AS name,
+                   COALESCE(tn.name_ko, k.name_ko,
+                            cs.name, SPLIT_PART(p.ticker, '.', 1)) AS name,
                    p.model, p.signal_date, p.entry_actual, p.qty, p.status,
                    o.close AS current_price
             FROM   paper_positions p
-            LEFT JOIN krx_listings k ON k.yfinance_symbol = p.ticker
+            LEFT JOIN ticker_names tn ON tn.ticker = p.ticker
+            LEFT JOIN krx_listings k  ON k.yfinance_symbol = p.ticker
             LEFT JOIN LATERAL (
                 SELECT name FROM chart_signals
                 WHERE  ticker = p.ticker ORDER BY screened_at DESC LIMIT 1
