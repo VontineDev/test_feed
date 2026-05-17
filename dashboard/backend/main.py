@@ -79,74 +79,45 @@ async def _build_heatmap_data() -> list[dict]:
     pool = await get_pool()
     today = date.today()
 
-    # 오늘 Stage 분류 결과
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT ticker, stage
-            FROM   stage_classifications
-            WHERE  classified_date = $1
+            SELECT
+                sc.ticker,
+                sc.stage,
+                sc.s1_high,
+                sc.s1_volume,
+                sc.peakout_flag,
+                COALESCE(k.name_ko, cs.name, SPLIT_PART(sc.ticker, '.', 1)) AS name,
+                CASE WHEN sc.ticker LIKE '%.KS' THEN 'KOSPI'
+                     WHEN sc.ticker LIKE '%.KQ' THEN 'KOSDAQ'
+                     ELSE '' END                                              AS market
+            FROM   stage_classifications sc
+            LEFT JOIN krx_listings k ON k.yfinance_symbol = sc.ticker
+            LEFT JOIN LATERAL (
+                SELECT name FROM chart_signals
+                WHERE  ticker = sc.ticker ORDER BY screened_at DESC LIMIT 1
+            ) cs ON TRUE
+            WHERE  sc.classified_date = $1
             """,
             today,
         )
-    stage_map: dict[str, int] = {r["ticker"]: r["stage"] for r in rows}
 
-    if not stage_map:
+    if not rows:
         return []
 
-    # fdr.StockListing: 블로킹 I/O → 스레드 풀
-    import financedata_reader as fdr  # type: ignore
-
-    def _fetch_listing() -> dict[str, dict]:
-        result: dict[str, dict] = {}
-        for market in ("KOSPI", "KOSDAQ"):
-            try:
-                df = fdr.StockListing(market)
-                for _, r in df.iterrows():
-                    sym = str(r.get("Symbol", r.get("Code", ""))).strip()
-                    if not sym:
-                        continue
-                    result[sym] = {
-                        "name": str(r.get("Name", sym)),
-                        "amount": float(r.get("Amount", 0) or 0),
-                        "change_pct": float(r.get("Change", r.get("ChgRatio", 0)) or 0),
-                        "market": market,
-                    }
-            except Exception as e:
-                logger.warning("[heatmap] fdr.StockListing(%s) 실패: %s", market, e)
-        return result
-
-    listing = await asyncio.to_thread(_fetch_listing)
-
-    # Amount=0 fallback: daily_ohlcv 최신 종가 * 거래량
-    zero_tickers = [t for t in stage_map if listing.get(t, {}).get("amount", 0) == 0]
-    fallback_amounts: dict[str, float] = {}
-    if zero_tickers:
-        async with pool.acquire() as conn:
-            fb_rows = await conn.fetch(
-                """
-                SELECT DISTINCT ON (symbol) symbol, close, volume
-                FROM   daily_ohlcv
-                WHERE  symbol = ANY($1)
-                ORDER  BY symbol, date DESC
-                """,
-                zero_tickers,
-            )
-        for r in fb_rows:
-            if r["close"] and r["volume"]:
-                fallback_amounts[r["symbol"]] = float(r["close"]) * float(r["volume"])
-
     result = []
-    for ticker, stage in stage_map.items():
-        info = listing.get(ticker, {})
-        amount = info.get("amount", 0) or fallback_amounts.get(ticker, 0)
+    for r in rows:
+        s1_high   = float(r["s1_high"])   if r["s1_high"]   else 0.0
+        s1_volume = float(r["s1_volume"]) if r["s1_volume"] else 0.0
+        amount = s1_high * s1_volume if s1_high and s1_volume else 1.0
         result.append({
-            "ticker": ticker,
-            "name": info.get("name", ticker),
-            "stage": stage,
-            "amount": amount,
-            "change_pct": info.get("change_pct", 0),
-            "market": info.get("market", ""),
+            "ticker":     r["ticker"],
+            "name":       r["name"],
+            "stage":      r["stage"],
+            "amount":     amount,
+            "change_pct": 0.0,
+            "market":     r["market"] or "",
         })
 
     return sorted(result, key=lambda x: x["amount"], reverse=True)
