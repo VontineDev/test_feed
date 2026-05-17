@@ -140,25 +140,28 @@ export default function Heatmap() {
             data={nivoData}
             identity="id"
             value="value"
+            leavesOnly={true}
             colors={(node) => {
-              const d = node.data as unknown as { change_pct: number }
-              return changePctColor(d.change_pct)
+              const d = node.data as unknown as { change_pct?: number }
+              return changePctColor(d.change_pct ?? 0)
             }}
             borderWidth={2}
             borderColor={(node) => {
-              const d = node.data as unknown as { stage: number | null }
-              return stageBorderColor(d.stage)
+              const d = node.data as unknown as { stage?: number | null }
+              return stageBorderColor(d.stage ?? null)
             }}
             label={(node) => {
-              const d = node.data as unknown as { label: string; change_pct: number }
-              const pct = d.change_pct
+              const d = node.data as unknown as { label?: string; change_pct?: number; stage?: number | null }
+              if (!d.label) return ''
+              const pct = d.change_pct ?? 0
               const sign = pct > 0 ? '+' : ''
-              return `${d.label}  ${sign}${pct.toFixed(2)}%`
+              return `[S${d.stage ?? '?'}] ${d.label}  ${sign}${pct.toFixed(2)}%`
             }}
             labelSkipSize={28}
             labelTextColor="#fff"
             tooltip={({ node }) => {
-              const d = node.data as unknown as { item: HeatmapItem }
+              const d = node.data as unknown as { item?: HeatmapItem }
+              if (!d.item) return <div />
               const i = d.item
               const sign = i.change_pct > 0 ? '+' : ''
               return (
@@ -176,7 +179,10 @@ export default function Heatmap() {
                 </div>
               )
             }}
-            onClick={(node) => setSelected((node.data as unknown as { item: HeatmapItem }).item)}
+            onClick={(node) => {
+              const d = node.data as unknown as { item?: HeatmapItem }
+              if (d.item) setSelected(d.item)
+            }}
           />
         )}
       </div>
