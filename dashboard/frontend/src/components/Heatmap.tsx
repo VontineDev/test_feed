@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { ResponsiveTreeMap } from '@nivo/treemap'
 
 interface HeatmapItem {
@@ -10,12 +10,28 @@ interface HeatmapItem {
   market: string
 }
 
-const stageColor = (stage: number | null): string => {
+const REFRESH_MS = 5 * 60 * 1000  // 5분
+
+// 등락률 → 색상 (빨강/초록 그라데이션)
+const changePctColor = (pct: number): string => {
+  if (pct >=  5) return '#15803d'
+  if (pct >=  3) return '#16a34a'
+  if (pct >=  1) return '#22c55e'
+  if (pct >   0) return '#4ade80'
+  if (pct === 0) return '#334155'
+  if (pct >= -1) return '#f87171'
+  if (pct >= -3) return '#ef4444'
+  if (pct >= -5) return '#dc2626'
+  return '#991b1b'
+}
+
+// Stage → 테두리 색상
+const stageBorderColor = (stage: number | null): string => {
   switch (stage) {
-    case 1: return '#16a34a'  // green
-    case 2: return '#ca8a04'  // yellow
-    case 3: return '#ea580c'  // orange
-    default: return '#374151' // gray
+    case 1: return '#3b82f6'   // blue
+    case 2: return '#a78bfa'   // purple
+    case 3: return '#f59e0b'   // amber
+    default: return '#1e293b'
   }
 }
 
@@ -25,24 +41,49 @@ const formatAmount = (amount: number): string => {
   return `${amount}`
 }
 
-export default function Heatmap() {
-  const [items, setItems] = useState<HeatmapItem[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [selected, setSelected] = useState<HeatmapItem | null>(null)
+const formatCountdown = (ms: number): string => {
+  const s = Math.ceil(ms / 1000)
+  return s >= 60 ? `${Math.floor(s / 60)}분 ${s % 60}초` : `${s}초`
+}
 
-  useEffect(() => {
-    fetch('/api/heatmap')
-      .then(r => r.json())
-      .then(j => { setItems(j.data); setLoading(false) })
-      .catch(e => { setError(String(e)); setLoading(false) })
+export default function Heatmap() {
+  const [items, setItems]           = useState<HeatmapItem[]>([])
+  const [loading, setLoading]       = useState(true)
+  const [error, setError]           = useState<string | null>(null)
+  const [selected, setSelected]     = useState<HeatmapItem | null>(null)
+  const [updatedAt, setUpdatedAt]   = useState<Date | null>(null)
+  const [nextRefresh, setNextRefresh] = useState<number>(REFRESH_MS)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const j = await fetch('/api/heatmap').then(r => r.json())
+      setItems(j.data ?? [])
+      setUpdatedAt(new Date())
+      setNextRefresh(REFRESH_MS)
+      setError(null)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setLoading(false)
+    }
   }, [])
 
-  if (loading) return <div style={styles.placeholder}>히트맵 로딩 중…</div>
-  if (error)   return <div style={styles.placeholder}>오류: {error}</div>
-  if (!items.length) return <div style={styles.placeholder}>오늘 분류 데이터 없음</div>
+  // 초기 로드 + 5분 자동갱신
+  useEffect(() => {
+    load()
+    const refreshId = setInterval(load, REFRESH_MS)
+    return () => clearInterval(refreshId)
+  }, [load])
 
-  // Stage 1/2/3 종목만 표시 (null=미분류 제외), 거래금액 0 제외
+  // 카운트다운 타이머 (1초 tick)
+  useEffect(() => {
+    const id = setInterval(() => {
+      setNextRefresh(prev => (prev <= 1000 ? REFRESH_MS : prev - 1000))
+    }, 1000)
+    return () => clearInterval(id)
+  }, [])
+
   const filtered = items.filter(i => i.stage && i.amount > 0)
 
   const nivoData = {
@@ -52,52 +93,107 @@ export default function Heatmap() {
       value: i.amount,
       label: i.name,
       stage: i.stage,
+      change_pct: i.change_pct,
       item: i,
     })),
   }
 
   return (
     <div style={styles.container}>
+      {/* 헤더 */}
       <div style={styles.header}>
         <span style={styles.title}>시장 히트맵</span>
         <span style={styles.legend}>
-          <span style={{ color: '#16a34a' }}>● Stage 1</span>{' '}
-          <span style={{ color: '#ca8a04' }}>● Stage 2</span>{' '}
-          <span style={{ color: '#ea580c' }}>● Stage 3</span>
+          <span style={{ color: '#3b82f6' }}>▮S1</span>{' '}
+          <span style={{ color: '#a78bfa' }}>▮S2</span>{' '}
+          <span style={{ color: '#f59e0b' }}>▮S3</span>
+          <span style={styles.legendSep}>|</span>
+          <span style={{ color: '#22c55e' }}>▲상승</span>{' '}
+          <span style={{ color: '#ef4444' }}>▼하락</span>
+        </span>
+        <span style={styles.meta}>
+          {updatedAt && (
+            <span style={styles.updatedAt}>
+              {updatedAt.toLocaleTimeString('ko-KR')} 기준
+            </span>
+          )}
+          {!loading && (
+            <span style={styles.countdown}>{formatCountdown(nextRefresh)} 후 갱신</span>
+          )}
+          <button style={styles.refreshBtn} onClick={load} disabled={loading}>
+            {loading ? '…' : '↻'}
+          </button>
         </span>
         <span style={styles.count}>{filtered.length}종목</span>
       </div>
+
+      {/* 맵 영역 */}
       <div style={styles.mapArea}>
-        <ResponsiveTreeMap
-          data={nivoData}
-          identity="id"
-          value="value"
-          colors={(node) => stageColor((node.data as unknown as { stage: number | null }).stage)}
-          label={(node) => (node.data as unknown as { label: string }).label}
-          labelSkipSize={24}
-          labelTextColor="#fff"
-          borderWidth={1}
-          borderColor="#0f1117"
-          tooltip={({ node }) => {
-            const d = node.data as unknown as { item: HeatmapItem }
-            const i = d.item
-            return (
-              <div style={styles.tooltip}>
-                <strong>{i.name}</strong> ({i.ticker})<br />
-                Stage {i.stage} | {i.change_pct > 0 ? '+' : ''}{i.change_pct.toFixed(2)}%<br />
-                거래금액: {formatAmount(i.amount)}
-              </div>
-            )
-          }}
-          onClick={(node) => setSelected((node.data as unknown as { item: HeatmapItem }).item)}
-        />
+        {loading && !items.length
+          ? <div style={styles.placeholder}>히트맵 로딩 중…</div>
+          : error
+          ? <div style={styles.placeholder}>오류: {error}</div>
+          : !filtered.length
+          ? <div style={styles.placeholder}>오늘 분류 데이터 없음</div>
+          : (
+          <ResponsiveTreeMap
+            data={nivoData}
+            identity="id"
+            value="value"
+            colors={(node) => {
+              const d = node.data as unknown as { change_pct: number }
+              return changePctColor(d.change_pct)
+            }}
+            borderWidth={2}
+            borderColor={(node) => {
+              const d = node.data as unknown as { stage: number | null }
+              return stageBorderColor(d.stage)
+            }}
+            label={(node) => {
+              const d = node.data as unknown as { label: string; change_pct: number }
+              const pct = d.change_pct
+              const sign = pct > 0 ? '+' : ''
+              return `${d.label}  ${sign}${pct.toFixed(2)}%`
+            }}
+            labelSkipSize={28}
+            labelTextColor="#fff"
+            tooltip={({ node }) => {
+              const d = node.data as unknown as { item: HeatmapItem }
+              const i = d.item
+              const sign = i.change_pct > 0 ? '+' : ''
+              return (
+                <div style={styles.tooltip}>
+                  <strong>{i.name}</strong>
+                  <span style={{ color: '#64748b', marginLeft: 6, fontSize: 10 }}>{i.ticker}</span>
+                  <br />
+                  <span style={{ color: '#94a3b8' }}>Stage {i.stage}</span>
+                  {' · '}
+                  <span style={{ color: changePctColor(i.change_pct), fontWeight: 700 }}>
+                    {sign}{i.change_pct.toFixed(2)}%
+                  </span>
+                  <br />
+                  <span style={{ color: '#64748b' }}>거래대금 {formatAmount(i.amount)}</span>
+                </div>
+              )
+            }}
+            onClick={(node) => setSelected((node.data as unknown as { item: HeatmapItem }).item)}
+          />
+        )}
       </div>
+
+      {/* 선택 종목 정보바 */}
       {selected && (
         <div style={styles.infoBar}>
-          <strong>{selected.name}</strong> ({selected.ticker}) —
-          Stage {selected.stage} |
-          {selected.change_pct > 0 ? ' +' : ' '}{selected.change_pct.toFixed(2)}% |
-          거래금액 {formatAmount(selected.amount)}
+          <strong>{selected.name}</strong>
+          <span style={styles.infoTicker}>{selected.ticker}</span>
+          <span style={styles.infoSep}>|</span>
+          Stage {selected.stage}
+          <span style={styles.infoSep}>|</span>
+          <span style={{ color: changePctColor(selected.change_pct), fontWeight: 700 }}>
+            {selected.change_pct > 0 ? '+' : ''}{selected.change_pct.toFixed(2)}%
+          </span>
+          <span style={styles.infoSep}>|</span>
+          거래대금 {formatAmount(selected.amount)}
           <button style={styles.closeBtn} onClick={() => setSelected(null)}>✕</button>
         </div>
       )}
@@ -107,13 +203,44 @@ export default function Heatmap() {
 
 const styles: Record<string, React.CSSProperties> = {
   container: { display: 'flex', flexDirection: 'column', height: '100%' },
-  header: { display: 'flex', alignItems: 'center', gap: 16, padding: '8px 12px', background: '#1a1d2e' },
-  title: { fontWeight: 700, fontSize: 14 },
-  legend: { fontSize: 12, display: 'flex', gap: 8 },
-  count: { marginLeft: 'auto', fontSize: 12, color: '#94a3b8' },
+
+  header: {
+    display: 'flex', alignItems: 'center', gap: 10, padding: '7px 12px',
+    background: '#1a1d2e', flexShrink: 0, flexWrap: 'wrap' as const,
+  },
+  title:     { fontWeight: 700, fontSize: 13 },
+  legend:    { display: 'flex', gap: 5, fontSize: 11, alignItems: 'center' },
+  legendSep: { color: '#334155', margin: '0 2px' },
+  meta:      { display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' },
+  updatedAt: { fontSize: 10, color: '#475569' },
+  countdown: { fontSize: 10, color: '#334155' },
+  refreshBtn: {
+    background: '#1e293b', color: '#64748b', border: '1px solid #334155',
+    borderRadius: 4, padding: '2px 6px', cursor: 'pointer', fontSize: 12,
+  },
+  count: { fontSize: 11, color: '#64748b' },
+
   mapArea: { flex: 1, minHeight: 0 },
-  placeholder: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#64748b' },
-  tooltip: { background: '#1e293b', padding: '8px 12px', borderRadius: 6, fontSize: 12, lineHeight: 1.6, border: '1px solid #334155' },
-  infoBar: { padding: '6px 12px', background: '#1e293b', fontSize: 13, borderTop: '1px solid #334155', position: 'relative' },
-  closeBtn: { position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: 14 },
+  placeholder: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    height: '100%', color: '#64748b',
+  },
+
+  tooltip: {
+    background: '#1e293b', padding: '8px 12px', borderRadius: 6,
+    fontSize: 12, lineHeight: 1.7, border: '1px solid #334155',
+    boxShadow: '0 4px 12px rgba(0,0,0,.4)',
+  },
+
+  infoBar: {
+    padding: '6px 14px', background: '#1e293b', fontSize: 12,
+    borderTop: '1px solid #334155', position: 'relative',
+    display: 'flex', alignItems: 'center', gap: 6,
+  },
+  infoTicker: { color: '#475569', fontSize: 10 },
+  infoSep:    { color: '#334155' },
+  closeBtn: {
+    position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
+    background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 14,
+  },
 }

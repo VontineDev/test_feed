@@ -38,9 +38,11 @@ from db import upsert_ticker_names as _upsert_ticker_names  # noqa: E402
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-# ── 히트맵 30분 캐시 ──────────────────────────────────────────
+# ── 히트맵 구조 캐시 (30분) + 가격 캐시 (5분) ────────────────
 _HEATMAP_CACHE: dict = {"data": None, "expires": 0.0}
-_HEATMAP_TTL = 1800  # 초
+_HEATMAP_TTL = 1800  # stage 구조 30분
+_PRICE_CACHE: dict = {"data": {}, "expires": 0.0}
+_PRICE_TTL = 300     # 가격·등락률 5분
 
 
 # ── lifespan ──────────────────────────────────────────────────
@@ -114,6 +116,42 @@ app.add_middleware(
 )
 
 
+# ── 당일 등락률 조회 (yfinance 2d, 5분 캐시) ─────────────────
+async def _fetch_stage_prices(tickers: list[str]) -> dict[str, float]:
+    now = time.time()
+    if _PRICE_CACHE["data"] and now < _PRICE_CACHE["expires"]:
+        return _PRICE_CACHE["data"]
+
+    def _fetch() -> dict[str, float]:
+        result: dict[str, float] = {}
+        try:
+            import yfinance as _yf
+            import pandas as _pd
+            hist = _yf.download(
+                tickers, period="2d", interval="1d",
+                auto_adjust=True, progress=False, threads=True,
+            )
+            if hist.empty:
+                return result
+            close_df = hist["Close"] if isinstance(hist.columns, _pd.MultiIndex) else hist
+            for t in tickers:
+                try:
+                    series = (close_df[t] if t in close_df.columns else close_df.iloc[:, 0]).dropna()
+                    if len(series) >= 2:
+                        result[t] = round((float(series.iloc[-1]) / float(series.iloc[-2]) - 1) * 100, 2)
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning("[heatmap] 가격 조회 실패: %s", e)
+        return result
+
+    prices = await asyncio.to_thread(_fetch)
+    _PRICE_CACHE["data"] = prices
+    _PRICE_CACHE["expires"] = now + _PRICE_TTL
+    logger.info("[heatmap] 가격 갱신: %d종목", len(prices))
+    return prices
+
+
 # ── 히트맵 데이터 빌드 ────────────────────────────────────────
 async def _build_heatmap_data() -> list[dict]:
     pool = await get_pool()
@@ -148,6 +186,9 @@ async def _build_heatmap_data() -> list[dict]:
     if not rows:
         return []
 
+    tickers_list = [r["ticker"] for r in rows]
+    prices = await _fetch_stage_prices(tickers_list)
+
     result = []
     for r in rows:
         s1_high   = float(r["s1_high"])   if r["s1_high"]   else 0.0
@@ -158,7 +199,7 @@ async def _build_heatmap_data() -> list[dict]:
             "name":       r["name"],
             "stage":      r["stage"],
             "amount":     amount,
-            "change_pct": 0.0,
+            "change_pct": prices.get(r["ticker"], 0.0),
             "market":     r["market"] or "",
         })
 
@@ -169,12 +210,15 @@ async def _build_heatmap_data() -> list[dict]:
 @app.get("/api/heatmap")
 async def get_heatmap():
     now = time.time()
+    # 가격 캐시 만료 시 stage 구조 유지하고 가격만 갱신
     if _HEATMAP_CACHE["data"] and now < _HEATMAP_CACHE["expires"]:
         return {"data": _HEATMAP_CACHE["data"], "cached": True}
     try:
         data = await _build_heatmap_data()
         _HEATMAP_CACHE["data"] = data
-        _HEATMAP_CACHE["expires"] = now + _HEATMAP_TTL
+        # stage 구조는 30분, 가격은 _PRICE_CACHE가 5분 관리
+        # heatmap 캐시는 5분으로 설정 (가격 갱신 주기에 맞춤)
+        _HEATMAP_CACHE["expires"] = now + _PRICE_TTL
         return {"data": data, "cached": False}
     except Exception as e:
         logger.error("[heatmap] 빌드 실패: %s", e)
