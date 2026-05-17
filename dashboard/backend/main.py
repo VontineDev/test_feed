@@ -385,6 +385,210 @@ async def scheduler_stream(request: Request):
     )
 
 
+# ── GET /api/report/stage ────────────────────────────────────
+@app.get("/api/report/stage")
+async def get_stage_report():
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        latest_date = await conn.fetchval(
+            "SELECT MAX(classified_date) FROM stage_classifications"
+        )
+        if not latest_date:
+            return {"data": None}
+
+        summary = await conn.fetch(
+            """
+            SELECT stage,
+                   COUNT(*)                                              AS count,
+                   SUM(CASE WHEN peakout_flag THEN 1 ELSE 0 END)       AS peakout
+            FROM   stage_classifications
+            WHERE  classified_date = $1
+            GROUP  BY stage ORDER BY stage
+            """, latest_date,
+        )
+
+        stage1 = await conn.fetch(
+            """
+            SELECT sc.ticker,
+                   COALESCE(k.name_ko,
+                            cs.name,
+                            SPLIT_PART(sc.ticker, '.', 1)) AS name,
+                   COALESCE(k.sector, cs.sector)           AS sector,
+                   sc.s1_high, sc.s1_volume, sc.peakout_flag
+            FROM   stage_classifications sc
+            LEFT JOIN krx_listings k  ON k.yfinance_symbol = sc.ticker
+            LEFT JOIN LATERAL (
+                SELECT name, sector FROM chart_signals
+                WHERE  ticker = sc.ticker
+                ORDER  BY screened_at DESC LIMIT 1
+            ) cs ON TRUE
+            WHERE  sc.classified_date = $1 AND sc.stage = 1
+            ORDER  BY sc.s1_volume DESC NULLS LAST
+            LIMIT  50
+            """, latest_date,
+        )
+
+    return {
+        "data": {
+            "date": str(latest_date),
+            "summary": [{"stage": r["stage"], "count": r["count"], "peakout": r["peakout"]} for r in summary],
+            "stage1": [
+                {
+                    "ticker": r["ticker"],
+                    "name": r["name"],
+                    "sector": r["sector"],
+                    "s1_high": float(r["s1_high"]) if r["s1_high"] else None,
+                    "s1_volume": r["s1_volume"],
+                    "peakout_flag": r["peakout_flag"],
+                }
+                for r in stage1
+            ],
+        }
+    }
+
+
+# ── GET /api/report/screener ──────────────────────────────────
+@app.get("/api/report/screener")
+async def get_screener_report():
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        latest_week = await conn.fetchval(
+            "SELECT MAX(week_of) FROM chart_signals"
+        )
+        if not latest_week:
+            return {"data": None}
+
+        rows = await conn.fetch(
+            """
+            SELECT ticker, name, close, ma_20w, ma_60w, ma_120w,
+                   cloud_top, is_enhanced, has_gapjum, sector, screened_at
+            FROM   chart_signals
+            WHERE  week_of = $1
+            ORDER  BY is_enhanced DESC, has_gapjum DESC, close DESC
+            """, latest_week,
+        )
+
+    items = []
+    for r in rows:
+        items.append({
+            "ticker": r["ticker"],
+            "name": r["name"] or r["ticker"],
+            "close": float(r["close"]) if r["close"] else None,
+            "ma_20w": float(r["ma_20w"]) if r["ma_20w"] else None,
+            "ma_60w": float(r["ma_60w"]) if r["ma_60w"] else None,
+            "ma_120w": float(r["ma_120w"]) if r["ma_120w"] else None,
+            "cloud_top": float(r["cloud_top"]) if r["cloud_top"] else None,
+            "is_enhanced": r["is_enhanced"],
+            "has_gapjum": r["has_gapjum"],
+            "sector": r["sector"],
+        })
+
+    enhanced = sum(1 for i in items if i["is_enhanced"])
+    gapjum   = sum(1 for i in items if i["has_gapjum"])
+
+    return {
+        "data": {
+            "week": latest_week,
+            "total": len(items),
+            "enhanced": enhanced,
+            "gapjum": gapjum,
+            "items": items,
+        }
+    }
+
+
+# ── GET /api/report/paper ─────────────────────────────────────
+@app.get("/api/report/paper")
+async def get_paper_report():
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # 모델별 상태 요약
+        model_summary = await conn.fetch(
+            """
+            SELECT model, status, COUNT(*) AS count,
+                   AVG(blended_return) FILTER (WHERE blended_return IS NOT NULL) AS avg_return
+            FROM   paper_positions
+            GROUP  BY model, status
+            ORDER  BY model, status
+            """
+        )
+
+        # 최근 청산 이력 (30건)
+        closed = await conn.fetch(
+            """
+            SELECT p.ticker,
+                   COALESCE(k.name_ko, cs.name, SPLIT_PART(p.ticker, '.', 1)) AS name,
+                   p.model, p.signal_date, p.entry_actual,
+                   p.exit_date, p.exit_price, p.exit_type,
+                   p.blended_return, p.tp1_date
+            FROM   paper_positions p
+            LEFT JOIN krx_listings k ON k.yfinance_symbol = p.ticker
+            LEFT JOIN LATERAL (
+                SELECT name FROM chart_signals
+                WHERE  ticker = p.ticker ORDER BY screened_at DESC LIMIT 1
+            ) cs ON TRUE
+            WHERE  p.status = 'closed' AND p.blended_return IS NOT NULL
+            ORDER  BY p.exit_date DESC NULLS LAST, p.id DESC
+            LIMIT  30
+            """
+        )
+
+        # 현재 오픈 포지션
+        open_pos = await conn.fetch(
+            """
+            SELECT p.ticker,
+                   COALESCE(k.name_ko, cs.name, SPLIT_PART(p.ticker, '.', 1)) AS name,
+                   p.model, p.signal_date, p.entry_actual, p.qty, p.status,
+                   o.close AS current_price
+            FROM   paper_positions p
+            LEFT JOIN krx_listings k ON k.yfinance_symbol = p.ticker
+            LEFT JOIN LATERAL (
+                SELECT name FROM chart_signals
+                WHERE  ticker = p.ticker ORDER BY screened_at DESC LIMIT 1
+            ) cs ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT close FROM daily_ohlcv
+                WHERE  symbol = p.ticker ORDER BY date DESC LIMIT 1
+            ) o ON TRUE
+            WHERE  p.status IN ('open', 'pending')
+            ORDER  BY p.signal_date DESC
+            """
+        )
+
+    def _fmt_pos(r) -> dict:
+        d = dict(r)
+        for k in ("entry_actual", "exit_price", "blended_return", "current_price"):
+            if d.get(k) is not None:
+                d[k] = float(d[k])
+        for k in ("signal_date", "exit_date", "tp1_date"):
+            if d.get(k) is not None:
+                d[k] = str(d[k])
+        if d.get("entry_actual") and d.get("current_price"):
+            d["unrealized_pct"] = round((d["current_price"] / d["entry_actual"] - 1) * 100, 2)
+        else:
+            d["unrealized_pct"] = None
+        return d
+
+    # 모델별 요약 구조화
+    models: dict = {}
+    for r in model_summary:
+        m = r["model"]
+        if m not in models:
+            models[m] = {}
+        models[m][r["status"]] = {
+            "count": r["count"],
+            "avg_return": round(float(r["avg_return"]) * 100, 2) if r["avg_return"] else None,
+        }
+
+    return {
+        "data": {
+            "model_summary": models,
+            "open": [_fmt_pos(r) for r in open_pos],
+            "closed": [_fmt_pos(r) for r in closed],
+        }
+    }
+
+
 # ── React 정적 파일 서빙 (프로덕션) ──────────────────────────
 _DIST = Path(__file__).parent.parent / "frontend" / "dist"
 if _DIST.exists():

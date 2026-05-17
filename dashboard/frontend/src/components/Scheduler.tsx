@@ -40,7 +40,7 @@ export default function Scheduler() {
   const [history, setHistory] = useState<TriggerRecord[]>([])
   const [connected, setConnected] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
-  const [tick, setTick] = useState(0)   // 1초 ticker — running 경과시간 갱신용
+  const [, setTick] = useState(0)   // 1초 ticker — running 경과시간 갱신용
   const esRef = useRef<EventSource | null>(null)
 
   // SSE 연결
