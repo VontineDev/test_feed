@@ -702,11 +702,7 @@ def _fetch_top_kiwoom(n: int) -> dict:
 # ── GET /api/top ──────────────────────────────────────────────
 @app.get("/api/top")
 async def get_top(n: int = 20, refresh: bool = False):
-    """당일 거래대금 상위 N 종목 (Kiwoom REST API, 5분 캐시).
-
-    ⚠️  fetch_top_volume()의 API ID(ka10052)는 플레이스홀더.
-        Kiwoom OpenAPI 포털에서 실제 ID 확인 후 kiwoom_aftermarket_sync.py 수정 필요.
-    """
+    """당일 거래대금 상위 N 종목 (Kiwoom ka10032 거래대금상위요청, 5분 캐시)."""
     n = min(max(n, 1), 100)
     now = time.time()
     if not refresh and _TOP_CACHE["data"] and now < _TOP_CACHE["expires"]:

@@ -281,46 +281,38 @@ class KiwoomClient:
         n: int = 20,
         market: str = "000",
     ) -> list[dict]:
-        """장중 거래대금 상위 N 종목 조회.
+        """장중 거래대금 상위 N 종목 조회 — ka10032 거래대금상위요청.
 
         market: "000"=전체, "001"=KOSPI, "101"=KOSDAQ
 
-        ⚠️  API ID 검증 필요: Kiwoom OpenAPI 포털(openapi.kiwoom.com)에서
-            "거래대금상위" 또는 "거래량상위" 항목 확인 후 아래 api_id, path,
-            body 파라미터, 응답 키를 교체할 것.
-            현재 값은 플레이스홀더. 첫 curl 결과로 스키마/단위 확정.
-
-        ⚠️  _TOP_VALUE_UNIT: ka10098 acc_trde_prica 단위(백만원=1_000_000)와
-            동일 가능성 높음. 실제 응답 확인 후 조정.
+        API 스키마 (REST API 문서 p.102-103):
+          URL:   /api/dostk/rkinfo
+          API ID: ka10032
+          응답 배열 키: trde_prica_upper
+          거래대금 필드: trde_prica (단위: 백만원 × 1_000_000 → 원)
+          검증: 삼성전자 152,000원 × 3,495만주 ≈ 5.31조원 = trde_prica(5,308,092) × 1,000,000 ✓
         """
-        # TODO: 아래 세 값은 Kiwoom 포털 확인 후 교체
-        _API_PATH = "/api/dostk/rkinfo"   # 검증 필요 (ka10098와 동일 path 가능)
-        _API_ID   = "ka10052"              # 검증 필요 — 거래대금/거래량 상위 ID
-        _ROW_KEY  = "output"               # 검증 필요 — 응답 배열 키
-
-        # 거래대금 단위 보정: ka10098 acc_trde_prica = 백만원 단위.
-        # 이 API의 trde_prica 단위도 동일하다고 가정. 응답 확인 후 조정.
-        _TOP_VALUE_UNIT = 1_000_000  # 백만원 → 원
+        _TOP_VALUE_UNIT = 1_000_000  # 백만원 → 원 (문서 응답 예시로 검증 완료)
 
         data, _ = self._post(
-            _API_PATH,
-            _API_ID,
+            "/api/dostk/rkinfo",
+            "ka10032",
             {
-                "mrkt_tp":  market,
-                "sort_base": "5",          # 5: 거래대금 기준 (검증 필요)
-                "top_cnt":  str(n),        # 상위 N건 (검증 필요)
+                "mrkt_tp":       market,   # 000:전체, 001:KOSPI, 101:KOSDAQ
+                "mang_stk_incls": "1",     # 1:관리종목 포함
+                "stex_tp":       "3",      # 3:전체(KRX+NXT)
             },
         )
 
-        rows = data.get(_ROW_KEY) or []
+        rows = data.get("trde_prica_upper") or []
         result: list[dict] = []
         for i, r in enumerate(rows[:n]):
-            raw_amt = _parse_int(r.get("trde_prica"))  # 필드명 검증 필요
+            raw_amt = _parse_int(r.get("trde_prica"))
             result.append({
-                "rank":       i + 1,
+                "rank":       _parse_int(r.get("now_rank")) or (i + 1),
                 "ticker":     str(r.get("stk_cd", "")).strip().zfill(6),
                 "name":       str(r.get("stk_nm") or r.get("stk_cd") or "").strip(),
-                "price":      _parse_int(r.get("cur_prc")) or 0,
+                "price":      abs(_parse_int(r.get("cur_prc")) or 0),
                 "change_pct": _parse_float(r.get("flu_rt")) or 0.0,
                 "amount":     (raw_amt * _TOP_VALUE_UNIT) if raw_amt else 0,
             })
