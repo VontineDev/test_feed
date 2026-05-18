@@ -1,12 +1,13 @@
 """
 dashboard/backend/main.py
-웹 대시보드 FastAPI 앱 — 4 엔드포인트 + React dist 서빙.
+웹 대시보드 FastAPI 앱 — 5 엔드포인트 + React dist 서빙.
 
 엔드포인트:
-  GET  /api/heatmap          — Stage 색상 히트맵 데이터 (30분 캐시)
+  GET  /api/heatmap          — Stage 색상 히트맵 데이터 (5분 캐시)
   GET  /api/positions        — paper_positions 미실현 수익률
   GET  /api/signals/stream   — SSE 신호 라이브 피드
   POST /api/scheduler/trigger — 스케줄러 잡 수동 트리거
+  GET  /api/top              — 당일 거래대금 상위 N 종목 (Kiwoom, 5분 캐시)
 
 개발: uvicorn main:app --reload --port 8000
 프로덕션: npm run build → FastAPI가 ../frontend/dist 서빙
@@ -16,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from datetime import date
@@ -34,6 +36,7 @@ import sys as _sys
 from pathlib import Path as _Path
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 from db import upsert_ticker_names as _upsert_ticker_names  # noqa: E402
+from kiwoom_aftermarket_sync import KiwoomClient  # noqa: E402
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -43,6 +46,15 @@ _HEATMAP_CACHE: dict = {"data": None, "expires": 0.0}
 _HEATMAP_TTL = 1800  # stage 구조 30분
 _PRICE_CACHE: dict = {"data": {}, "expires": 0.0}
 _PRICE_TTL = 300     # 가격·등락률 5분
+
+# ── 키움 토큰 캐시 (au10001 반복 호출 방지, 토큰 유효기간 24h) ──
+_KIWOOM_TOKEN: str | None = None
+_KIWOOM_TOKEN_TS: float = 0.0
+_KIWOOM_TOKEN_TTL = 82800  # 23시간
+
+# ── Top 캐시 (5분) ────────────────────────────────────────────
+_TOP_CACHE: dict = {"data": None, "expires": 0.0}
+_TOP_TTL = 300
 
 
 # ── lifespan ──────────────────────────────────────────────────
@@ -658,6 +670,57 @@ async def get_paper_report():
             "closed": [_fmt_pos(r) for r in closed],
         }
     }
+
+
+# ── 키움 토큰 관리 ────────────────────────────────────────────
+
+def _get_kiwoom_token() -> str:
+    """키움 OAuth 토큰 반환 (23h 캐시, 만료 시 재발급)."""
+    global _KIWOOM_TOKEN, _KIWOOM_TOKEN_TS
+    now = time.time()
+    if _KIWOOM_TOKEN and now - _KIWOOM_TOKEN_TS < _KIWOOM_TOKEN_TTL:
+        return _KIWOOM_TOKEN
+    appkey = os.environ.get("KIWOOM_APPKEY")
+    secretkey = os.environ.get("KIWOOM_SECRETKEY")
+    if not appkey or not secretkey:
+        raise RuntimeError("KIWOOM_APPKEY / KIWOOM_SECRETKEY 환경변수 미설정")
+    client = KiwoomClient(use_mock=False)
+    _KIWOOM_TOKEN = client.issue_token(appkey, secretkey)
+    _KIWOOM_TOKEN_TS = now
+    logger.info("[top] 키움 토큰 재발급 완료")
+    return _KIWOOM_TOKEN
+
+
+def _fetch_top_kiwoom(n: int) -> dict:
+    """Kiwoom REST API로 거래대금 상위 N 조회 (동기 — asyncio.to_thread에서 호출)."""
+    client = KiwoomClient(use_mock=False)
+    client.inject_token(_get_kiwoom_token())
+    items = client.fetch_top_volume(n=n)
+    return {"items": items, "fetched_at": time.strftime("%H:%M:%S")}
+
+
+# ── GET /api/top ──────────────────────────────────────────────
+@app.get("/api/top")
+async def get_top(n: int = 20, refresh: bool = False):
+    """당일 거래대금 상위 N 종목 (Kiwoom REST API, 5분 캐시).
+
+    ⚠️  fetch_top_volume()의 API ID(ka10052)는 플레이스홀더.
+        Kiwoom OpenAPI 포털에서 실제 ID 확인 후 kiwoom_aftermarket_sync.py 수정 필요.
+    """
+    n = min(max(n, 1), 100)
+    now = time.time()
+    if not refresh and _TOP_CACHE["data"] and now < _TOP_CACHE["expires"]:
+        return _TOP_CACHE["data"]
+    try:
+        data = await asyncio.to_thread(_fetch_top_kiwoom, n)
+        _TOP_CACHE["data"] = data
+        _TOP_CACHE["expires"] = now + _TOP_TTL
+        return data
+    except Exception as e:
+        logger.warning("[top] Kiwoom API 오류: %s", e)
+        if _TOP_CACHE["data"]:
+            return {**_TOP_CACHE["data"], "stale": True, "error": str(e)}
+        return {"items": [], "fetched_at": "--:--", "error": str(e)}
 
 
 # ── React 정적 파일 서빙 (프로덕션) ──────────────────────────

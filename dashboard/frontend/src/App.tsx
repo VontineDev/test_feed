@@ -5,12 +5,13 @@ const Positions  = lazy(() => import('./components/Positions'))
 const SignalFeed = lazy(() => import('./components/SignalFeed'))
 const Scheduler  = lazy(() => import('./components/Scheduler'))
 const Report     = lazy(() => import('./components/Report'))
+const Top        = lazy(() => import('./components/Top'))
 
 const Loading = () => (
   <div style={{ padding: 24, color: '#64748b', textAlign: 'center' as const }}>로딩 중…</div>
 )
 
-type LeftTab = 'heatmap' | 'report'
+type LeftTab = 'heatmap' | 'report' | 'top'
 
 export default function App() {
   const [leftTab, setLeftTab] = useState<LeftTab>('heatmap')
@@ -26,7 +27,7 @@ export default function App() {
         {/* 좌측 패널 */}
         <section style={styles.leftPane}>
           <div style={styles.tabBar}>
-            {([['heatmap', '히트맵'], ['report', '레포트']] as const).map(([key, label]) => (
+            {([['heatmap', '히트맵'], ['report', '레포트'], ['top', 'Top']] as const).map(([key, label]) => (
               <button
                 key={key}
                 style={{ ...styles.tab, ...(leftTab === key ? styles.tabActive : {}) }}
@@ -43,6 +44,9 @@ export default function App() {
             )}
             {leftTab === 'report' && (
               <Suspense fallback={<Loading />}><Report /></Suspense>
+            )}
+            {leftTab === 'top' && (
+              <Suspense fallback={<Loading />}><Top /></Suspense>
             )}
           </div>
         </section>

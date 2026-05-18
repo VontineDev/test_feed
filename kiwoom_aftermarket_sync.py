@@ -274,6 +274,58 @@ class KiwoomClient:
         )
         return data
 
+    # ── 거래대금 상위 조회 (대시보드 /top 탭) ─────────────────────
+
+    def fetch_top_volume(
+        self,
+        n: int = 20,
+        market: str = "000",
+    ) -> list[dict]:
+        """장중 거래대금 상위 N 종목 조회.
+
+        market: "000"=전체, "001"=KOSPI, "101"=KOSDAQ
+
+        ⚠️  API ID 검증 필요: Kiwoom OpenAPI 포털(openapi.kiwoom.com)에서
+            "거래대금상위" 또는 "거래량상위" 항목 확인 후 아래 api_id, path,
+            body 파라미터, 응답 키를 교체할 것.
+            현재 값은 플레이스홀더. 첫 curl 결과로 스키마/단위 확정.
+
+        ⚠️  _TOP_VALUE_UNIT: ka10098 acc_trde_prica 단위(백만원=1_000_000)와
+            동일 가능성 높음. 실제 응답 확인 후 조정.
+        """
+        # TODO: 아래 세 값은 Kiwoom 포털 확인 후 교체
+        _API_PATH = "/api/dostk/rkinfo"   # 검증 필요 (ka10098와 동일 path 가능)
+        _API_ID   = "ka10052"              # 검증 필요 — 거래대금/거래량 상위 ID
+        _ROW_KEY  = "output"               # 검증 필요 — 응답 배열 키
+
+        # 거래대금 단위 보정: ka10098 acc_trde_prica = 백만원 단위.
+        # 이 API의 trde_prica 단위도 동일하다고 가정. 응답 확인 후 조정.
+        _TOP_VALUE_UNIT = 1_000_000  # 백만원 → 원
+
+        data, _ = self._post(
+            _API_PATH,
+            _API_ID,
+            {
+                "mrkt_tp":  market,
+                "sort_base": "5",          # 5: 거래대금 기준 (검증 필요)
+                "top_cnt":  str(n),        # 상위 N건 (검증 필요)
+            },
+        )
+
+        rows = data.get(_ROW_KEY) or []
+        result: list[dict] = []
+        for i, r in enumerate(rows[:n]):
+            raw_amt = _parse_int(r.get("trde_prica"))  # 필드명 검증 필요
+            result.append({
+                "rank":       i + 1,
+                "ticker":     str(r.get("stk_cd", "")).strip().zfill(6),
+                "name":       str(r.get("stk_nm") or r.get("stk_cd") or "").strip(),
+                "price":      _parse_int(r.get("cur_prc")) or 0,
+                "change_pct": _parse_float(r.get("flu_rt")) or 0.0,
+                "amount":     (raw_amt * _TOP_VALUE_UNIT) if raw_amt else 0,
+            })
+        return result
+
 
 # ── 파싱 ─────────────────────────────────────────────────────────
 
