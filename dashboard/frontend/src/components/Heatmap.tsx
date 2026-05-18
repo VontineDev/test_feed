@@ -134,7 +134,18 @@ export default function Heatmap() {
           : error
           ? <div style={styles.placeholder}>오류: {error}</div>
           : !filtered.length
-          ? <div style={styles.placeholder}>오늘 분류 데이터 없음</div>
+          ? (
+            <div style={styles.placeholder}>
+              <svg width="40" height="40" viewBox="0 0 40 40" fill="none" style={{ marginBottom: 12, opacity: 0.35 }}>
+                <rect x="4" y="22" width="7" height="14" rx="2" fill="#60a5fa"/>
+                <rect x="16" y="14" width="7" height="22" rx="2" fill="#60a5fa"/>
+                <rect x="28" y="6" width="7" height="30" rx="2" fill="#60a5fa"/>
+                <path d="M7 20 L19 12 L31 4" stroke="#f87171" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              <div style={{ fontSize: 14, fontWeight: 600, color: '#64748b', marginBottom: 4 }}>오늘 분류 데이터 없음</div>
+              <div style={{ fontSize: 12, color: '#334155' }}>장 시작 후 Stage 분류 버튼을 눌러 갱신하세요</div>
+            </div>
+          )
           : (
           <ResponsiveTreeMap
             data={nivoData}
@@ -229,8 +240,8 @@ const styles: Record<string, React.CSSProperties> = {
 
   mapArea: { flex: 1, minHeight: 0 },
   placeholder: {
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    height: '100%', color: '#64748b',
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    height: '100%', color: '#64748b', textAlign: 'center' as const, padding: 24,
   },
 
   tooltip: {

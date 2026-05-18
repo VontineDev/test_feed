@@ -19,7 +19,15 @@ export default function App() {
   return (
     <div style={styles.root}>
       <header style={styles.header}>
-        <span style={styles.logo}>📈 Trading Dashboard</span>
+        <span style={styles.logo}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ marginRight: 6, verticalAlign: 'middle' }}>
+            <rect x="1" y="9" width="3" height="6" rx="1" fill="#3b82f6"/>
+            <rect x="6" y="5" width="3" height="10" rx="1" fill="#60a5fa"/>
+            <rect x="11" y="1" width="3" height="14" rx="1" fill="#93c5fd"/>
+            <path d="M2 7 L7 4 L12 2" stroke="#f87171" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+          Trading Dashboard
+        </span>
         <span style={styles.sub} className="app-header-sub">KOSPI + KOSDAQ Stage 시스템</span>
       </header>
 
