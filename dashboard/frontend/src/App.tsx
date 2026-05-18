@@ -20,16 +20,17 @@ export default function App() {
     <div style={styles.root}>
       <header style={styles.header}>
         <span style={styles.logo}>📈 Trading Dashboard</span>
-        <span style={styles.sub}>KOSPI + KOSDAQ Stage 시스템</span>
+        <span style={styles.sub} className="app-header-sub">KOSPI + KOSDAQ Stage 시스템</span>
       </header>
 
-      <main style={styles.main}>
+      <main style={styles.main} className="app-main">
         {/* 좌측 패널 */}
-        <section style={styles.leftPane}>
+        <section style={styles.leftPane} className="app-left-pane">
           <div style={styles.tabBar}>
             {([['heatmap', '히트맵'], ['report', '레포트'], ['top', 'Top']] as const).map(([key, label]) => (
               <button
                 key={key}
+                className="app-tab-btn"
                 style={{ ...styles.tab, ...(leftTab === key ? styles.tabActive : {}) }}
                 onClick={() => setLeftTab(key)}
               >
@@ -52,7 +53,7 @@ export default function App() {
         </section>
 
         {/* 우측 사이드바 */}
-        <aside style={styles.sidebar}>
+        <aside style={styles.sidebar} className="app-sidebar">
           <div style={styles.panel}>
             <Suspense fallback={<Loading />}><SignalFeed /></Suspense>
           </div>
