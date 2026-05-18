@@ -91,7 +91,7 @@ export default function Top() {
               <td style={td}>
                 {it.name}
                 <span style={{ color: '#475569', marginLeft: 4, fontSize: 10 }}>
-                  {it.ticker}
+                  {it.ticker.replace(/_[A-Z]+$/, '')}
                 </span>
               </td>
               <td style={{ ...td, textAlign: 'right' }}>
