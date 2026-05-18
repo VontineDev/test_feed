@@ -222,7 +222,8 @@ const styles: Record<string, React.CSSProperties> = {
   countdown: { fontSize: 10, color: '#334155' },
   refreshBtn: {
     background: '#1e293b', color: '#64748b', border: '1px solid #334155',
-    borderRadius: 4, padding: '2px 6px', cursor: 'pointer', fontSize: 12,
+    borderRadius: 4, padding: '6px 10px', cursor: 'pointer', fontSize: 13,
+    minWidth: 36, minHeight: 36,
   },
   count: { fontSize: 11, color: '#64748b' },
 

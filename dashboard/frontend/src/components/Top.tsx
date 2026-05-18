@@ -11,6 +11,7 @@ interface TopItem {
 
 const th: React.CSSProperties = { padding: '4px 8px', textAlign: 'left', fontWeight: 600 }
 const td: React.CSSProperties = { padding: '4px 8px' }
+const tdNum: React.CSSProperties = { padding: '4px 8px', textAlign: 'right' as const, fontVariantNumeric: 'tabular-nums' }
 
 const fmtAmt = (v: number) =>
   v >= 1e12 ? `${(v / 1e12).toFixed(1)}조`
@@ -55,10 +56,12 @@ export default function Top() {
           <button
             onClick={() => load(true)}
             disabled={loading}
+            className="app-refresh-btn"
             style={{
-              marginLeft: 8, padding: '2px 8px', fontSize: 11,
+              marginLeft: 8, padding: '4px 10px', fontSize: 13,
               background: '#1e293b', border: '1px solid #334155',
               color: '#94a3b8', cursor: 'pointer', borderRadius: 4,
+              minWidth: 36, minHeight: 36,
             }}
           >
             {loading ? '…' : '↻'}
@@ -94,16 +97,16 @@ export default function Top() {
                   {it.ticker.replace(/_[A-Z]+$/, '')}
                 </span>
               </td>
-              <td style={{ ...td, textAlign: 'right' }}>
+              <td style={tdNum}>
                 {it.price.toLocaleString()}
               </td>
               <td style={{
-                ...td, textAlign: 'right',
+                ...tdNum,
                 color: it.change_pct > 0 ? '#f87171' : it.change_pct < 0 ? '#60a5fa' : '#64748b',
               }}>
                 {it.change_pct > 0 ? '+' : ''}{it.change_pct.toFixed(2)}%
               </td>
-              <td style={{ ...td, textAlign: 'right' }}>{fmtAmt(it.amount)}</td>
+              <td style={tdNum}>{fmtAmt(it.amount)}</td>
             </tr>
           ))}
         </tbody>
