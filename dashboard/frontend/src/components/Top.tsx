@@ -113,7 +113,17 @@ export default function Top() {
 
       {items.length === 0 && !loading && !error && (
         <div style={{ textAlign: 'center', color: '#64748b', marginTop: 40, fontSize: 12 }}>
-          데이터 없음 (장 종료 후 또는 API 미검증)
+          <div>개장 시간(09:00~15:30)에 데이터가 갱신됩니다</div>
+          <button
+            onClick={() => load(true)}
+            style={{
+              marginTop: 12, padding: '8px 16px', fontSize: 12,
+              background: '#1e293b', border: '1px solid #334155',
+              color: '#94a3b8', cursor: 'pointer', borderRadius: 4,
+            }}
+          >
+            ↻ 새로고침
+          </button>
         </div>
       )}
     </div>

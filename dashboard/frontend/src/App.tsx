@@ -1,4 +1,5 @@
 import { Suspense, lazy, useState } from 'react'
+import MobileNav, { type MobileTab } from './components/MobileNav'
 
 const Heatmap    = lazy(() => import('./components/Heatmap'))
 const Positions  = lazy(() => import('./components/Positions'))
@@ -15,6 +16,7 @@ type LeftTab = 'heatmap' | 'report' | 'top'
 
 export default function App() {
   const [leftTab, setLeftTab] = useState<LeftTab>('heatmap')
+  const [mobileTab, setMobileTab] = useState<MobileTab>('top')
 
   return (
     <div style={styles.root}>
@@ -31,8 +33,8 @@ export default function App() {
         <span style={styles.sub} className="app-header-sub">KOSPI + KOSDAQ Stage 시스템</span>
       </header>
 
-      <main style={styles.main} className="app-main">
-        {/* 좌측 패널 */}
+      {/* 데스크탑 레이아웃: 769px 이상에서만 표시 */}
+      <main style={styles.main} className="app-main app-desktop-layout">
         <section style={styles.leftPane} className="app-left-pane">
           <div style={styles.tabBar}>
             {([['heatmap', '히트맵'], ['report', '레포트'], ['top', 'Top']] as const).map(([key, label]) => (
@@ -46,39 +48,39 @@ export default function App() {
               </button>
             ))}
           </div>
-
           <div style={styles.tabContent}>
-            {leftTab === 'heatmap' && (
-              <Suspense fallback={<Loading />}><Heatmap /></Suspense>
-            )}
-            {leftTab === 'report' && (
-              <Suspense fallback={<Loading />}><Report /></Suspense>
-            )}
-            {leftTab === 'top' && (
-              <Suspense fallback={<Loading />}><Top /></Suspense>
-            )}
+            {leftTab === 'heatmap' && <Suspense fallback={<Loading />}><Heatmap /></Suspense>}
+            {leftTab === 'report'  && <Suspense fallback={<Loading />}><Report /></Suspense>}
+            {leftTab === 'top'     && <Suspense fallback={<Loading />}><Top /></Suspense>}
           </div>
         </section>
-
-        {/* 우측 사이드바 */}
         <aside style={styles.sidebar} className="app-sidebar">
-          <div style={styles.panel}>
-            <Suspense fallback={<Loading />}><SignalFeed /></Suspense>
-          </div>
-          <div style={styles.panel}>
-            <Suspense fallback={<Loading />}><Positions /></Suspense>
-          </div>
-          <div style={styles.schedulerPanel}>
-            <Suspense fallback={<Loading />}><Scheduler /></Suspense>
-          </div>
+          <div style={styles.panel}><Suspense fallback={<Loading />}><SignalFeed /></Suspense></div>
+          <div style={styles.panel}><Suspense fallback={<Loading />}><Positions /></Suspense></div>
+          <div style={styles.schedulerPanel}><Suspense fallback={<Loading />}><Scheduler /></Suspense></div>
         </aside>
       </main>
+
+      {/* 모바일 레이아웃: 768px 이하에서만 표시, 활성 탭만 마운트 */}
+      <div className="app-mobile-layout">
+        {mobileTab === 'top'     && <Suspense fallback={<Loading />}><Top /></Suspense>}
+        {mobileTab === 'stage'   && <Suspense fallback={<Loading />}><Report /></Suspense>}
+        {mobileTab === 'heatmap' && <Suspense fallback={<Loading />}><Heatmap /></Suspense>}
+        {mobileTab === 'more'    && (
+          <>
+            <Suspense fallback={<Loading />}><SignalFeed /></Suspense>
+            <Suspense fallback={<Loading />}><Positions /></Suspense>
+          </>
+        )}
+      </div>
+
+      <MobileNav active={mobileTab} onChange={setMobileTab} />
     </div>
   )
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  root: { display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', background: '#0f1117' },
+  root: { display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', background: '#0f1117' },
   header: {
     display: 'flex', alignItems: 'center', gap: 12, padding: '10px 20px',
     background: '#1a1d2e', borderBottom: '1px solid #1e293b', flexShrink: 0,

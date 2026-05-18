@@ -4,6 +4,14 @@ html {
   color-scheme: dark;
 }
 
+/* iOS Safari 주소창 대응: 100svh로 실제 뷰포트 높이 사용 */
+html, body {
+  height: 100svh;
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+}
+
 /* Focus ring for keyboard navigation */
 button:focus-visible,
 a:focus-visible,
@@ -22,33 +30,79 @@ button:focus:not(:focus-visible) {
   font-variant-numeric: tabular-nums;
 }
 
-/* Responsive layout: stack on mobile */
+/* ───────────── 모바일 레이아웃 (768px 이하) ───────────── */
 @media (max-width: 768px) {
-  /* Main layout: column on mobile */
-  .app-main {
-    flex-direction: column !important;
+  /* 데스크탑 레이아웃 숨김 */
+  .app-desktop-layout {
+    display: none !important;
   }
 
-  /* Sidebar becomes full-width bottom panel on mobile */
-  .app-sidebar {
-    width: 100% !important;
-    max-height: 50vh;
-    border-right: none !important;
-    border-top: 1px solid #1e293b;
-    flex-shrink: 0 !important;
-    overflow-y: auto;
-  }
-
-  /* Left pane takes full width */
-  .app-left-pane {
-    border-right: none !important;
-    min-height: 50vh;
-  }
-
-  /* Header subtitle hidden on very small screens */
+  /* 헤더 부제목 숨김 */
   .app-header-sub {
     display: none;
   }
+
+  /* 모바일 단일 뷰 컨테이너 */
+  .app-mobile-layout {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-bottom: calc(56px + env(safe-area-inset-bottom));
+    display: flex;
+    flex-direction: column;
+  }
+}
+
+/* ───────────── 데스크탑 레이아웃 (769px 이상) ───────────── */
+@media (min-width: 769px) {
+  /* 모바일 전용 요소 숨김 */
+  .app-mobile-nav {
+    display: none !important;
+  }
+
+  .app-mobile-layout {
+    display: none !important;
+  }
+}
+
+/* ───────────── 모바일 하단 탭바 ───────────── */
+/* position: fixed이므로 미디어쿼리 밖에서 정의, 데스크탑은 위 규칙으로 숨김 */
+.app-mobile-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: calc(56px + env(safe-area-inset-bottom));
+  background: #1a1d2e;
+  border-top: 1px solid #1e293b;
+  display: flex;
+  align-items: stretch;
+  z-index: 1000;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.app-mobile-nav-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border: none;
+  border-top: 2px solid transparent;
+  background: none;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 500;
+  cursor: pointer;
+  min-height: 56px;
+  padding: 0;
+}
+
+.app-mobile-nav-btn.active {
+  color: #93c5fd;
+  border-top: 2px solid #3b82f6;
 }
 
 /* Touch target minimums */
