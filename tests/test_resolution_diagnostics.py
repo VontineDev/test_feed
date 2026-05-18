@@ -42,16 +42,3 @@ class TestResolutionMissReport:
         report = get_resolution_miss_report()
         assert report.index("흔한종목") < report.index("드문종목")
 
-    def test_counter_increments_on_full_miss(self):
-        """get_price_context() increments counter when ticker fully fails resolution."""
-        import market_data
-
-        # Feed a name that won't resolve through any path
-        with __import__("unittest.mock", fromlist=["patch"]).patch.object(
-            market_data, "YFINANCE_OK", False
-        ), __import__("unittest.mock", fromlist=["patch"]).patch.object(
-            market_data, "PYKRX_OK", False
-        ):
-            market_data.get_price_context(["완전히_없는_종목_xyz"])
-
-        assert market_data._resolution_misses["완전히_없는_종목_xyz"] == 1

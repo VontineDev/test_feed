@@ -577,21 +577,4 @@ if __name__ == "__main__":
         ))
         sys.exit(0)
 
-    # --- 기존 교차분석 테스트 ---
-    print("\n" + "="*60)
-    print("시세 데이터 + 교차 분석 테스트")
-    print("="*60)
-
-    TEST_CASES = [
-        {"direction": "SELL", "strength": 4, "tickers": ["삼성전자", "코스피", "NVDA"]},
-        {"direction": "BUY",  "strength": 3, "tickers": ["S&P500", "나스닥", "유가"]},
-        {"direction": "WATCH","strength": 3, "tickers": ["금", "코스닥"]},
-    ]
-
-    for tc in TEST_CASES:
-        print(f"\n[테스트] {tc['direction']} 강도:{tc['strength']} 종목:{tc['tickers']}")
-        result = cross_analyze(tc["direction"], tc["strength"], tc["tickers"])
-        print(f"  판정:  {result.verdict}  점수: {result.score}/10")
-        print(f"  요약:  {result.summary}")
-        for ctx in result.price_contexts:
-            print(f"  시세:  {ctx.ticker} {ctx.current:,} ({ctx.change_pct:+.1f}%) RSI:{ctx.rsi} [{ctx.source}]")
+    print("No default test action. Use --help for available options.")
