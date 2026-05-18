@@ -43,3 +43,4 @@ Thumbs.db
 .gstack/
 .claude/skills/gstack/
 .context/
+cloudflared.exe
