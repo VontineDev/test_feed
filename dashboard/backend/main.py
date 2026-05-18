@@ -19,9 +19,11 @@ dashboard/backend/main.py
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
+import secrets
 import time
 from contextlib import asynccontextmanager
 from datetime import date
@@ -30,9 +32,10 @@ from typing import AsyncGenerator
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from database import close_pool, get_pool
 
@@ -130,6 +133,35 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class _BasicAuthMiddleware(BaseHTTPMiddleware):
+    """DASHBOARD_USER / DASHBOARD_PASSWORD 환경변수가 설정된 경우에만 Basic Auth 적용."""
+
+    async def dispatch(self, request: Request, call_next):
+        user = os.environ.get("DASHBOARD_USER", "")
+        pw   = os.environ.get("DASHBOARD_PASSWORD", "")
+        if not user or not pw:
+            return await call_next(request)
+
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Basic "):
+            try:
+                decoded = base64.b64decode(auth[6:]).decode("utf-8", errors="replace")
+                req_user, _, req_pw = decoded.partition(":")
+                if secrets.compare_digest(req_user, user) and secrets.compare_digest(req_pw, pw):
+                    return await call_next(request)
+            except Exception:
+                pass
+
+        return Response(
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="Trading Dashboard"'},
+            content="Unauthorized",
+        )
+
+
+app.add_middleware(_BasicAuthMiddleware)
 
 
 # ── 당일 등락률 조회 (yfinance 2d, 5분 캐시) ─────────────────
