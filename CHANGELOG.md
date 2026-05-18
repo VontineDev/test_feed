@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.1.0] - 2026-05-18
+
+### Added
+- **대시보드 Top 탭** (`dashboard/`): 왼쪽 패널에 "Top" 탭 추가 — 당일 거래대금 상위 20개 종목을 테이블로 표시.
+  - Kiwoom REST API (`fetch_top_volume()`)로 KOSPI+KOSDAQ 전체 종목 거래대금 조회
+  - 5분 캐시 + 수동 새로고침(↻) 버튼
+  - API 오류 시 stale 캐시 반환 (graceful degradation), 에러 메시지 프론트엔드 표시
+  - 거래대금 자동 단위 변환 (조/억/원)
+- **`KiwoomClient.fetch_top_volume()`** (`kiwoom_aftermarket_sync.py`): 거래대금 상위 N 종목 조회 public 메서드 추가.
+  - ⚠️ API ID(`ka10052`)는 플레이스홀더 — Kiwoom OpenAPI 포털 확인 후 교체 필요
+  - 단위: 백만원(×1,000,000) 가정, 실제 응답 확인 후 `_TOP_VALUE_UNIT` 조정 필요
+
 ## [0.8.0.0] - 2026-05-12
 
 ### Added
