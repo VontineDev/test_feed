@@ -1,4 +1,4 @@
-"""
+﻿"""
 db.py  —  PostgreSQL 연동 모듈
 ────────────────────────────────────────────────────────────
 테이블 자동 생성, 중복 체크, 기사 저장 담당.
@@ -87,47 +87,6 @@ ALTER TABLE trade_signals ADD COLUMN IF NOT EXISTS macro_usd_krw   FLOAT;
 ALTER TABLE trade_signals ADD COLUMN IF NOT EXISTS macro_base_rate FLOAT;
 -- Idempotent migration: add article_type classification
 ALTER TABLE trade_signals ADD COLUMN IF NOT EXISTS article_type VARCHAR(20) DEFAULT 'other';
-
--- ── 백테스팅: 교차분석 결과 ──────────────────────────────────
-CREATE TABLE IF NOT EXISTS cross_analysis_results (
-    id              BIGSERIAL    PRIMARY KEY,
-    signal_id       BIGINT       NOT NULL REFERENCES trade_signals(id) ON DELETE CASCADE,
-    verdict         VARCHAR(16)  NOT NULL,
-    score           SMALLINT     NOT NULL,
-    summary         TEXT,
-    confirm_count   SMALLINT,
-    conflict_count  SMALLINT,
-    created_at      TIMESTAMPTZ  NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_cross_signal  ON cross_analysis_results (signal_id);
-CREATE INDEX IF NOT EXISTS idx_cross_verdict ON cross_analysis_results (verdict);
-
--- ── 백테스팅: 교차분석 시점 종목별 시세 스냅샷 ───────────────
-CREATE TABLE IF NOT EXISTS cross_analysis_prices (
-    id              BIGSERIAL    PRIMARY KEY,
-    cross_id        BIGINT       NOT NULL REFERENCES cross_analysis_results(id) ON DELETE CASCADE,
-    ticker          VARCHAR(64)  NOT NULL,
-    symbol          VARCHAR(32)  NOT NULL,
-    price_at_signal FLOAT        NOT NULL,
-    change_pct      FLOAT,
-    rsi             FLOAT,
-    volume_ratio    FLOAT,
-    near_52w_high   BOOLEAN,
-    near_52w_low    BOOLEAN
-);
-CREATE INDEX IF NOT EXISTS idx_cross_prices ON cross_analysis_prices (cross_id);
-
--- ── 백테스팅: 미래 시점 가격 체크포인트 ──────────────────────
-CREATE TABLE IF NOT EXISTS price_outcomes (
-    id              BIGSERIAL    PRIMARY KEY,
-    cross_price_id  BIGINT       NOT NULL REFERENCES cross_analysis_prices(id) ON DELETE CASCADE,
-    checkpoint      VARCHAR(8)   NOT NULL,
-    price           FLOAT,
-    return_pct      FLOAT,
-    fetched_at      TIMESTAMPTZ,
-    UNIQUE (cross_price_id, checkpoint)
-);
-CREATE INDEX IF NOT EXISTS idx_outcomes_unfilled ON price_outcomes (fetched_at) WHERE fetched_at IS NULL;
 
 -- ── 일봉 OHLCV (1년치 히스토리) ─────────────────────────────
 CREATE TABLE IF NOT EXISTS daily_ohlcv (
@@ -317,6 +276,14 @@ CREATE INDEX IF NOT EXISTS idx_krx_listings_updated_at
     ON krx_listings (updated_at);
 """
 
+_CREATE_TICKER_NAMES = """
+CREATE TABLE IF NOT EXISTS ticker_names (
+    ticker      TEXT PRIMARY KEY,   -- yfinance 심볼: '005930.KS'
+    name_ko     TEXT NOT NULL,
+    updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+"""
+
 
 # ── RLS 활성화 (Supabase PostgREST 노출 차단) ────────────────────
 # 이 백엔드는 asyncpg 직접 연결(postgres/service_role)을 사용하므로 RLS 영향 없음.
@@ -326,9 +293,6 @@ CREATE INDEX IF NOT EXISTS idx_krx_listings_updated_at
 _RLS_ALWAYS: list[str] = [
     "news_articles",
     "trade_signals",
-    "cross_analysis_results",
-    "cross_analysis_prices",
-    "price_outcomes",
     "daily_ohlcv",
     "daily_flow",
     "chart_signals",
@@ -336,6 +300,7 @@ _RLS_ALWAYS: list[str] = [
     "watchlist_vol_log",
     "intraday_volumes",
     "krx_listings",
+    "ticker_names",
     "trade_log",
     "scheduler_triggers",
 ]
@@ -352,6 +317,7 @@ async def init_db(pool: asyncpg.Pool) -> None:
         await conn.execute(_CREATE_TABLE)
         await conn.execute(_CREATE_TRADE_LOG)
         await conn.execute(_CREATE_KRX_TABLE)
+        await conn.execute(_CREATE_TICKER_NAMES)
         await conn.execute(_CREATE_SCHEDULER_TRIGGERS)
         await conn.execute(
             "ALTER TABLE chart_signals ADD COLUMN IF NOT EXISTS sector VARCHAR(80) DEFAULT ''"
@@ -388,6 +354,67 @@ async def init_db(pool: asyncpg.Pool) -> None:
                 """
             )
     logger.info("DB 테이블 준비 완료 (news_articles, stage_classifications, krx_listings, …)")
+
+
+# ── ticker_names: pykrx 개별 조회로 종목명 캐시 ─────────────────
+async def upsert_ticker_names(pool: asyncpg.Pool, tickers: list[str]) -> int:
+    """
+    yfinance 심볼 목록(예: ['066570.KS', '035720.KQ'])에 대해
+    pykrx get_market_ticker_name()으로 이름을 조회하고 ticker_names 테이블에 upsert.
+    이미 존재하는 ticker는 건너뜀(updated_at 기준 7일 초과 시 갱신).
+    반환: 신규/갱신된 행 수.
+    """
+    if not tickers:
+        return 0
+
+    async with pool.acquire() as conn:
+        existing = await conn.fetch(
+            """
+            SELECT ticker FROM ticker_names
+            WHERE ticker = ANY($1)
+              AND updated_at > NOW() - INTERVAL '7 days'
+            """,
+            tickers,
+        )
+    skip = {r["ticker"] for r in existing}
+    to_fetch = [t for t in tickers if t not in skip]
+    if not to_fetch:
+        return 0
+
+    import asyncio as _aio
+    from concurrent.futures import ThreadPoolExecutor as _TPE
+
+    def _lookup(ticker: str) -> tuple[str, str] | None:
+        code = ticker.split(".")[0]
+        try:
+            import pykrx.stock as _ps
+            name = _ps.get_market_ticker_name(code)
+            return (ticker, name) if name else None
+        except Exception:
+            return None
+
+    loop = _aio.get_event_loop()
+    with _TPE(max_workers=4) as ex:
+        results = await loop.run_in_executor(
+            None,
+            lambda: [r for r in map(_lookup, to_fetch) if r],
+        )
+
+    if not results:
+        return 0
+
+    async with pool.acquire() as conn:
+        await conn.executemany(
+            """
+            INSERT INTO ticker_names (ticker, name_ko, updated_at)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT (ticker) DO UPDATE
+              SET name_ko = EXCLUDED.name_ko, updated_at = NOW()
+            """,
+            results,
+        )
+    logger.info("[ticker_names] %d/%d 종목명 upsert", len(results), len(to_fetch))
+    return len(results)
 
 
 # ── 중복 체크 ─────────────────────────────────────────────────
@@ -588,149 +615,7 @@ async def fetch_latest_signals(
     return [dict(r) for r in rows]
 
 
-# ── 교차분석 결과 저장 (백테스팅) ─────────────────────────────
-_DEFAULT_CHECKPOINTS = ("1h", "4h", "1d", "3d")
-
-
-async def save_cross_analysis(
-    pool: asyncpg.Pool,
-    signal_id: int,
-    cross,                          # market_data.CrossAnalysis
-    checkpoints: tuple[str, ...] = _DEFAULT_CHECKPOINTS,
-) -> Optional[int]:
-    """
-    교차분석 결과 + 종목별 시세 스냅샷 + 미래 체크포인트(빈 행) 저장.
-    단일 트랜잭션으로 처리. 저장된 cross_analysis_results.id 반환.
-    """
-    try:
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                # 1) cross_analysis_results
-                cross_id = await conn.fetchval(
-                    """
-                    INSERT INTO cross_analysis_results
-                        (signal_id, verdict, score, summary,
-                         confirm_count, conflict_count)
-                    VALUES ($1,$2,$3,$4,$5,$6)
-                    RETURNING id
-                    """,
-                    signal_id,
-                    cross.verdict,
-                    cross.score,
-                    cross.summary,
-                    cross.confirm_count,
-                    cross.conflict_count,
-                )
-
-                # 2) cross_analysis_prices + price_outcomes
-                for ctx in cross.price_contexts:
-                    price_id = await conn.fetchval(
-                        """
-                        INSERT INTO cross_analysis_prices
-                            (cross_id, ticker, symbol, price_at_signal,
-                             change_pct, rsi, volume_ratio,
-                             near_52w_high, near_52w_low)
-                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-                        RETURNING id
-                        """,
-                        cross_id,
-                        ctx.ticker,
-                        ctx.symbol,
-                        float(ctx.current),
-                        ctx.change_pct,
-                        ctx.rsi,
-                        ctx.volume_ratio,
-                        ctx.near_52w_high,
-                        ctx.near_52w_low,
-                    )
-
-                    # 3) 체크포인트 빈 행 미리 생성
-                    for cp in checkpoints:
-                        await conn.execute(
-                            """
-                            INSERT INTO price_outcomes
-                                (cross_price_id, checkpoint)
-                            VALUES ($1, $2)
-                            ON CONFLICT DO NOTHING
-                            """,
-                            price_id,
-                            cp,
-                        )
-
-        logger.info(
-            "[백테스트] 교차분석 저장 — signal_id=%d verdict=%s 종목:%d개 체크포인트:%d개",
-            signal_id, cross.verdict,
-            len(cross.price_contexts), len(checkpoints),
-        )
-        return cross_id
-    except Exception as e:
-        logger.error("[백테스트] 교차분석 저장 실패: %s", e)
-        return None
-
-
-async def fetch_pending_outcomes(
-    pool: asyncpg.Pool,
-    limit: int = 500,
-) -> list[dict]:
-    """
-    아직 채워지지 않은(fetched_at IS NULL) 가격 체크포인트 행 조회.
-    체크포인트 시간이 경과한 것만 반환.
-    """
-    query = """
-        SELECT po.id            AS outcome_id,
-               po.checkpoint,
-               cap.symbol,
-               cap.ticker,
-               cap.price_at_signal,
-               car.created_at   AS signal_time,
-               car.signal_id
-        FROM   price_outcomes po
-        JOIN   cross_analysis_prices cap ON cap.id = po.cross_price_id
-        JOIN   cross_analysis_results car ON car.id = cap.cross_id
-        WHERE  po.fetched_at IS NULL
-          AND  car.created_at + (
-                 CASE po.checkpoint
-                   WHEN '1h' THEN INTERVAL '1 hour'
-                   WHEN '4h' THEN INTERVAL '4 hours'
-                   WHEN '1d' THEN INTERVAL '1 day'
-                   WHEN '3d' THEN INTERVAL '3 days'
-                 END
-               ) <= now()
-        ORDER BY car.created_at ASC
-        LIMIT $1
-    """
-    try:
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(query, limit)
-        return [dict(r) for r in rows]
-    except Exception as e:
-        logger.error("[백테스트] 미완 체크포인트 조회 실패: %s", e)
-        return []
-
-
-async def update_outcome(
-    pool: asyncpg.Pool,
-    outcome_id: int,
-    price: Optional[float],
-    return_pct: Optional[float],
-) -> bool:
-    """가격 체크포인트 결과 채우기."""
-    try:
-        async with pool.acquire() as conn:
-            await conn.execute(
-                """
-                UPDATE price_outcomes
-                SET    price = $2, return_pct = $3, fetched_at = now()
-                WHERE  id = $1
-                """,
-                outcome_id,
-                price,
-                return_pct,
-            )
-        return True
-    except Exception as e:
-        logger.error("[백테스트] 체크포인트 업데이트 실패 id=%d: %s", outcome_id, e)
-        return False
+# ── 분봉 거래량 저장 (placeholder — keep section below) ─────────
 
 
 # ── 분봉 거래량 저장 ─────────────────────────────────────────

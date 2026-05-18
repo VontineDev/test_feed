@@ -12,9 +12,10 @@ KOSPI/KOSDAQ 전 종목을 자동 분석하여 매매 시그널을 Telegram으�
 2. [최초 설치](#2-최초-설치)
 3. [환경변수 설정](#3-환경변수-설정)
 4. [시스템 시작](#4-시스템-시작)
+   - [4-b. 웹 대시보드](#4-b-웹-대시보드)
 5. [Telegram 명령어](#5-telegram-명령어)
    - 정보 조회: /status · /signals · /today · /screener · /top
-   - 분석: /backtest · /backtest2 · /scan
+   - 분석: /backtest · /scan
    - 거래 저널: /buy · /sell · /port · /pnl
    - 모의투자: /paper · /paper_perf · /paper_exit
 6. [자동 실행 일정](#6-자동-실행-일정)
@@ -32,12 +33,11 @@ KOSPI/KOSDAQ 전 종목을 자동 분석하여 매매 시그널을 Telegram으�
 평일 09:05 모의투자 T+1 매수주문           /status   — 시스템 상태
 평일 15:40 거래량 일보 전송                /signals  — 최근 매매 신호
 평일 16:10 모의투자 Exit 체크              /screener — 주봉 스크리닝 결과
-평일 16:30 전 종목 Stage 분류              /backtest2 — 전략 백테스트
+평일 16:30 전 종목 Stage 분류              /backtest — 전략 백테스트
 평일 16:40 모의투자 신호 샘플링            /buy /sell /port /pnl — 거래 기록
 평일 17:00 감시 종목 워치리스트 전송       /paper /paper_perf — 모의투자 현황
 매일 16:05 시간외 단일가 수집
 매일 20:00 KRX 종목 리스트 갱신
-일요일 20:00 주간 뉴스 백테스팅
 일요일 20:30 주봉 Ichimoku 스크리닝
 7분마다 뉴스 수집 + 신호 감지
 ```
@@ -182,6 +182,71 @@ python run_scheduler.py --once stage      # Stage 분류 1회 실행 후 종료
 
 ---
 
+## 4-b. 웹 대시보드
+
+브라우저에서 시스템 상태를 시각적으로 확인하고, 스케줄러 잡을 수동으로 실행할 수 있는 웹 인터페이스입니다.
+
+### 구성 요소
+
+| 컴포넌트 | 설명 |
+|----------|------|
+| **히트맵** | 오늘 Stage 1/2/3 분류 결과를 거래대금 기준 타일 히트맵으로 표시 (30분 캐시) |
+| **포지션** | 모의투자 오픈/대기 포지션 목록과 미실현 수익률 |
+| **신호 피드** | 뉴스 매매 신호 실시간 SSE 스트림 (15초 폴링) |
+| **스케줄러** | Stage 분류·차트 스크리너·모의투자 샘플링 잡 수동 트리거 + 최근 실행 이력 |
+
+### 시작 방법
+
+**방법 1 — 개발 모드 (백엔드 + 프런트엔드 분리 실행)**
+
+```powershell
+# 터미널 1: FastAPI 백엔드
+venv\Scripts\activate
+cd dashboard\backend
+uvicorn main:app --reload --port 8000
+
+# 터미널 2: Vite 프런트엔드 (핫 리로드)
+cd dashboard\frontend
+npm install          # 최초 1회
+npm run dev          # http://localhost:5173
+```
+
+**방법 2 — 프로덕션 모드 (정적 빌드 → FastAPI 서빙)**
+
+```powershell
+# 1. 프런트엔드 빌드
+cd dashboard\frontend
+npm install
+npm run build        # dist/ 폴더 생성
+
+# 2. 백엔드만 기동 (http://localhost:8000)
+cd ..\backend
+venv\Scripts\activate
+uvicorn main:app --port 8000
+```
+
+### 백엔드 환경변수
+
+백엔드는 프로젝트 루트의 `.env`를 그대로 사용합니다 (`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`).
+
+### 스케줄러 트리거 동작 원리
+
+대시보드에서 버튼을 누르면 `scheduler_triggers` 테이블에 `pending` 행이 삽입됩니다.  
+`run_scheduler.py` 가 30초마다 이 행을 감지해 해당 잡을 실행하고 `done`으로 갱신합니다.  
+따라서 **`run_scheduler.py`가 실행 중이어야** 버튼이 실제로 동작합니다.
+
+### API 엔드포인트 요약
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| `GET` | `/api/heatmap` | Stage 히트맵 데이터 (30분 캐시) |
+| `GET` | `/api/positions` | 오픈·대기 포지션 목록 |
+| `GET` | `/api/signals/stream` | 신호 SSE 스트림 |
+| `POST` | `/api/scheduler/trigger` | 잡 수동 트리거 (`{"job": "stage"\|"screener"\|"paper_sample"}`) |
+| `GET` | `/api/scheduler/status` | 최근 트리거 이력 10건 |
+
+---
+
 ## 5. Telegram 명령어
 
 ### /status
@@ -300,31 +365,10 @@ reuters: 23건 / yfinance_news: 15건 / yonhap: 8건
 
 ### /backtest
 
-뉴스 신호의 교차분석 백테스팅 리포트를 조회합니다.
-
-```
-/backtest
-```
-
-```
-📊 교차분석 백테스팅 리포트
-
-🎯 판정별 적중률 (1d 체크포인트)
-✅ CONFIRM: 52건 / 적중률 71.2%
-⚠️ CAUTION: 18건 / 적중률 44.4%
-🔴 FILTER:  12건 / 역방향 적중 66.7%
-```
-
-신호가 10건 이상 쌓인 후부터 의미 있는 수치가 나옵니다.
-
----
-
-### /backtest2
-
 차트 전략(이치모쿠/Stage/교차)을 지정 기간으로 백테스트합니다. 결과는 Telegram + HTML 파일(`reports/backtest/`)로 저장됩니다. HTML 보고서는 종목별 상세 결과(1차 익절일·수익, 최종 청산일·수익, blended 가중수익)를 포함합니다.
 
 ```
-/backtest2 <mode> <start> <end> [market] [--max N] [--tx-cost F] [--tp1 F] [--tp1-ratio F] [--trail F] [--stop F]
+/backtest <mode> <start> <end> [market] [--max N] [--tx-cost F] [--tp1 F] [--tp1-ratio F] [--trail F] [--stop F]
 ```
 
 | 파라미터 | 설명 | 기본값 |
@@ -344,16 +388,16 @@ reuters: 23건 / yfinance_news: 15건 / yonhap: 8건
 
 ```
 # Stage/KOSPI — tp1=25%, trail=10%, stop=10%
-/backtest2 stage 2024-01-01 2026-05-12 KOSPI --tp1 0.25 --trail 0.10 --stop 0.10
+/backtest stage 2024-01-01 2026-05-12 KOSPI --tp1 0.25 --trail 0.10 --stop 0.10
 
 # Stage/KOSDAQ — KOSDAQ은 trail을 15%로 넓게
-/backtest2 stage 2024-01-01 2026-05-12 KOSDAQ --tp1 0.25 --trail 0.15 --stop 0.10
+/backtest stage 2024-01-01 2026-05-12 KOSDAQ --tp1 0.25 --trail 0.15 --stop 0.10
 
 # Cross (Ichimoku × Stage) — 승률 54%, tp1=15%가 과적합 없이 최적
-/backtest2 cross 2024-01-01 2026-05-12 ALL --tp1 0.15 --trail 0.10 --stop 0.10 --max 100
+/backtest cross 2024-01-01 2026-05-12 ALL --tp1 0.15 --trail 0.10 --stop 0.10 --max 100
 
 # 기존 방식 (분할 청산 없음, MA20 이탈 기준)
-/backtest2 ichimoku 2025-01-01 2026-01-01
+/backtest ichimoku 2025-01-01 2026-01-01
 ```
 
 데이터 다운로드 포함 2~20분 소요됩니다. 완료 후 결과가 전송됩니다.
@@ -570,7 +614,6 @@ Stage별:
 | 작업 | 시각 | 설명 |
 |------|------|------|
 | 뉴스 수집 + 신호 감지 | 7분마다 | RSS → LLM 요약 → 신호 → Telegram |
-| 가격 체크포인트 추적 | 30분마다 | 신호 발생 후 1일/3일/1주 가격 기록 |
 | **모의투자 T+1 진입** | **평일 09:05 KST** | **pending 포지션 → 시가로 키움 모의투자 매수주문** |
 | 거래량 일보 | 평일 15:40 KST | 감시 종목 당일 등락률 상·하위 3종목 |
 | **모의투자 Exit 체크** | **평일 16:10 KST** | **보유 포지션 EOD 가격 체크 → 손절/익절/트레일 매도주문** |
@@ -579,7 +622,6 @@ Stage별:
 | **모의투자 EOD 샘플러** | **평일 16:40 KST** | **Stage1/Ichimoku/Cross 신호 샘플링 → pending 삽입** |
 | 워치리스트 일보 | 평일 17:00 KST | Stage 1 감시 종목 현황 + 전환 알림 |
 | KRX 종목 갱신 | 매일 20:00 KST | 전체 종목 리스트 최신화 |
-| 주간 뉴스 백테스팅 | 일요일 20:00 KST | 주간 신호 적중률 자동 리포트 |
 | 주봉 스크리닝 | 일요일 20:30 KST | Ichimoku 7조건 전 종목 스캔 + HTML |
 
 > **모의투자 잡 3개**는 `KIWOOM_MOCK_APPKEY`가 `.env`에 설정된 경우에만 활성화됩니다.
@@ -767,12 +809,12 @@ yfinance 일시 장애 또는 네트워크 문제입니다. 미실현 손익 계
 
 ---
 
-### /backtest2 실행 중 오류
+### /backtest 실행 중 오류
 
 데이터 다운로드 타임아웃이 원인인 경우가 많습니다. `--max` 값을 줄여 재시도하세요.
 
 ```
-/backtest2 ichimoku 2025-06-01 2026-01-01 KOSPI --max 50
+/backtest ichimoku 2025-06-01 2026-01-01 KOSPI --max 50
 ```
 
 ---
@@ -795,7 +837,7 @@ yfinance 일시 장애 또는 네트워크 문제입니다. 미실현 손익 계
 FIFO 방식으로 가장 오래된 포지션 하나씩 청산됩니다. 전량 청산하려면 보유 수량만큼 반복 실행하세요.
 
 **Q. 뉴스 신호 적중률은 얼마나 되나요?**
-`/backtest`에서 확인할 수 있습니다. 신호 10건 이상 누적 후 의미 있는 수치가 나옵니다. 처음 수주간은 데이터 축적 기간입니다.
+뉴스 신호는 시장이 이미 반영한 후에 생성되는 후행 지표 특성상 방향성 예측 도구로는 유의미하지 않습니다. 시스템의 실제 알파는 Stage 분류기 + Ichimoku 스크리너에 있으며, `/backtest` 로 차트 전략 백테스트를 실행할 수 있습니다.
 
 **Q. Kiwoom API 없이도 시스템이 동작하나요?**
 네. `KIWOOM_APP_KEY` 없이는 시간외 단일가 수집(16:05 KST)만 비활성화됩니다. `KIWOOM_MOCK_APPKEY` 없이는 모의투자 잡 3개(09:05/16:10/16:40 KST)가 비활성화됩니다. 나머지 기능은 모두 정상입니다.

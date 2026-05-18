@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.1.0] - 2026-05-18
+
+### Added
+- **대시보드 Top 탭** (`dashboard/`): 왼쪽 패널에 "Top" 탭 추가 — 당일 거래대금 상위 20개 종목을 실시간 표시.
+  - Kiwoom REST API ka10032(`fetch_top_volume()`)로 KOSPI+KOSDAQ 전체 조회 (문서 p.102-103 검증)
+  - 5분 캐시(asyncio.Lock 동시 호출 방지) + 수동 새로고침(↻) 버튼
+  - 401 수신 시 토큰 무효화 후 1회 재시도 — 서버측 토큰 조기 폐기 대응
+  - 거래대금 자동 단위 변환 (조/억/원), 등락률 색상 코딩, tabular-nums
+- **대시보드 레포트 탭** (`dashboard/`): Stage 분류·차트 스크리너·모의투자 포지션 3개 패널.
+  - 각 패널 섹션 접기/펼치기, 갱신 시간 표시
+- **대시보드 스케줄러 SSE 스트림** (`/api/scheduler/stream`): 스케줄러 상태 실시간 표시 (1초 폴링).
+- **히트맵 등락률 실시간 표시** (`Heatmap.tsx`): yfinance 2일 종가 비교로 당일 등락률 계산, 5분 자동갱신.
+  - nivo TreeMap 블랙아웃 버그 수정 (`leavesOnly={true}`, null 가드)
+- **종목명 한글화** (`ticker_names` 캐시 테이블): stage 분류 종목 전체에 대해 pykrx 한글명 자동 upsert.
+  - 서버 기동 시 백그라운드 시드, 7일 TTL, COALESCE 우선순위 체계
+
+### Changed
+- **디자인 개선** (`dashboard/frontend/`):
+  - 폰트: `Segoe UI, system-ui` → Pretendard Variable (한국어 최적화)
+  - 모바일 레이아웃: 768px 미만에서 좌우 패널 → 상하 스택으로 전환
+  - 터치 타겟: 탭 버튼 35px → 44px, ↻ 버튼 23px → 36px
+  - focus-visible 링 복원 (#3b82f6), color-scheme: dark
+  - 헤더 이모지 → SVG 바 차트 아이콘
+  - 빈 히트맵 상태: 아이콘 + 주 메시지 + 힌트 문구
+- **`/api/top` 코드 품질** (`main.py`): 엔드포인트 주석 정정(5→9개), 중복 상수 제거, 오류 응답 sanitize
+
+### Removed
+- **뉴스 교차분석 기능** (`cross_analyze`, `backtest.py`, 관련 DB 테이블): 별도 backtest_engine으로 대체됨.
+  - `cross_analysis_results`, `cross_analysis_prices`, `price_outcomes` 테이블 스키마 제거
+  - `market_data.py`에서 `PriceContext`, `CrossAnalysis`, `cross_analyze`, `_fetch_yfinance` 제거
+
 ## [0.8.0.0] - 2026-05-12
 
 ### Added

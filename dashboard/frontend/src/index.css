@@ -1,0 +1,68 @@
+/* Global design tokens and responsive layout */
+
+html {
+  color-scheme: dark;
+}
+
+/* Focus ring for keyboard navigation */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+button:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Tabular numbers for financial data columns */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Responsive layout: stack on mobile */
+@media (max-width: 768px) {
+  /* Main layout: column on mobile */
+  .app-main {
+    flex-direction: column !important;
+  }
+
+  /* Sidebar becomes full-width bottom panel on mobile */
+  .app-sidebar {
+    width: 100% !important;
+    max-height: 50vh;
+    border-right: none !important;
+    border-top: 1px solid #1e293b;
+    flex-shrink: 0 !important;
+    overflow-y: auto;
+  }
+
+  /* Left pane takes full width */
+  .app-left-pane {
+    border-right: none !important;
+    min-height: 50vh;
+  }
+
+  /* Header subtitle hidden on very small screens */
+  .app-header-sub {
+    display: none;
+  }
+}
+
+/* Touch target minimums */
+.app-tab-btn {
+  min-height: 44px !important;
+  padding: 10px 20px !important;
+}
+
+.app-refresh-btn {
+  min-width: 36px !important;
+  min-height: 36px !important;
+  padding: 6px 10px !important;
+}
+
+.app-scheduler-btn {
+  min-height: 40px !important;
+}

@@ -1,4 +1,4 @@
-"""
+﻿"""
 run_scheduler.py  —  수집/요약 분리 구조
 ────────────────────────────────────────────────────────────
 [수집 잡]  1분마다 피드 수집 → 신규 기사를 Queue에 적재 (즉시 종료)
@@ -45,7 +45,7 @@ except ImportError:
 
 from summarizer import summarize, Backend
 from db import (
-    create_pool, get_dsn, init_db, save_article, save_signal, save_cross_analysis,
+    create_pool, get_dsn, init_db, save_article, save_signal,
     load_seen_hashes, save_chart_signals, load_chart_signals_latest,
     get_stage1_history, save_stage_classifications,
     get_stage1_watchlist, upsert_watchlist_vol_log, get_watchlist_vol_log,
@@ -59,7 +59,7 @@ from telegram_notify import (
 from signal_detector import detect_signal
 from article_fetcher import fetch_article_body
 from telegram_bot import bot_polling_loop, init_bot
-from market_data import cross_analyze, CrossAnalysis, MacroContext, get_macro_context, get_resolution_miss_report
+from market_data import MacroContext, get_macro_context, get_resolution_miss_report
 
 # ── 로깅 설정 ────────────────────────────────────────────────
 _LOG_DIR = Path(__file__).parent / "logs"
@@ -415,7 +415,6 @@ async def summary_worker() -> None:
 
                 # ── 3. 매매 신호 감지 ─────────────────────────
                 signal = None
-                cross  = None
                 if summary_ko:
                     macro = await _get_macro()
                     signal = await detect_signal(
@@ -433,32 +432,8 @@ async def summary_worker() -> None:
                         if signal.tickers:
                             logger.info("         관련종목: %s", ", ".join(signal.tickers))
 
-                        # ── 3-1. 시세 교차 분석 ───────────────
-                        if signal.tickers:
-                            try:
-                                cross = await asyncio.get_running_loop().run_in_executor(
-                                    None,
-                                    cross_analyze,
-                                    signal.direction,
-                                    signal.strength,
-                                    signal.tickers,
-                                    signal.ticker_symbols,
-                                )
-                                verdict_icon = {
-                                    "CONFIRM": "✅", "CAUTION": "⚠️",
-                                    "FILTER": "🚫", "NEUTRAL": "➖",
-                                }.get(cross.verdict, "")
-                                logger.info(
-                                    "  [교차] %s %s 점수:%d/10 | %s",
-                                    verdict_icon, cross.verdict,
-                                    cross.score, cross.summary[:60],
-                                )
-                            except Exception as e:
-                                logger.warning("[교차] 분석 실패: %s", e)
-                                cross = None
-
                         if _db_pool and article_id:
-                            signal_id = await save_signal(
+                            await save_signal(
                                 _db_pool,
                                 article_id      = article_id,
                                 direction       = signal.direction,
@@ -470,20 +445,11 @@ async def summary_worker() -> None:
                                 macro_base_rate = macro.korea_base_rate if macro else None,
                                 article_type    = signal.article_type,
                             )
-                            if signal_id and cross:
-                                try:
-                                    await save_cross_analysis(_db_pool, signal_id, cross)
-                                except Exception as e:
-                                    logger.warning("[백테스트] 교차분석 저장 실패: %s", e)
 
                 # ── 4. Telegram 전송 ──────────────────────────
-                # 신호 감지 시에만 전송 (한국·외신 모두 동일)
                 if signal and signal.is_actionable:
-                    # FILTER 판정이면 신호 알림 억제
-                    if cross and cross.verdict == "FILTER":
-                        logger.info("  [교차] 역방향 시세로 신호 알림 억제")
                     # 스크리너 게이팅: 관련 종목이 스크리닝 통과 종목에 없으면 억제
-                    elif _screener_tickers and signal.ticker_symbols and not (
+                    if _screener_tickers and signal.ticker_symbols and not (
                         set(signal.ticker_symbols) & _screener_tickers
                     ):
                         logger.info(
@@ -491,7 +457,7 @@ async def summary_worker() -> None:
                             ", ".join(signal.ticker_symbols[:3]),
                         )
                     else:
-                        await tg_send_signal(art, summary_ko, signal, http=http, cross=cross)
+                        await tg_send_signal(art, summary_ko, signal, http=http)
 
             except Exception as e:
                 logger.warning("[요약 워커] 처리 오류: %s", e)
@@ -651,6 +617,14 @@ async def _daily_stage_job() -> None:
 
     # 6. stage_classifications upsert
     await save_stage_classifications(_db_pool, upsert_rows)
+
+    # 6b. 분류된 종목 이름 캐시 갱신 (ticker_names)
+    try:
+        from db import upsert_ticker_names as _upsert_tn
+        stage_tickers = list(stage_results.keys())
+        await _upsert_tn(_db_pool, stage_tickers)
+    except Exception as e:
+        logger.warning("[3단계] ticker_names 업데이트 실패: %s", e)
 
     # 7. 텔레그램 비교 메세지 전송
     try:
@@ -975,13 +949,6 @@ async def main(interval: int, enable_summary: bool) -> None:
     else:
         logger.info("[paper] KIWOOM_MOCK_APPKEY 미설정 — 모의투자 비활성")
 
-    # ── 펀더멘털 캐시 예열 ─────────────────────────────────────
-    from market_data import prewarm_fundamentals, YFINANCE_MAP
-    _ks_symbols = [v for v in YFINANCE_MAP.values() if v.endswith((".KS", ".KQ"))]
-    if _ks_symbols:
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, prewarm_fundamentals, _ks_symbols)
-
     # 요약 워커 초기화
     worker_task = None
     if enable_summary:
@@ -1011,62 +978,6 @@ async def main(interval: int, enable_summary: bool) -> None:
         next_run_time=datetime.now(timezone.utc) + timedelta(seconds=3),  # 스케줄러 시작 후 3초 뒤 첫 실행
         max_instances=1,                            # 중복 실행 방지
         coalesce=True,                              # 밀린 잡 합치기
-        replace_existing=True,
-    )
-
-    # ── 백테스팅: 가격 체크포인트 트래커 (30분 간격) ──────────
-    async def _track_outcomes_job():
-        if not _db_pool:
-            return
-        try:
-            from backtest import track_outcomes
-            result = await track_outcomes(_db_pool)
-            if result["filled"]:
-                logger.info("[트래커] 체크포인트 %d개 채움", result["filled"])
-        except Exception as e:
-            logger.warning("[트래커] 실행 실패: %s", e)
-
-    scheduler.add_job(
-        _track_outcomes_job,
-        trigger="interval",
-        minutes=30,
-        id="price_tracker",
-        max_instances=1,
-        coalesce=True,
-        replace_existing=True,
-    )
-
-    # ── 백테스팅: 주간 리포트 (일요일 20:00 KST) ───────────────
-    async def _weekly_backtest_report_job():
-        if not _db_pool:
-            return
-        try:
-            from backtest import backtest_report_telegram
-            from telegram_notify import _get_token, _get_chat_id
-            import httpx as _httpx
-            report = await backtest_report_telegram(_db_pool)
-            token = _get_token()
-            chat_id = _get_chat_id()
-            if not token or not chat_id:
-                logger.warning("[주간리포트] TELEGRAM_BOT_TOKEN 또는 TELEGRAM_CHAT_ID 미설정")
-                return
-            url = f"https://api.telegram.org/bot{token}/sendMessage"
-            async with _httpx.AsyncClient() as http:
-                await http.post(url, json={
-                    "chat_id": chat_id,
-                    "text": report,
-                    "parse_mode": "MarkdownV2",
-                }, timeout=30)
-            logger.info("[주간리포트] 백테스팅 주간 리포트 전송 완료")
-        except Exception as e:
-            logger.warning("[주간리포트] 실행 실패: %s", e)
-
-    scheduler.add_job(
-        _weekly_backtest_report_job,
-        CronTrigger(day_of_week="sun", hour=20, minute=0, timezone="Asia/Seoul"),
-        id="weekly_backtest",
-        max_instances=1,
-        misfire_grace_time=3600,
         replace_existing=True,
     )
 

@@ -7,7 +7,7 @@ Long polling 방식으로 명령어를 수신하고 DB 조회 결과를 응답.
     /status   — 크롤러 현재 상태 (수집 건수, 마지막 수집 시각 등)
     /signals  — 최근 매매 신호 10건 (BUY/SELL/WATCH)
     /today    — 오늘 수집된 기사 요약 (카테고리별 건수 + 최신 5건)
-    /backtest  — 교차분석 백테스팅 리포트 (판정별/종목별 적중률)
+    /backtest  — 통합 백테스트 (ichimoku / stage / cross 모드)
     /screener  — 최신 주봉 차트 스크리닝 결과 (DB 조회, 명령어 발신자에게만 전송)
     /scan      — 주봉 스크리닝 즉시 실행 (전 종목 실시간 스캔, 결과 저장 후 발신자에게 전송)
     /buy       — 진입 기록 (거래 저널)
@@ -263,35 +263,28 @@ async def _handle_today(http: httpx.AsyncClient, chat_id: str, pool) -> None:
     await _send(http, chat_id, "\n".join(lines))
 
 
-async def _handle_backtest(http: httpx.AsyncClient, chat_id: str, pool) -> None:
-    """/backtest — 교차분석 백테스팅 리포트"""
-    from backtest import backtest_report_telegram
-    report = await backtest_report_telegram(pool)
-    await _send(http, chat_id, report)
+# /backtest 중복 실행 방지 락
+_backtest_lock: asyncio.Lock = asyncio.Lock()
 
 
-# /backtest2 중복 실행 방지 락
-_backtest2_lock: asyncio.Lock = asyncio.Lock()
-
-
-async def _handle_backtest2(
+async def _handle_backtest(
     http: httpx.AsyncClient, chat_id: str, args: list[str]
 ) -> None:
-    """/backtest2 <mode> <start> <end> [market] [--max N] [--tx-cost F]
+    """/backtest <mode> <start> <end> [market] [--max N] [--tx-cost F]
 
     예:
-      /backtest2 ichimoku 2025-01-01 2026-01-01
-      /backtest2 stage    2025-01-01 2026-01-01 KOSDAQ
-      /backtest2 cross    2025-01-01 2026-01-01 ALL --max 50
+      /backtest ichimoku 2025-01-01 2026-01-01
+      /backtest stage    2025-01-01 2026-01-01 KOSDAQ
+      /backtest cross    2025-01-01 2026-01-01 ALL --max 50
     """
-    if _backtest2_lock.locked():
+    if _backtest_lock.locked():
         await _send_plain(http, chat_id,
             "⏳ 백테스트가 이미 실행 중입니다. 완료 후 결과가 전송됩니다.")
         return
 
     # ── 인수 파싱 ──────────────────────────────────────────────
     USAGE = (
-        "사용법: /backtest2 <mode> <start> <end> [market] [--max N] [--tx-cost F]\n"
+        "사용법: /backtest <mode> <start> <end> [market] [--max N] [--tx-cost F]\n"
         "              [--tp1 F] [--tp1-ratio F] [--trail F] [--stop F]\n"
         "  mode        : ichimoku | stage | stage2 | cross\n"
         "  start/end   : YYYY-MM-DD\n"
@@ -306,8 +299,8 @@ async def _handle_backtest2(
         "  Stage/KOSPI : --tp1 0.25 --trail 0.10 --stop 0.10\n"
         "  Stage/KOSDAQ: --tp1 0.25 --trail 0.15 --stop 0.10\n"
         "  Cross       : --tp1 0.15 --trail 0.10 --stop 0.10\n\n"
-        "예) /backtest2 stage 2024-01-01 2026-01-01 KOSPI --tp1 0.25 --trail 0.10 --stop 0.10\n"
-        "    /backtest2 cross 2024-01-01 2026-01-01 ALL --tp1 0.15 --trail 0.10 --stop 0.10"
+        "예) /backtest stage 2024-01-01 2026-01-01 KOSPI --tp1 0.25 --trail 0.10 --stop 0.10\n"
+        "    /backtest cross 2024-01-01 2026-01-01 ALL --tp1 0.15 --trail 0.10 --stop 0.10"
     )
 
     if len(args) < 3:
@@ -423,7 +416,7 @@ async def _handle_backtest2(
         "완료되면 결과를 전송합니다."
     )
 
-    async with _backtest2_lock:
+    async with _backtest_lock:
         try:
             loop   = asyncio.get_running_loop()
             result = await loop.run_in_executor(None, run_backtest, config)
@@ -446,7 +439,7 @@ async def _handle_backtest2(
                 report = report[:4087] + "..."
             await _send_plain(http, chat_id, report)
         except Exception as e:
-            logger.warning("[봇/backtest2] 실행 실패: %s", e)
+            logger.warning("[봇/backtest] 실행 실패: %s", e)
             await _send_plain(http, chat_id, f"백테스트 실행 중 오류: {e}")
 
 
@@ -820,9 +813,8 @@ async def _handle_help(http: httpx.AsyncClient, chat_id: str) -> None:
         "/signals sell — SELL 신호만 조회",
         "/signals watch — WATCH 신호만 조회",
         "/today — 오늘 수집 현황 \\+ 최신 기사",
-        "/backtest — 교차분석 백테스팅 리포트",
-        "/backtest2 \\<mode\\> \\<start\\> \\<end\\> — 통합 백테스트 \\(이치모쿠/3단계/교차\\)",
-        "  예\\) /backtest2 ichimoku 2025\\-01\\-01 2026\\-01\\-01",
+        "/backtest \\<mode\\> \\<start\\> \\<end\\> — 통합 백테스트 \\(이치모쿠/3단계/교차\\)",
+        "  예\\) /backtest ichimoku 2025\\-01\\-01 2026\\-01\\-01",
         "  모드\\: ichimoku \\| stage \\| cross",
         "/top — 당일 거래금액 상위 10 \\(KOSPI\\+KOSDAQ\\)",
         "/screener — 최신 주봉 차트 스크리닝 결과 \\(DB 조회\\)",
@@ -881,9 +873,7 @@ async def _process_update(http: httpx.AsyncClient, update: dict, pool) -> None:
     elif cmd == "/today":
         await _handle_today(http, chat_id, pool)
     elif cmd == "/backtest":
-        await _handle_backtest(http, chat_id, pool)
-    elif cmd == "/backtest2":
-        await _handle_backtest2(http, chat_id, args)
+        await _handle_backtest(http, chat_id, args)
     elif cmd == "/top":
         await _handle_top(http, chat_id, args)
     elif cmd == "/screener":
@@ -924,8 +914,7 @@ async def _register_commands(http: httpx.AsyncClient) -> None:
         {"command": "status",   "description": "크롤러 상태 (업타임, 수집 건수)"},
         {"command": "signals",  "description": "최근 매매 신호 10건"},
         {"command": "today",    "description": "오늘 수집 현황 + 최신 기사"},
-        {"command": "backtest",  "description": "교차분석 백테스팅 리포트"},
-        {"command": "backtest2", "description": "통합 백테스트 (이치모쿠/3단계/교차) — /backtest2 ichimoku 2025-01-01 2026-01-01"},
+        {"command": "backtest", "description": "통합 백테스트 (이치모쿠/3단계/교차) — /backtest ichimoku 2025-01-01 2026-01-01"},
         {"command": "top",       "description": "당일 거래금액 상위 10 (KOSPI+KOSDAQ)"},
         {"command": "screener", "description": "최신 주봉 차트 스크리닝 결과 (DB 조회)"},
         {"command": "scan",     "description": "주봉 스크리닝 즉시 실행 (전 종목 실시간 스캔)"},

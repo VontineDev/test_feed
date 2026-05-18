@@ -39,8 +39,7 @@ python run_scheduler.py
 | `/signals sell` | SELL 신호만 조회 |
 | `/signals watch` | WATCH 신호만 조회 |
 | `/today` | 오늘 카테고리별 수집 건수 + 최신 기사 5건 |
-| `/backtest` | 판정별·유형별·종목별 적중률 백테스팅 리포트 |
-| `/backtest2 <mode> <start> <end>` | 통합 백테스트 — ichimoku / stage / cross 모드, 기간 지정 가능 |
+| `/backtest <mode> <start> <end>` | 통합 백테스트 — ichimoku / stage / cross 모드, 기간 지정 가능 |
 | `/watchlist` | 거래대금 워치리스트 현황 (Stage 1 추적 종목, 거래대금 비율·수급·Ichimoku) |
 | `/screener` | 최신 주봉 차트 스크리닝 결과 (DM + 채널) |
 | `/scan` | 주봉 스크리닝 즉시 실행 (전 종목 실시간 스캔, 약 10~20분) |
@@ -52,11 +51,8 @@ python run_scheduler.py
 ```
 RSS 피드 수집 → 기사 본문 크롤링 → LLM 한글 요약
 → LLM 매매 신호 감지 (BUY/SELL/WATCH)
-→ yfinance 시세 교차분석 + Naver Finance 펀더멘털 스코어링 (PER/PBR/EPS)
 → PostgreSQL 저장 → 텔레그램 알림
 ```
-
-교차분석 결과는 백테스팅 시스템이 주기적으로 추적합니다. 매주 일요일 20:00 KST에 자동 리포트가 발송됩니다.
 
 ## 프로젝트 구조
 
@@ -65,8 +61,7 @@ run_scheduler.py      # 메인 실행 — RSS 루프 + 봇 병렬 실행 / --onc
 article_fetcher.py    # 기사 본문 크롤링
 summarizer.py         # 로컬 LLM 한글 요약
 signal_detector.py    # LLM 매매 신호 감지
-market_data.py        # yfinance 시세 조회 + 교차분석
-backtest.py           # 판정 정확도 추적 + 백테스팅 리포트
+market_data.py        # MacroContext(USD/KRW·기준금리), calc_rsi, fetch_daily_flow
 backtest_engine.py    # 통합 백테스트 엔진 — ichimoku / stage / cross 3모드, Sharpe·MDD·거래비용
 chart_screener.py     # 주봉 차트 스크리너 (Ichimoku + MA, KOSPI/KOSDAQ 전종목)
 screener_filters.py   # 스크리너 필터 프리셋

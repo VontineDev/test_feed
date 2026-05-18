@@ -22,13 +22,13 @@
 ## 텔레그램 명령어
 
 ```
-/backtest2 ichimoku 2025-01-01 2026-01-01
-/backtest2 stage    2025-01-01 2026-01-01 KOSDAQ
-/backtest2 cross    2025-01-01 2026-01-01
-/backtest2 stage2   2025-01-01 2026-01-01 ALL --max 100
+/backtest ichimoku 2025-01-01 2026-01-01
+/backtest stage    2025-01-01 2026-01-01 KOSDAQ
+/backtest cross    2025-01-01 2026-01-01
+/backtest stage2   2025-01-01 2026-01-01 ALL --max 100
 ```
 
-형식: `/backtest2 <mode> <start> <end> [market] [--max N] [--tx-cost F]`
+형식: `/backtest <mode> <start> <end> [market] [--max N] [--tx-cost F]`
 
 | 인수 | 기본값 | 설명 |
 |------|--------|------|
