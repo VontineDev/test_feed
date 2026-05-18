@@ -489,8 +489,7 @@ async def get_stage_report():
             """, latest_date,
         )
 
-        stage1 = await conn.fetch(
-            """
+        _STAGE_QUERY = """
             SELECT sc.ticker,
                    COALESCE(tn.name_ko, k.name_ko,
                             cs.name,
@@ -505,27 +504,34 @@ async def get_stage_report():
                 WHERE  ticker = sc.ticker
                 ORDER  BY screened_at DESC LIMIT 1
             ) cs ON TRUE
-            WHERE  sc.classified_date = $1 AND sc.stage = 1
+            WHERE  sc.classified_date = $1 AND sc.stage = $2
             ORDER  BY sc.s1_volume DESC NULLS LAST
             LIMIT  50
-            """, latest_date,
-        )
+        """
+        stage1 = await conn.fetch(_STAGE_QUERY, latest_date, 1)
+        stage2 = await conn.fetch(_STAGE_QUERY, latest_date, 2)
+        stage3 = await conn.fetch(_STAGE_QUERY, latest_date, 3)
+
+    def _fmt_stage_rows(rows) -> list:
+        return [
+            {
+                "ticker": r["ticker"],
+                "name": r["name"],
+                "sector": r["sector"],
+                "s1_high": float(r["s1_high"]) if r["s1_high"] else None,
+                "s1_volume": r["s1_volume"],
+                "peakout_flag": r["peakout_flag"],
+            }
+            for r in rows
+        ]
 
     return {
         "data": {
             "date": str(latest_date),
             "summary": [{"stage": r["stage"], "count": r["count"], "peakout": r["peakout"]} for r in summary],
-            "stage1": [
-                {
-                    "ticker": r["ticker"],
-                    "name": r["name"],
-                    "sector": r["sector"],
-                    "s1_high": float(r["s1_high"]) if r["s1_high"] else None,
-                    "s1_volume": r["s1_volume"],
-                    "peakout_flag": r["peakout_flag"],
-                }
-                for r in stage1
-            ],
+            "stage1": _fmt_stage_rows(stage1),
+            "stage2": _fmt_stage_rows(stage2),
+            "stage3": _fmt_stage_rows(stage3),
         }
     }
 

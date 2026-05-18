@@ -1392,13 +1392,13 @@ async def main(interval: int, enable_summary: bool) -> None:
         )
 
         today = _date.today()
-        # 오늘 pending이 없으면 전 영업일(금→월 포함) pending 처리
+        # 오늘 pending이 없으면 최근 4일 이내 미처리 pending 처리
+        # (주말 트리거로 signal_date가 토/일인 경우도 포함)
         for _delta in range(0, 4):
             _target = today - _td(days=_delta)
-            if _target.weekday() < 5:   # 평일만
-                _pending = await get_pending_positions(_db_pool, _target)
-                if _pending:
-                    break
+            _pending = await get_pending_positions(_db_pool, _target)
+            if _pending:
+                break
         else:
             logger.info("[paper-entry] pending 없음")
             return

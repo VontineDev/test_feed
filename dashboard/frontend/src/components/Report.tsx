@@ -1,10 +1,14 @@
 import { useState, useEffect } from 'react'
 
 // ── 타입 ────────────────────────────────────────────────────
+type StageRow = { ticker: string; name: string; sector: string | null; s1_high: number | null; s1_volume: number | null; peakout_flag: boolean }
+
 interface StageData {
   date: string
   summary: { stage: number; count: number; peakout: number }[]
-  stage1: { ticker: string; name: string; sector: string | null; s1_high: number | null; s1_volume: number | null; peakout_flag: boolean }[]
+  stage1: StageRow[]
+  stage2: StageRow[]
+  stage3: StageRow[]
 }
 
 interface ScreenerData {
@@ -57,26 +61,39 @@ function Section({ title, badge, children, defaultOpen = true }: {
 
 // ── Stage 레포트 ─────────────────────────────────────────────
 function StageReport({ data }: { data: StageData }) {
-  const stage1 = data.summary.find(x => x.stage === 1)
-  const stage2 = data.summary.find(x => x.stage === 2)
-  const stage3 = data.summary.find(x => x.stage === 3)
-  const peakout = data.summary.reduce((s, x) => s + (x.peakout ?? 0), 0)
+  const [activeStage, setActiveStage] = useState<1 | 2 | 3>(1)
+
+  const summary1 = data.summary.find(x => x.stage === 1)
+  const summary2 = data.summary.find(x => x.stage === 2)
+  const summary3 = data.summary.find(x => x.stage === 3)
+  const peakout = data.summary.reduce((acc, x) => acc + (x.peakout ?? 0), 0)
+
+  const STAGE_META: { stage: 1 | 2 | 3; label: string; color: string; rows: StageRow[]; cnt: number }[] = [
+    { stage: 1, label: 'Stage 1', color: '#60a5fa', rows: data.stage1, cnt: summary1?.count ?? 0 },
+    { stage: 2, label: 'Stage 2', color: '#a78bfa', rows: data.stage2, cnt: summary2?.count ?? 0 },
+    { stage: 3, label: 'Stage 3', color: '#f59e0b', rows: data.stage3, cnt: summary3?.count ?? 0 },
+  ]
+
+  const activeRows = STAGE_META.find(m => m.stage === activeStage)?.rows ?? []
 
   return (
     <>
       <div style={s.chips}>
-        <div style={s.chip}>
-          <span style={s.chipLabel}>Stage 1</span>
-          <span style={{ ...s.chipVal, color: '#60a5fa' }}>{stage1?.count ?? 0}</span>
-        </div>
-        <div style={s.chip}>
-          <span style={s.chipLabel}>Stage 2</span>
-          <span style={{ ...s.chipVal, color: '#a78bfa' }}>{stage2?.count ?? 0}</span>
-        </div>
-        <div style={s.chip}>
-          <span style={s.chipLabel}>Stage 3</span>
-          <span style={{ ...s.chipVal, color: '#f59e0b' }}>{stage3?.count ?? 0}</span>
-        </div>
+        {STAGE_META.map(({ stage, label, color, cnt }) => (
+          <button
+            key={stage}
+            style={{
+              ...s.chip,
+              cursor: 'pointer',
+              border: activeStage === stage ? `1px solid ${color}` : '1px solid transparent',
+              background: activeStage === stage ? '#1e3a5f' : '#1e293b',
+            }}
+            onClick={() => setActiveStage(stage)}
+          >
+            <span style={s.chipLabel}>{label}</span>
+            <span style={{ ...s.chipVal, color }}>{cnt}</span>
+          </button>
+        ))}
         {peakout > 0 && (
           <div style={s.chip}>
             <span style={s.chipLabel}>피크아웃</span>
@@ -85,9 +102,9 @@ function StageReport({ data }: { data: StageData }) {
         )}
       </div>
 
-      {data.stage1.length > 0 && (
+      {activeRows.length > 0 ? (
         <>
-          <div style={s.tableLabel}>Stage 1 진입 종목 (거래량 순)</div>
+          <div style={s.tableLabel}>Stage {activeStage} 종목 (거래량 순)</div>
           <div style={s.tableWrap}>
             <table style={s.table}>
               <thead>
@@ -98,7 +115,7 @@ function StageReport({ data }: { data: StageData }) {
                 </tr>
               </thead>
               <tbody>
-                {data.stage1.map(r => (
+                {activeRows.map(r => (
                   <tr key={r.ticker} style={{ background: r.peakout_flag ? '#1a0f0f' : 'transparent' }}>
                     <td style={s.td}>
                       <div style={s.tickerName}>{r.name}</div>
@@ -115,6 +132,8 @@ function StageReport({ data }: { data: StageData }) {
             </table>
           </div>
         </>
+      ) : (
+        <div style={s.empty}>Stage {activeStage} 종목 없음</div>
       )}
     </>
   )
@@ -381,7 +400,7 @@ const s: Record<string, React.CSSProperties> = {
   sectionBody: { padding: '0 14px 12px' },
 
   chips: { display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' as const },
-  chip: { background: '#1e293b', borderRadius: 6, padding: '6px 12px', display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 2 },
+  chip: { background: '#1e293b', borderRadius: 6, padding: '6px 12px', display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 2, border: '1px solid transparent', outline: 'none' },
   chipLabel: { fontSize: 10, color: '#64748b' },
   chipVal: { fontSize: 18, fontWeight: 700 },
 
