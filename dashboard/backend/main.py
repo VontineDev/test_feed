@@ -1,13 +1,17 @@
 """
 dashboard/backend/main.py
-웹 대시보드 FastAPI 앱 — 5 엔드포인트 + React dist 서빙.
+웹 대시보드 FastAPI 앱 — 9 엔드포인트 + React dist 서빙.
 
 엔드포인트:
-  GET  /api/heatmap          — Stage 색상 히트맵 데이터 (5분 캐시)
-  GET  /api/positions        — paper_positions 미실현 수익률
-  GET  /api/signals/stream   — SSE 신호 라이브 피드
-  POST /api/scheduler/trigger — 스케줄러 잡 수동 트리거
-  GET  /api/top              — 당일 거래대금 상위 N 종목 (Kiwoom, 5분 캐시)
+  GET  /api/heatmap              — Stage 색상 히트맵 데이터 (5분 캐시)
+  GET  /api/positions            — paper_positions 미실현 수익률
+  GET  /api/signals/stream       — SSE 신호 라이브 피드
+  POST /api/scheduler/trigger    — 스케줄러 잡 수동 트리거
+  GET  /api/scheduler/stream     — SSE 스케줄러 상태 스트림
+  GET  /api/report/stage         — Stage 분류 결과
+  GET  /api/report/screener      — 차트 스크리너 결과
+  GET  /api/report/paper         — 모의투자 포지션
+  GET  /api/top                  — 당일 거래대금 상위 N 종목 (Kiwoom, 5분 캐시)
 
 개발: uvicorn main:app --reload --port 8000
 프로덕션: npm run build → FastAPI가 ../frontend/dist 서빙
@@ -33,19 +37,17 @@ from pydantic import BaseModel
 from database import close_pool, get_pool
 
 import sys as _sys
-from pathlib import Path as _Path
-_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+_sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from db import upsert_ticker_names as _upsert_ticker_names  # noqa: E402
 from kiwoom_aftermarket_sync import KiwoomClient  # noqa: E402
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-# ── 히트맵 구조 캐시 (30분) + 가격 캐시 (5분) ────────────────
+# ── 캐시 (히트맵/가격/Top 모두 5분) ──────────────────────────
 _HEATMAP_CACHE: dict = {"data": None, "expires": 0.0}
-_HEATMAP_TTL = 1800  # stage 구조 30분
 _PRICE_CACHE: dict = {"data": {}, "expires": 0.0}
-_PRICE_TTL = 300     # 가격·등락률 5분
+_PRICE_TTL = 300     # 5분 — 가격·등락률·히트맵 구조 공통
 
 # ── 키움 토큰 캐시 (au10001 반복 호출 방지, 토큰 유효기간 24h) ──
 _KIWOOM_TOKEN: str | None = None
@@ -96,7 +98,6 @@ async def lifespan(app: FastAPI):
 
 async def _seed_ticker_names(pool) -> None:
     try:
-        from datetime import date as _date
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
@@ -714,9 +715,10 @@ async def get_top(n: int = 20, refresh: bool = False):
         return data
     except Exception as e:
         logger.warning("[top] Kiwoom API 오류: %s", e)
+        _safe_err = "API 오류 — 서버 로그 확인"
         if _TOP_CACHE["data"]:
-            return {**_TOP_CACHE["data"], "stale": True, "error": str(e)}
-        return {"items": [], "fetched_at": "--:--", "error": str(e)}
+            return {**_TOP_CACHE["data"], "stale": True, "error": _safe_err}
+        return {"items": [], "fetched_at": "--:--", "error": _safe_err}
 
 
 # ── React 정적 파일 서빙 (프로덕션) ──────────────────────────

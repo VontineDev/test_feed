@@ -29,6 +29,7 @@ export default function Top() {
     setError('')
     try {
       const r = await fetch(`/api/top?n=20${refresh ? '&refresh=true' : ''}`)
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       setItems(d.items ?? [])
       setFetchedAt(d.fetched_at ?? '')
@@ -50,7 +51,7 @@ export default function Top() {
   return (
     <div style={{ padding: 12, overflow: 'auto', height: '100%' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-        <span style={{ fontSize: 13, fontWeight: 700 }}>거래대금 상위 20</span>
+        <span style={{ fontSize: 13, fontWeight: 700 }}>거래대금 상위 {items.length || 20}</span>
         <span style={{ fontSize: 11, color: '#64748b' }}>
           {fetchedAt && `갱신: ${fetchedAt}`}
           <button
@@ -71,9 +72,7 @@ export default function Top() {
 
       {error && (
         <div style={{ color: '#f87171', fontSize: 11, marginBottom: 8 }}>
-          {error.includes('ka10052') || error.includes('API') ?
-            `API 미검증: Kiwoom OpenAPI 포털에서 거래대금상위 API ID 확인 필요 (${error})` :
-            error}
+          {error}
         </div>
       )}
 

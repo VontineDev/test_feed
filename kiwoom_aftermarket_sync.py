@@ -292,8 +292,6 @@ class KiwoomClient:
           거래대금 필드: trde_prica (단위: 백만원 × 1_000_000 → 원)
           검증: 삼성전자 152,000원 × 3,495만주 ≈ 5.31조원 = trde_prica(5,308,092) × 1,000,000 ✓
         """
-        _TOP_VALUE_UNIT = 1_000_000  # 백만원 → 원 (문서 응답 예시로 검증 완료)
-
         data, _ = self._post(
             "/api/dostk/rkinfo",
             "ka10032",
@@ -314,7 +312,7 @@ class KiwoomClient:
                 "name":       str(r.get("stk_nm") or r.get("stk_cd") or "").strip(),
                 "price":      abs(_parse_int(r.get("cur_prc")) or 0),
                 "change_pct": _parse_float(r.get("flu_rt")) or 0.0,
-                "amount":     (raw_amt * _TOP_VALUE_UNIT) if raw_amt else 0,
+                "amount":     (raw_amt * _VALUE_UNIT) if raw_amt else 0,
             })
         return result
 
