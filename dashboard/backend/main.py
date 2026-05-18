@@ -55,8 +55,11 @@ _KIWOOM_TOKEN_TS: float = 0.0
 _KIWOOM_TOKEN_TTL = 82800  # 23시간
 
 # ── Top 캐시 (5분) ────────────────────────────────────────────
+# 캐시는 n=20 기준 단일 슬롯. n이 다른 요청은 캐시된 데이터를 그대로 반환.
+# 프론트엔드가 n=20 고정이므로 충돌 없음. n 변경 시 단일 슬롯 가정 재검토 필요.
 _TOP_CACHE: dict = {"data": None, "expires": 0.0}
 _TOP_TTL = 300
+_TOP_LOCK = asyncio.Lock()
 
 
 # ── lifespan ──────────────────────────────────────────────────
@@ -692,33 +695,59 @@ def _get_kiwoom_token() -> str:
     return _KIWOOM_TOKEN
 
 
+def _invalidate_kiwoom_token() -> None:
+    global _KIWOOM_TOKEN, _KIWOOM_TOKEN_TS
+    _KIWOOM_TOKEN = None
+    _KIWOOM_TOKEN_TS = 0.0
+
+
 def _fetch_top_kiwoom(n: int) -> dict:
-    """Kiwoom REST API로 거래대금 상위 N 조회 (동기 — asyncio.to_thread에서 호출)."""
-    client = KiwoomClient(use_mock=False)
-    client.inject_token(_get_kiwoom_token())
-    items = client.fetch_top_volume(n=n)
-    return {"items": items, "fetched_at": time.strftime("%H:%M:%S")}
+    """Kiwoom REST API로 거래대금 상위 N 조회 (동기 — asyncio.to_thread에서 호출).
+
+    401 수신 시 토큰을 무효화하고 1회 재시도합니다.
+    """
+    import requests as _requests
+    for attempt in range(2):
+        try:
+            client = KiwoomClient(use_mock=False)
+            client.inject_token(_get_kiwoom_token())
+            items = client.fetch_top_volume(n=n)
+            return {"items": items, "fetched_at": time.strftime("%H:%M:%S")}
+        except _requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 401 and attempt == 0:
+                logger.warning("[top] 401 수신 — 토큰 무효화 후 재시도")
+                _invalidate_kiwoom_token()
+                continue
+            raise
 
 
 # ── GET /api/top ──────────────────────────────────────────────
 @app.get("/api/top")
 async def get_top(n: int = 20, refresh: bool = False):
-    """당일 거래대금 상위 N 종목 (Kiwoom ka10032 거래대금상위요청, 5분 캐시)."""
+    """당일 거래대금 상위 N 종목 (Kiwoom ka10032 거래대금상위요청, 5분 캐시).
+
+    캐시는 n=20 기준 단일 슬롯. 뮤텍스(_TOP_LOCK)로 동시 API 호출 방지.
+    """
     n = min(max(n, 1), 100)
     now = time.time()
     if not refresh and _TOP_CACHE["data"] and now < _TOP_CACHE["expires"]:
         return _TOP_CACHE["data"]
-    try:
-        data = await asyncio.to_thread(_fetch_top_kiwoom, n)
-        _TOP_CACHE["data"] = data
-        _TOP_CACHE["expires"] = now + _TOP_TTL
-        return data
-    except Exception as e:
-        logger.warning("[top] Kiwoom API 오류: %s", e)
-        _safe_err = "API 오류 — 서버 로그 확인"
-        if _TOP_CACHE["data"]:
-            return {**_TOP_CACHE["data"], "stale": True, "error": _safe_err}
-        return {"items": [], "fetched_at": "--:--", "error": _safe_err}
+    async with _TOP_LOCK:
+        # 락 대기 중 다른 코루틴이 캐시를 채웠을 수 있음 — 재확인
+        now = time.time()
+        if not refresh and _TOP_CACHE["data"] and now < _TOP_CACHE["expires"]:
+            return _TOP_CACHE["data"]
+        try:
+            data = await asyncio.to_thread(_fetch_top_kiwoom, n)
+            _TOP_CACHE["data"] = data
+            _TOP_CACHE["expires"] = now + _TOP_TTL
+            return data
+        except Exception as e:
+            logger.warning("[top] Kiwoom API 오류: %s", e)
+            _safe_err = "API 오류 — 서버 로그 확인"
+            if _TOP_CACHE["data"]:
+                return {**_TOP_CACHE["data"], "stale": True, "error": _safe_err}
+            return {"items": [], "fetched_at": "--:--", "error": _safe_err}
 
 
 # ── React 정적 파일 서빙 (프로덕션) ──────────────────────────
