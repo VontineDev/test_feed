@@ -217,7 +217,16 @@ async def send_signal(
             text = text.replace(ch, f"\\{ch}")
         return text
 
-    tickers_str = " ".join(f"`{t}`" for t in signal.tickers) if signal.tickers else "\\-"
+    # ticker_symbols: {LLM추출명 → yfinance 심볼} — 심볼이 있으면 한글명+코드 표시
+    from ticker_cache import ticker_cache as _tc
+    def _fmt_ticker(name: str) -> str:
+        sym = getattr(signal, "ticker_symbols", {}).get(name, "")
+        ko  = _tc.get_name(sym) if sym else ""
+        code = sym.split(".")[0] if sym else ""
+        if ko and ko != code:
+            return f"{ko}\\(`{esc(code)}`\\)" if code else esc(ko)
+        return f"`{esc(name)}`"
+    tickers_str = " ".join(_fmt_ticker(t) for t in signal.tickers) if signal.tickers else "\\-"
     source  = SOURCE_LABEL.get(art["source"], art["source"].upper())
 
     article_type = getattr(signal, "article_type", "other") or "other"
@@ -462,12 +471,17 @@ async def send_watchlist_brief(
     from datetime import date as _date
     today_str = _date.today().strftime("%Y-%m-%d")
 
+    from ticker_cache import ticker_cache as _tc
+
     if not entries:
         message = f"📊 거래대금 워치리스트 ({today_str}, 장 마감)\n\n워치리스트 없음"
     else:
         lines = [f"📊 거래대금 워치리스트 ({today_str}, 장 마감)", ""]
         for e in entries:
-            code  = e["ticker"].split(".")[0]
+            ticker = e["ticker"]
+            code   = ticker.split(".")[0]
+            ko_name = _tc.get_name(ticker)
+            display = f"{ko_name}({code})" if ko_name != code else code
             stage = e.get("current_stage") or "?"
             days_d = e.get("days_since", 0)
 
@@ -508,7 +522,7 @@ async def send_watchlist_brief(
             else:
                 ichi_line = "  ☁️ 일목: N/A"
 
-            lines.append(f"{code} — Stage {stage}, D+{days_d}")
+            lines.append(f"{display} — Stage {stage}, D+{days_d}")
             lines.append(vol_line)
             lines.append(f"  {f_part} / {i_part}")
             lines.append(ichi_line)

@@ -22,14 +22,15 @@ class TickerCache:
     KRX 종목 조회 캐시. load() 호출 전에도 resolve()는 None을 반환하므로 안전.
 
     스레드 안전성:
-    _by_name/_by_short를 단일 튜플 언패킹으로 동시 할당하여
+    _by_name/_by_short/_by_sym을 단일 튜플 언패킹으로 동시 할당하여
     스레드 풀 코루틴이 두 dict 중 하나만 업데이트된 불일치 상태를 볼 수 없게 함.
     """
 
     def __init__(self) -> None:
-        # load() 전에도 resolve() 호출이 AttributeError 없이 동작하도록 초기화
+        # load() 전에도 resolve()/get_name() 호출이 AttributeError 없이 동작하도록 초기화
         self._by_name: dict[str, str] = {}   # 한글명/영문명 → yfinance 심볼
         self._by_short: dict[str, str] = {}  # 단축코드 → yfinance 심볼
+        self._by_sym: dict[str, str] = {}    # yfinance 심볼/단축코드 → 한글 약칭
         self._loaded: bool = False
 
     async def load(self, pool: asyncpg.Pool) -> None:
@@ -37,6 +38,7 @@ class TickerCache:
         rows = await pool.fetch(LOAD_SQL)
         by_name: dict[str, str] = {}
         by_short: dict[str, str] = {}
+        by_sym: dict[str, str] = {}
 
         for row in rows:
             sym = row["yfinance_symbol"]
@@ -50,8 +52,16 @@ class TickerCache:
                 if val:
                     by_name[val] = sym
 
+            # 역조회: 심볼/단축코드 → 한글 약칭
+            ko_name = row["name_ko_abbr"] or row["name_ko"] or ""
+            if ko_name:
+                if sym:
+                    by_sym[sym] = ko_name
+                if short:
+                    by_sym[short] = ko_name
+
         # 원자적 할당: 스레드 풀 코루틴이 중간 상태를 보지 못하게 함
-        self._by_name, self._by_short = by_name, by_short
+        self._by_name, self._by_short, self._by_sym = by_name, by_short, by_sym
         self._loaded = True
         logger.info(
             "[ticker_cache] %d개 이름 항목, %d개 단축코드 로드 완료",
@@ -61,6 +71,12 @@ class TickerCache:
     def resolve(self, name: str) -> Optional[str]:
         """이름 또는 단축코드로 yfinance 심볼 조회. 찾지 못하면 None."""
         return self._by_name.get(name) or self._by_short.get(name)
+
+    def get_name(self, ticker: str) -> str:
+        """yfinance 심볼(005930.KS) 또는 단축코드(005930) → 한글 약칭.
+        캐시 미로드 또는 미존재 시 6자리 코드 반환."""
+        short = ticker.split(".")[0]
+        return self._by_sym.get(ticker) or self._by_sym.get(short) or short
 
     @property
     def loaded(self) -> bool:

@@ -813,11 +813,14 @@ async def _watchlist_brief_job() -> None:
         try:
             from datetime import date as _d
             today_str = _d.today().strftime("%Y-%m-%d")
+            from ticker_cache import ticker_cache as _tc
             alert_lines = [f"🟢 Stage 2 전환 확인 ({today_str})", ""]
             for t in stage2_alerts:
-                code = t.split(".")[0]
+                code   = t.split(".")[0]
+                ko     = _tc.get_name(t)
+                label  = f"{ko}({code})" if ko != code else code
                 days_d = (today - s1_date_map[t]).days
-                alert_lines.append(f"  {code} — D+{days_d} → Stage 2 진입")
+                alert_lines.append(f"  {label} — D+{days_d} → Stage 2 진입")
             alert_msg = "\n".join(alert_lines)
             async with httpx.AsyncClient() as http:
                 from telegram_notify import _get_token, _get_chat_id, _post_message
@@ -842,12 +845,15 @@ async def _watchlist_brief_job() -> None:
         try:
             from datetime import date as _d
             today_str = _d.today().strftime("%Y-%m-%d")
+            from ticker_cache import ticker_cache as _tc
             death_lines = [f"❌ 랠리 소멸 경고 ({today_str})", "3거래일 연속 진입비 -40% 이상", ""]
             for t in rally_death_alerts:
                 code  = t.split(".")[0]
+                ko    = _tc.get_name(t)
+                label = f"{ko}({code})" if ko != code else code
                 ratio = next((e["vol_ratio"] for e in entries if e["ticker"] == t), None)
                 pct   = f"{(ratio - 1) * 100:.0f}%" if ratio is not None else "N/A"
-                death_lines.append(f"  {code} 오늘 비율 {pct}")
+                death_lines.append(f"  {label} 오늘 비율 {pct}")
             death_msg = "\n".join(death_lines)
             async with httpx.AsyncClient() as http:
                 from telegram_notify import _get_token, _get_chat_id, _post_message
