@@ -5,7 +5,7 @@ html {
 }
 
 /* iOS Safari 주소창 대응: 100svh로 실제 뷰포트 높이 사용 */
-html, body {
+html, body, #root {
   height: 100svh;
   overflow: hidden;
   margin: 0;
@@ -42,15 +42,24 @@ button:focus:not(:focus-visible) {
     display: none;
   }
 
-  /* 모바일 단일 뷰 컨테이너 */
+  /* 모바일 단일 뷰 컨테이너 — 유일한 스크롤 컨테이너 */
   .app-mobile-layout {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
+    -webkit-overflow-scrolling: touch; /* iOS 모멘텀 스크롤 */
     padding-bottom: calc(56px + env(safe-area-inset-bottom));
     display: flex;
     flex-direction: column;
+  }
+
+  /* 각 탭 컴포넌트의 인라인 height:100% + overflow:auto를 무력화.
+     컴포넌트가 자체 스크롤하지 않고 .app-mobile-layout이 스크롤하도록. */
+  .app-mobile-layout > div {
+    height: auto !important;
+    overflow: visible !important;
+    flex-shrink: 0;
   }
 }
 
