@@ -1,22 +1,18 @@
 import { Suspense, lazy, useState } from 'react'
-import MobileNav, { type MobileTab } from './components/MobileNav'
+import MobileNav from './components/MobileNav'
+import { TAB_CONFIG, DEFAULT_TAB, type TabKey, type MobileTabKey } from './tabs'
 
-const Heatmap    = lazy(() => import('./components/Heatmap'))
 const Positions  = lazy(() => import('./components/Positions'))
 const SignalFeed = lazy(() => import('./components/SignalFeed'))
 const Scheduler  = lazy(() => import('./components/Scheduler'))
-const Report     = lazy(() => import('./components/Report'))
-const Top        = lazy(() => import('./components/Top'))
 
 const Loading = () => (
   <div style={{ padding: 24, color: '#64748b', textAlign: 'center' as const }}>로딩 중…</div>
 )
 
-type LeftTab = 'heatmap' | 'report' | 'top'
-
 export default function App() {
-  const [leftTab, setLeftTab] = useState<LeftTab>('heatmap')
-  const [mobileTab, setMobileTab] = useState<MobileTab>('top')
+  const [leftTab, setLeftTab]   = useState<TabKey>(DEFAULT_TAB)
+  const [mobileTab, setMobileTab] = useState<MobileTabKey>(DEFAULT_TAB)
 
   return (
     <div style={styles.root}>
@@ -37,7 +33,7 @@ export default function App() {
       <main style={styles.main} className="app-main app-desktop-layout">
         <section style={styles.leftPane} className="app-left-pane">
           <div style={styles.tabBar}>
-            {([['heatmap', '히트맵'], ['report', '레포트'], ['top', 'Top']] as const).map(([key, label]) => (
+            {TAB_CONFIG.map(({ key, label }) => (
               <button
                 key={key}
                 className="app-tab-btn"
@@ -49,9 +45,9 @@ export default function App() {
             ))}
           </div>
           <div style={styles.tabContent}>
-            {leftTab === 'heatmap' && <Suspense fallback={<Loading />}><Heatmap /></Suspense>}
-            {leftTab === 'report'  && <Suspense fallback={<Loading />}><Report /></Suspense>}
-            {leftTab === 'top'     && <Suspense fallback={<Loading />}><Top /></Suspense>}
+            {TAB_CONFIG.map(({ key, component: Comp }) =>
+              leftTab === key && <Suspense key={key} fallback={<Loading />}><Comp /></Suspense>
+            )}
           </div>
         </section>
         <aside style={styles.sidebar} className="app-sidebar">
@@ -63,13 +59,14 @@ export default function App() {
 
       {/* 모바일 레이아웃: 768px 이하에서만 표시, 활성 탭만 마운트 */}
       <div className="app-mobile-layout">
-        {mobileTab === 'top'     && <Suspense fallback={<Loading />}><Top /></Suspense>}
-        {mobileTab === 'stage'   && <Suspense fallback={<Loading />}><Report /></Suspense>}
-        {mobileTab === 'heatmap' && <Suspense fallback={<Loading />}><Heatmap /></Suspense>}
-        {mobileTab === 'more'    && (
+        {TAB_CONFIG.map(({ key, component: Comp }) =>
+          mobileTab === key && <Suspense key={key} fallback={<Loading />}><Comp /></Suspense>
+        )}
+        {mobileTab === 'more' && (
           <>
             <Suspense fallback={<Loading />}><SignalFeed /></Suspense>
             <Suspense fallback={<Loading />}><Positions /></Suspense>
+            <Suspense fallback={<Loading />}><Scheduler /></Suspense>
           </>
         )}
       </div>
