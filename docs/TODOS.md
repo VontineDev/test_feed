@@ -146,6 +146,7 @@ await conn.execute("""
 **Priority:** P2
 **Deferred from:** `feat/krx-listings-db` (v0.3.0.0)
 **Blocked by:** Phase 1 diagnostics (need 1–2 weeks of real miss data to calibrate)
+**Completed:** v0.9.3.0 (2026-05-20) — `resolve_fuzzy()` 추가(`ticker_cache.py`); `_parse_signal_json()`에서 exact→fuzzy→miss 순 해석; `_resolution_misses` 연동; `test_resolve_fuzzy.py` (13 tests).
 
 ---
 
@@ -172,6 +173,7 @@ await conn.execute("""
 **Effort:** S (human: ~1 day / CC: ~20 min)
 **Priority:** P2
 **Blocked by:** Screener running for 2-3 weeks. Manual review of output.
+**Completed:** v0.9.3.0 (2026-05-20) — `confidence` 필드 추가(`TradeSignal`); 게이팅 버그 수정(`.values()` 기준 교차); `signal.confidence="HIGH"` 상향; Telegram `🔥 HIGH CONFIDENCE` 배지; `test_high_confidence.py` (7 tests).
 
 ---
 

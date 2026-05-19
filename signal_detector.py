@@ -27,7 +27,9 @@ try:
 except ImportError:
     pass
 
+import market_data as _md
 from market_data import MacroContext
+from ticker_cache import ticker_cache as _tc
 from summarizer import (
     _call_openai_compat,
     _call_ollama_native,
@@ -52,7 +54,8 @@ class TradeSignal:
     ticker_symbols: dict[str, str]  # 표시명 → yfinance 심볼 (예: {"삼성전자": "005930.KS"})
     backend: Backend
     success: bool                # LLM 판단 성공 여부
-    article_type: str = "other"  # 기사 유형: earnings|ma|management|analyst|regulatory|product|macro|other
+    article_type: str = "other"   # 기사 유형: earnings|ma|management|analyst|regulatory|product|macro|other
+    confidence: str = "NORMAL"   # "NORMAL" | "HIGH" (스크리너 교차 시 HIGH로 상향)
 
     @property
     def is_actionable(self) -> bool:
@@ -200,6 +203,17 @@ def _parse_signal_json(raw: str, backend: Backend) -> TradeSignal:
 
         if ticker_symbols:
             logger.debug("[신호감지] LLM 심볼 %d개 수신: %s", len(ticker_symbols), ticker_symbols)
+
+        # 이름만 있고 심볼 없는 티커: exact → fuzzy 순으로 캐시 해석, 실패 시 miss 기록
+        for name in tickers:
+            if name not in ticker_symbols:
+                sym = _tc.resolve(name) or _tc.resolve_fuzzy(name)
+                if sym:
+                    ticker_symbols[name] = sym
+                    logger.debug("[신호감지] 심볼 캐시 해석: %r → %s", name, sym)
+                else:
+                    _md._resolution_misses[name] += 1
+                    logger.warning("[신호감지] 종목 심볼 미해석: %r", name)
 
         article_type = str(data.get("article_type", "other")).lower()
         if article_type not in VALID_ARTICLE_TYPES:

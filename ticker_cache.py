@@ -72,6 +72,24 @@ class TickerCache:
         """이름 또는 단축코드로 yfinance 심볼 조회. 찾지 못하면 None."""
         return self._by_name.get(name) or self._by_short.get(name)
 
+    def resolve_fuzzy(self, name: str, threshold: float = 0.82) -> Optional[str]:
+        """difflib.SequenceMatcher로 이름 근사 매칭.
+
+        threshold=0.82: 현대차(6) vs 현대차증권(8) → ratio≈0.75 < 0.82 (false positive 없음).
+        캐시 미로드 또는 빈 이름이면 None 반환.
+        """
+        from difflib import SequenceMatcher
+        if not name or not self._by_name:
+            return None
+        best_ratio = 0.0
+        best_sym: Optional[str] = None
+        for key, sym in self._by_name.items():
+            ratio = SequenceMatcher(None, name, key).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_sym = sym
+        return best_sym if best_ratio >= threshold else None
+
     def get_name(self, ticker: str) -> str:
         """yfinance 심볼(005930.KS) 또는 단축코드(005930) → 한글 약칭.
         캐시 미로드 또는 미존재 시 6자리 코드 반환."""

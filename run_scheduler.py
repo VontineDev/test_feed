@@ -448,15 +448,23 @@ async def summary_worker() -> None:
 
                 # ── 4. Telegram 전송 ──────────────────────────
                 if signal and signal.is_actionable:
-                    # 스크리너 게이팅: 관련 종목이 스크리닝 통과 종목에 없으면 억제
+                    # 스크리너 게이팅: 심볼(values) 기준으로 스크리닝 통과 종목과 교차 확인
+                    signal_syms = set(signal.ticker_symbols.values())
                     if _screener_tickers and signal.ticker_symbols and not (
-                        set(signal.ticker_symbols) & _screener_tickers
+                        signal_syms & _screener_tickers
                     ):
                         logger.info(
                             "  [게이팅] 스크리너 미통과 종목 신호 억제: %s",
-                            ", ".join(signal.ticker_symbols[:3]),
+                            ", ".join(list(signal.ticker_symbols.keys())[:3]),
                         )
                     else:
+                        # 스크리너 교차 종목이면 HIGH CONFIDENCE로 상향
+                        if _screener_tickers and signal_syms & _screener_tickers:
+                            signal.confidence = "HIGH"
+                            logger.info(
+                                "  [HIGH CONFIDENCE] 스크리너 교차 종목: %s",
+                                ", ".join(signal_syms & _screener_tickers),
+                            )
                         await tg_send_signal(art, summary_ko, signal, http=http)
 
             except Exception as e:

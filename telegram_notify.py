@@ -233,8 +233,11 @@ async def send_signal(
     type_badge = TYPE_BADGE.get(article_type, "")
     badge_prefix = f"{type_badge} " if article_type != "other" and type_badge else ""
 
+    confidence = getattr(signal, "confidence", "NORMAL")
+    conf_line = "🔥 *HIGH CONFIDENCE \\- 스크리너 교차 종목*\n" if confidence == "HIGH" else ""
+
     lines = [
-        f"{badge_prefix}{icon} *매매 신호 감지 \\- {esc(signal.direction)}*",
+        f"{conf_line}{badge_prefix}{icon} *매매 신호 감지 \\- {esc(signal.direction)}*",
         f"강도: {bar} {signal.strength}/5",
         "",
         f"📰 {esc(art['title'][:70])}",
