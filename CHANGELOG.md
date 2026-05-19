@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.2.0] - 2026-05-19
+
+### Added
+- **모바일 하단 탭 내비게이션** (`MobileNav.tsx`, `index.css`): 768px 이하에서 iOS 앱처럼 전체화면 탭 전환. 히트맵·레포트·Top·모의투자·시그널 5탭 — 각 탭 전환 시 해당 컴포넌트만 마운트되어 API 호출 최소화.
+- **모의투자 전용 탭** (`PaperPortfolio.tsx`): 모의투자 포지션(22건 이상 추적 중)과 스케줄러 컨트롤을 하나의 탭으로 통합 — PC와 모바일 양쪽에서 접근 가능.
+- **대시보드 외부 접근** (`main.py`): DuckDNS + 포트포워딩으로 외부 접속 지원. HTTP Basic Auth 미들웨어 추가 (localhost는 인증 면제).
+
+### Changed
+- **탭 구조 통일** (`tabs.ts`): `TAB_CONFIG` 단일 배열로 PC·모바일 탭 이름·순서·기본값 동기화 — 불일치 구조적 차단. 기본 탭 `heatmap`으로 통일.
+- **iOS 스크롤 수정** (`index.css`): 조상 요소 `overflow: hidden`이 iOS Safari 터치 스크롤을 차단하던 문제 해결. `#root`·`.app-root` 모바일에서 `overflow: visible`로 변경.
+- **키움 모의투자 주문** (`kiwoom_paper_trader.py`): `kt10000`/`kt10001` 요청 body에 `acnt_no` 필드 추가 — 재신청 계좌에서 매수 오류(`RC4091`) 해소.
+
 ## [0.9.1.0] - 2026-05-18
 
 ### Added
