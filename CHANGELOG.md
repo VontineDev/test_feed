@@ -13,6 +13,9 @@ All notable changes to this project will be documented in this file.
 - **탭 구조 통일** (`tabs.ts`): `TAB_CONFIG` 단일 배열로 PC·모바일 탭 이름·순서·기본값 동기화 — 불일치 구조적 차단. 기본 탭 `heatmap`으로 통일.
 - **iOS 스크롤 수정** (`index.css`): 조상 요소 `overflow: hidden`이 iOS Safari 터치 스크롤을 차단하던 문제 해결. `#root`·`.app-root` 모바일에서 `overflow: visible`로 변경.
 - **키움 모의투자 주문** (`kiwoom_paper_trader.py`): `kt10000`/`kt10001` 요청 body에 `acnt_no` 필드 추가 — 재신청 계좌에서 매수 오류(`RC4091`) 해소.
+- **모의투자 탭 통합** (`Report.tsx`, `PaperPortfolio.tsx`): 레포트 탭의 모의투자 섹션(모델별 요약·오픈 포지션·청산 이력)을 모의투자 전용 탭으로 이전 — 모든 모의투자 정보가 한 탭에 집중. 레포트 탭은 Stage 분류·차트 스크리닝만 유지.
+- **차트 스크리닝 칩 필터** (`Report.tsx`): 통과·강화·갭점프 칩을 클릭 가능한 필터로 전환 — 칩 클릭 시 해당 유형 종목만 테이블에 표시.
+- **모바일 히트맵 블랙아웃 수정** (`Heatmap.tsx`, `index.css`): 모바일에서 `height: auto !important` 오버라이드가 `ResponsiveTreeMap` 컨테이너 높이를 0으로 만들어 블랙아웃이 발생하던 문제 해결. `.heatmap-root` 예외 규칙으로 `calc(100svh − 헤더 − 탭바)` 명시적 높이 부여.
 
 ## [0.9.1.0] - 2026-05-18
 
