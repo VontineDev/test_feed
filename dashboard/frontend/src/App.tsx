@@ -2,16 +2,14 @@ import { Suspense, lazy, useState } from 'react'
 import MobileNav from './components/MobileNav'
 import { TAB_CONFIG, DEFAULT_TAB, type TabKey, type MobileTabKey } from './tabs'
 
-const Positions  = lazy(() => import('./components/Positions'))
 const SignalFeed = lazy(() => import('./components/SignalFeed'))
-const Scheduler  = lazy(() => import('./components/Scheduler'))
 
 const Loading = () => (
   <div style={{ padding: 24, color: '#64748b', textAlign: 'center' as const }}>로딩 중…</div>
 )
 
 export default function App() {
-  const [leftTab, setLeftTab]   = useState<TabKey>(DEFAULT_TAB)
+  const [leftTab, setLeftTab]     = useState<TabKey>(DEFAULT_TAB)
   const [mobileTab, setMobileTab] = useState<MobileTabKey>(DEFAULT_TAB)
 
   return (
@@ -29,7 +27,7 @@ export default function App() {
         <span style={styles.sub} className="app-header-sub">KOSPI + KOSDAQ Stage 시스템</span>
       </header>
 
-      {/* 데스크탑 레이아웃: 769px 이상에서만 표시 */}
+      {/* 데스크탑 레이아웃 */}
       <main style={styles.main} className="app-main app-desktop-layout">
         <section style={styles.leftPane} className="app-left-pane">
           <div style={styles.tabBar}>
@@ -52,22 +50,16 @@ export default function App() {
         </section>
         <aside style={styles.sidebar} className="app-sidebar">
           <div style={styles.panel}><Suspense fallback={<Loading />}><SignalFeed /></Suspense></div>
-          <div style={styles.panel}><Suspense fallback={<Loading />}><Positions /></Suspense></div>
-          <div style={styles.schedulerPanel}><Suspense fallback={<Loading />}><Scheduler /></Suspense></div>
         </aside>
       </main>
 
-      {/* 모바일 레이아웃: 768px 이하에서만 표시, 활성 탭만 마운트 */}
+      {/* 모바일 레이아웃 */}
       <div className="app-mobile-layout">
         {TAB_CONFIG.map(({ key, component: Comp }) =>
           mobileTab === key && <Suspense key={key} fallback={<Loading />}><Comp /></Suspense>
         )}
         {mobileTab === 'more' && (
-          <>
-            <Suspense fallback={<Loading />}><SignalFeed /></Suspense>
-            <Suspense fallback={<Loading />}><Positions /></Suspense>
-            <Suspense fallback={<Loading />}><Scheduler /></Suspense>
-          </>
+          <Suspense fallback={<Loading />}><SignalFeed /></Suspense>
         )}
       </div>
 
@@ -94,7 +86,6 @@ const styles: Record<string, React.CSSProperties> = {
   },
   tabActive: { color: '#93c5fd', borderBottom: '2px solid #3b82f6' },
   tabContent: { flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' },
-  sidebar: { width: 380, display: 'flex', flexDirection: 'column', overflowY: 'auto', flexShrink: 0 },
+  sidebar: { width: 340, display: 'flex', flexDirection: 'column', overflowY: 'auto', flexShrink: 0 },
   panel: { flex: 1, minHeight: 200, borderBottom: '1px solid #1e293b', overflow: 'auto' },
-  schedulerPanel: { flexShrink: 0 },
 }
