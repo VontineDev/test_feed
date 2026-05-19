@@ -127,6 +127,8 @@ pytest tests/test_watchlist_brief.py -v
 
 - [docs/USER_MANUAL.md](docs/USER_MANUAL.md) — 설치부터 첫 텔레그램 알림까지 전체 가이드 (처음 설치하는 분은 여기서 시작)
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 시스템 아키텍처, 모듈 상세, 데이터 흐름
+- [docs/Dashboard.md](docs/Dashboard.md) — 웹 대시보드 API 레퍼런스 + 개발·배포 가이드
+- [docs/HTTPS-Setup.md](docs/HTTPS-Setup.md) — Caddy HTTPS 설정 (Let's Encrypt + DuckDNS)
 - [CHANGELOG.md](CHANGELOG.md) — 버전별 변경 이력
 - [docs/HowToBacktest.md](docs/HowToBacktest.md) — 통합 백테스트 엔진 사용 가이드
 
