@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 _PAPER_APPKEY    = os.environ.get("KIWOOM_MOCK_APPKEY", "")
 _PAPER_SECRETKEY = os.environ.get("KIWOOM_MOCK_APPSECRET", "")
+_PAPER_ACCOUNT   = os.environ.get("KIWOOM_MOCK_ACCOUNT", "")
 _EXCHANGE        = "KRX"   # mockapi는 KRX만 지원
 
 # 모델별 슬롯 수 / 포지션당 금액(원)
@@ -80,6 +81,7 @@ class KiwoomPaperTrader:
         data, _ = self._client._post(
             "/api/dostk/ordr", "kt10000",
             {
+                "acnt_no":      _PAPER_ACCOUNT,
                 "dmst_stex_tp": _EXCHANGE,
                 "stk_cd":       stk_cd,
                 "ord_qty":      str(qty),
@@ -104,6 +106,7 @@ class KiwoomPaperTrader:
         data, _ = self._client._post(
             "/api/dostk/ordr", "kt10001",
             {
+                "acnt_no":      _PAPER_ACCOUNT,
                 "dmst_stex_tp": _EXCHANGE,
                 "stk_cd":       stk_cd,
                 "ord_qty":      str(qty),
