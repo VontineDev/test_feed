@@ -99,7 +99,7 @@ export default function Heatmap() {
   }
 
   return (
-    <div style={styles.container}>
+    <div style={styles.container} className="heatmap-root">
       {/* 헤더 */}
       <div style={styles.header}>
         <span style={styles.title}>시장 히트맵</span>

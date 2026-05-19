@@ -19,28 +19,9 @@ interface ScreenerData {
   items: { ticker: string; name: string; close: number | null; ma_20w: number | null; cloud_top: number | null; is_enhanced: boolean; has_gapjum: boolean; sector: string | null }[]
 }
 
-interface PaperData {
-  model_summary: Record<string, Record<string, { count: number; avg_return: number | null }>>
-  open: { ticker: string; name: string; model: string; signal_date: string; entry_actual: number | null; current_price: number | null; unrealized_pct: number | null; status: string; qty: number | null }[]
-  closed: { ticker: string; name: string; model: string; signal_date: string; exit_date: string | null; exit_type: string | null; blended_return: number | null; tp1_date: string | null }[]
-}
-
 // ── 유틸 ────────────────────────────────────────────────────
 const fmt = (v: number | null | undefined, digits = 0) =>
   v == null ? '—' : v.toLocaleString('ko-KR', { maximumFractionDigits: digits })
-
-const pctColor = (v: number | null | undefined) => {
-  if (v == null) return '#64748b'
-  return v > 0 ? '#4ade80' : v < 0 ? '#f87171' : '#94a3b8'
-}
-
-const MODEL_LABEL: Record<string, string> = {
-  stage: 'Stage', kosdaq: 'KOSDAQ', cross: 'Cross', ichimoku: 'Ichimoku',
-}
-
-const EXIT_LABEL: Record<string, string> = {
-  hard_stop: '손절', trail: '트레일', period_end: '기간종료', manual: '수동',
-}
 
 // ── 섹션 컨테이너 ────────────────────────────────────────────
 function Section({ title, badge, children, defaultOpen = true }: {
@@ -203,141 +184,22 @@ function ScreenerReport({ data }: { data: ScreenerData }) {
   )
 }
 
-// ── 모의투자 레포트 ──────────────────────────────────────────
-function PaperReport({ data }: { data: PaperData }) {
-  const models = Object.keys(data.model_summary)
-
-  return (
-    <>
-      {/* 모델별 요약 */}
-      <div style={s.modelGrid}>
-        {models.map(m => {
-          const info = data.model_summary[m]
-          const open   = info['open']   ?? { count: 0, avg_return: null }
-          const pending = info['pending'] ?? { count: 0, avg_return: null }
-          const closed  = info['closed']  ?? { count: 0, avg_return: null }
-          return (
-            <div key={m} style={s.modelCard}>
-              <div style={s.modelName}>{MODEL_LABEL[m] ?? m}</div>
-              <div style={s.modelRow}><span style={s.modelStatLabel}>오픈</span><span>{open.count}</span></div>
-              <div style={s.modelRow}><span style={s.modelStatLabel}>대기</span><span>{pending.count}</span></div>
-              {closed.count > 0 && (
-                <div style={s.modelRow}>
-                  <span style={s.modelStatLabel}>청산</span>
-                  <span>{closed.count}건</span>
-                </div>
-              )}
-              {closed.avg_return != null && (
-                <div style={{ ...s.modelRow, marginTop: 4 }}>
-                  <span style={s.modelStatLabel}>평균수익</span>
-                  <span style={{ color: pctColor(closed.avg_return), fontWeight: 700 }}>
-                    {closed.avg_return > 0 ? '+' : ''}{closed.avg_return.toFixed(1)}%
-                  </span>
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
-
-      {/* 오픈/대기 포지션 */}
-      {data.open.length > 0 && (
-        <>
-          <div style={s.tableLabel}>오픈·대기 포지션</div>
-          <div style={s.tableWrap}>
-            <table style={s.table}>
-              <thead>
-                <tr>
-                  {['종목', '모델', '진입가', '현재가', '수익률', '상태'].map(h => (
-                    <th key={h} style={s.th}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {data.open.map(r => (
-                  <tr key={r.ticker + r.model + r.signal_date}>
-                    <td style={s.td}>
-                      <div style={s.tickerName}>{r.name}</div>
-                      <div style={s.tickerCode}>{r.signal_date}</div>
-                    </td>
-                    <td style={{ ...s.td, color: '#94a3b8' }}>{MODEL_LABEL[r.model] ?? r.model}</td>
-                    <td style={{ ...s.td, textAlign: 'right' as const }}>{fmt(r.entry_actual)}</td>
-                    <td style={{ ...s.td, textAlign: 'right' as const }}>{fmt(r.current_price)}</td>
-                    <td style={{ ...s.td, textAlign: 'right' as const, color: pctColor(r.unrealized_pct), fontWeight: 600 }}>
-                      {r.unrealized_pct != null ? `${r.unrealized_pct > 0 ? '+' : ''}${r.unrealized_pct.toFixed(1)}%` : '—'}
-                    </td>
-                    <td style={{ ...s.td, color: r.status === 'open' ? '#4ade80' : '#94a3b8', fontSize: 11 }}>
-                      {r.status === 'open' ? '보유' : '대기'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-
-      {/* 최근 청산 이력 */}
-      {data.closed.length > 0 && (
-        <>
-          <div style={s.tableLabel}>최근 청산 이력</div>
-          <div style={s.tableWrap}>
-            <table style={s.table}>
-              <thead>
-                <tr>
-                  {['종목', '모델', '청산일', '청산유형', 'blended수익'].map(h => (
-                    <th key={h} style={s.th}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {data.closed.map((r, i) => (
-                  <tr key={i}>
-                    <td style={s.td}>
-                      <div style={s.tickerName}>{r.name}</div>
-                      <div style={s.tickerCode}>{r.signal_date}</div>
-                    </td>
-                    <td style={{ ...s.td, color: '#94a3b8' }}>{MODEL_LABEL[r.model] ?? r.model}</td>
-                    <td style={{ ...s.td, color: '#64748b' }}>{r.exit_date ?? '—'}</td>
-                    <td style={{ ...s.td, fontSize: 11, color: '#94a3b8' }}>
-                      {r.exit_type ? (EXIT_LABEL[r.exit_type] ?? r.exit_type) : '—'}
-                      {r.tp1_date && <span style={{ color: '#a78bfa', marginLeft: 4 }}>TP1</span>}
-                    </td>
-                    <td style={{ ...s.td, textAlign: 'right' as const, color: pctColor(r.blended_return ? r.blended_return * 100 : null), fontWeight: 600 }}>
-                      {r.blended_return != null
-                        ? `${r.blended_return > 0 ? '+' : ''}${(r.blended_return * 100).toFixed(1)}%`
-                        : '—'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-    </>
-  )
-}
-
 // ── 메인 컴포넌트 ────────────────────────────────────────────
 export default function Report() {
   const [stage, setStage] = useState<StageData | null>(null)
   const [screener, setScreener] = useState<ScreenerData | null>(null)
-  const [paper, setPaper] = useState<PaperData | null>(null)
   const [loading, setLoading] = useState(false)
   const [lastFetched, setLastFetched] = useState<Date | null>(null)
 
   const load = async () => {
     setLoading(true)
     try {
-      const [s, sc, p] = await Promise.all([
+      const [s, sc] = await Promise.all([
         fetch('/api/report/stage').then(r => r.json()),
         fetch('/api/report/screener').then(r => r.json()),
-        fetch('/api/report/paper').then(r => r.json()),
       ])
       setStage(s.data)
       setScreener(sc.data)
-      setPaper(p.data)
       setLastFetched(new Date())
     } catch {
       // 개별 실패는 null 유지
@@ -369,12 +231,6 @@ export default function Report() {
       <Section title="차트 스크리닝" badge={screener?.week ?? undefined}>
         {screener
           ? <ScreenerReport data={screener} />
-          : <div style={s.empty}>데이터 없음</div>}
-      </Section>
-
-      <Section title="모의투자" defaultOpen={false}>
-        {paper
-          ? <PaperReport data={paper} />
           : <div style={s.empty}>데이터 없음</div>}
       </Section>
     </div>
@@ -413,12 +269,6 @@ const s: Record<string, React.CSSProperties> = {
   td: { padding: '5px 8px', borderBottom: '1px solid #0f172a', verticalAlign: 'middle' as const },
   tickerName: { color: '#cbd5e1', fontWeight: 600 },
   tickerCode: { color: '#475569', fontSize: 10 },
-
-  modelGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: 8, marginBottom: 10 },
-  modelCard: { background: '#1e293b', borderRadius: 8, padding: '10px 12px' },
-  modelName: { fontWeight: 700, color: '#93c5fd', marginBottom: 6, fontSize: 12 },
-  modelRow: { display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#94a3b8', marginBottom: 2 },
-  modelStatLabel: { color: '#475569' },
 
   empty: { color: '#475569', textAlign: 'center' as const, padding: '24px 0', fontSize: 12 },
 }

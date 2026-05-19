@@ -75,6 +75,14 @@ button:focus:not(:focus-visible) {
     overflow: visible !important;
     flex-shrink: 0;
   }
+
+  /* 히트맵은 예외: ResponsiveTreeMap이 부모 높이를 필요로 함.
+     헤더(42px) + 하단 탭바(56px) + safe-area 를 뺀 뷰포트 높이를 명시. */
+  .app-mobile-layout > .heatmap-root {
+    height: calc(100svh - 42px - 56px - env(safe-area-inset-bottom)) !important;
+    overflow: hidden !important;
+    flex-shrink: 0;
+  }
 }
 
 /* ───────────── 데스크탑 레이아웃 (769px 이상) ───────────── */
