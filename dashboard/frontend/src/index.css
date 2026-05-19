@@ -12,6 +12,14 @@ html, body, #root {
   padding: 0;
 }
 
+/* 모바일: .app-mobile-layout 스크롤이 동작하려면
+   #root와 app-root div의 overflow:hidden을 해제해야 함 (iOS Safari 제약) */
+@media (max-width: 768px) {
+  #root {
+    overflow: visible;
+  }
+}
+
 /* Focus ring for keyboard navigation */
 button:focus-visible,
 a:focus-visible,
@@ -42,13 +50,19 @@ button:focus:not(:focus-visible) {
     display: none;
   }
 
+  /* 루트 div의 인라인 overflow:hidden 무력화 (iOS 스크롤 차단 해제) */
+  .app-root {
+    overflow: visible !important;
+  }
+
   /* 모바일 단일 뷰 컨테이너 — 유일한 스크롤 컨테이너 */
   .app-mobile-layout {
     flex: 1;
     min-height: 0;
-    overflow-y: auto;
+    overflow-y: scroll; /* auto 대신 scroll — iOS 호환성 */
     overflow-x: hidden;
-    -webkit-overflow-scrolling: touch; /* iOS 모멘텀 스크롤 */
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
     padding-bottom: calc(56px + env(safe-area-inset-bottom));
     display: flex;
     flex-direction: column;

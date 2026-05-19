@@ -15,7 +15,7 @@ export default function App() {
   const [mobileTab, setMobileTab] = useState<MobileTabKey>(DEFAULT_TAB)
 
   return (
-    <div style={styles.root}>
+    <div style={styles.root} className="app-root">
       <header style={styles.header}>
         <span style={styles.logo}>
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ marginRight: 6, verticalAlign: 'middle' }}>
