@@ -149,25 +149,23 @@ function ScreenerReport({ data }: { data: ScreenerData }) {
   return (
     <>
       <div style={s.chips}>
-        <div style={s.chip}>
-          <span style={s.chipLabel}>통과</span>
-          <span style={{ ...s.chipVal, color: '#60a5fa' }}>{data.total}</span>
-        </div>
-        <div style={s.chip}>
-          <span style={s.chipLabel}>강화</span>
-          <span style={{ ...s.chipVal, color: '#a78bfa' }}>{data.enhanced}</span>
-        </div>
-        <div style={s.chip}>
-          <span style={s.chipLabel}>갭점프</span>
-          <span style={{ ...s.chipVal, color: '#34d399' }}>{data.gapjum}</span>
-        </div>
-      </div>
-
-      <div style={s.filterRow}>
-        {(['all', 'enhanced', 'gapjum'] as const).map(f => (
-          <button key={f} style={{ ...s.filterBtn, ...(filter === f ? s.filterBtnActive : {}) }}
-            onClick={() => setFilter(f)}>
-            {f === 'all' ? '전체' : f === 'enhanced' ? '강화만' : '갭점프만'}
+        {([
+          { f: 'all',      label: '통과',  val: data.total,    color: '#60a5fa' },
+          { f: 'enhanced', label: '강화',  val: data.enhanced, color: '#a78bfa' },
+          { f: 'gapjum',   label: '갭점프', val: data.gapjum,   color: '#34d399' },
+        ] as const).map(({ f, label, val, color }) => (
+          <button
+            key={f}
+            style={{
+              ...s.chip,
+              cursor: 'pointer',
+              border: filter === f ? `1px solid ${color}` : '1px solid transparent',
+              background: filter === f ? '#1e3a5f' : '#1e293b',
+            }}
+            onClick={() => setFilter(f)}
+          >
+            <span style={s.chipLabel}>{label}</span>
+            <span style={{ ...s.chipVal, color }}>{val}</span>
           </button>
         ))}
       </div>
