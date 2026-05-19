@@ -459,14 +459,17 @@ async def send_screener_comparison(
 async def send_watchlist_brief(
     entries: list[dict],
     http: Optional[httpx.AsyncClient] = None,
+    target_chat_id: Optional[str] = None,
 ) -> bool:
     """
     거래대금 워치리스트 일보 전송 (plain text).
-    entries: list of {ticker, days_since, vol_ratio, f_streak, i_streak, ichimoku_ok, current_stage}
+    entries: list of {ticker, days_since, vol_ratio, vol_ratio_delta,
+                      retiring, f_streak, i_streak, ichimoku_ok, current_stage}
+    target_chat_id: 지정 시 해당 채팅에 전송 (미지정 시 TELEGRAM_CHAT_ID)
     """
     try:
         token   = _get_token()
-        chat_id = _get_chat_id()
+        chat_id = target_chat_id or _get_chat_id()
     except ValueError as e:
         logger.warning("[Telegram] 설정 오류: %s", e)
         return False
@@ -481,26 +484,34 @@ async def send_watchlist_brief(
     else:
         lines = [f"📊 거래대금 워치리스트 ({today_str}, 장 마감)", ""]
         for e in entries:
-            ticker = e["ticker"]
-            code   = ticker.split(".")[0]
+            ticker  = e["ticker"]
+            code    = ticker.split(".")[0]
             ko_name = _tc.get_name(ticker)
             display = f"{ko_name}({code})" if ko_name != code else code
-            stage = e.get("current_stage") or "?"
-            days_d = e.get("days_since", 0)
+            stage   = e.get("current_stage") or "?"
+            days_d  = e.get("days_since", 0)
+
+            # D+10 이상: 마지막 추적일 표시
+            retiring    = e.get("retiring", False)
+            retire_mark = " [마지막 추적일]" if retiring else ""
 
             vol_ratio = e.get("vol_ratio")
             if vol_ratio is None:
-                vol_icon = "❓"
                 vol_line = "  거래대금 비율 N/A"
             elif vol_ratio >= 1.0:
-                vol_icon = "✅"
-                vol_line = f"  거래대금 비율 +{(vol_ratio - 1) * 100:.0f}% {vol_icon}"
+                vol_line = f"  거래대금 비율 +{(vol_ratio - 1) * 100:.0f}% ✅"
             elif vol_ratio >= 0.6:
-                vol_icon = "⚠️"
-                vol_line = f"  거래대금 비율 {(vol_ratio - 1) * 100:.0f}% {vol_icon}"
+                vol_line = f"  거래대금 비율 {(vol_ratio - 1) * 100:.0f}% ⚠️"
             else:
-                vol_icon = "❌"
-                vol_line = f"  거래대금 비율 {(vol_ratio - 1) * 100:.0f}% 소멸 {vol_icon}"
+                vol_line = f"  거래대금 비율 {(vol_ratio - 1) * 100:.0f}% 소멸 ❌"
+
+            # 전일 대비 변화 표시
+            delta = e.get("vol_ratio_delta")
+            if delta is not None:
+                arrow     = "▲" if delta >= 0 else "▼"
+                delta_str = f"  전일 대비 {delta * 100:+.0f}% {arrow}"
+            else:
+                delta_str = None
 
             f_streak = e.get("f_streak")
             i_streak = e.get("i_streak")
@@ -525,8 +536,10 @@ async def send_watchlist_brief(
             else:
                 ichi_line = "  ☁️ 일목: N/A"
 
-            lines.append(f"{display} — Stage {stage}, D+{days_d}")
+            lines.append(f"{display} — Stage {stage}, D+{days_d}{retire_mark}")
             lines.append(vol_line)
+            if delta_str:
+                lines.append(delta_str)
             lines.append(f"  {f_part} / {i_part}")
             lines.append(ichi_line)
             lines.append("")

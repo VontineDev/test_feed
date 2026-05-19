@@ -344,6 +344,7 @@ Stage 2 conditions to replay:
 **Effort:** XS→S (human: ~1h / CC: ~15 min after the refactor)
 **Priority:** P3
 **Depends on:** Watchlist brief being stable with real `stage_classifications` data (2-3 weeks post-launch).
+**Completed:** v0.9.3.0 (2026-05-20) — `_build_watchlist_entries(pool)` 추출; `/watchlist` 핸들러 + 라우팅; `_register_commands()` 등록; `send_watchlist_brief(target_chat_id=)` 파라미터 추가.
 
 ---
 
@@ -366,6 +367,7 @@ Stage 2 conditions to replay:
 **Effort:** XS (human: ~30 min / CC: ~10 min)
 **Priority:** P3
 **Depends on:** `watchlist_vol_log` populated for at least 1 trading day (now being built).
+**Completed:** v0.9.3.0 (2026-05-20) — `vol_ratio_delta` 계산·전달; `send_watchlist_brief`에서 `+5%▲`/`-12%▼` 포맷 표시.
 
 ---
 
@@ -387,3 +389,4 @@ Stage 2 conditions to replay:
 **Effort:** XS (human: ~20 min / CC: ~5 min)
 **Priority:** P3
 **Depends on:** Watchlist brief stable with real data.
+**Completed:** v0.9.3.0 (2026-05-20) — `"retiring": days_since >= 10`; `send_watchlist_brief`에서 D+10부터 `[마지막 추적일]` 표시.

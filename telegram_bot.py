@@ -802,6 +802,21 @@ async def _handle_paper_exit(http: httpx.AsyncClient, chat_id: str, pool, args: 
     )
 
 
+async def _handle_watchlist(http: httpx.AsyncClient, chat_id: str, pool) -> None:
+    """/watchlist — 거래대금 워치리스트 즉시 조회 (스케줄 없이 온디맨드)"""
+    if not pool:
+        await _send_plain(http, chat_id, "DB 미연결 상태입니다.")
+        return
+    try:
+        from run_scheduler import _build_watchlist_entries
+        from telegram_notify import send_watchlist_brief as _send_brief
+        data = await _build_watchlist_entries(pool)
+        await _send_brief(data["entries"], http=http, target_chat_id=chat_id)
+    except Exception as e:
+        logger.warning("[봇] /watchlist 오류: %s", e)
+        await _send_plain(http, chat_id, f"워치리스트 조회 실패: {e}")
+
+
 async def _handle_help(http: httpx.AsyncClient, chat_id: str) -> None:
     """/help — 명령어 목록"""
     lines = [
@@ -819,6 +834,7 @@ async def _handle_help(http: httpx.AsyncClient, chat_id: str) -> None:
         "/top — 당일 거래금액 상위 10 \\(KOSPI\\+KOSDAQ\\)",
         "/screener — 최신 주봉 차트 스크리닝 결과 \\(DB 조회\\)",
         "/scan — 주봉 스크리닝 즉시 실행 \\(전 종목 실시간 스캔, 약 10\\~20분\\)",
+        "/watchlist — 거래대금 워치리스트 즉시 조회",
         "/paper — 모의투자 오픈 포지션 현황",
         "/paper\\_perf — 모의투자 누적 성과 \\(승률·수익·슬리피지\\)",
         "/paper\\_exit \\<종목코드\\> — 수동 강제 청산",
@@ -898,6 +914,8 @@ async def _process_update(http: httpx.AsyncClient, update: dict, pool) -> None:
         await _handle_paper_perf(http, chat_id, pool)
     elif cmd == "/paper_exit":
         await _handle_paper_exit(http, chat_id, pool, args)
+    elif cmd == "/watchlist":
+        await _handle_watchlist(http, chat_id, pool)
     elif cmd in ("/help", "/start"):
         await _handle_help(http, chat_id)
     else:
@@ -925,6 +943,7 @@ async def _register_commands(http: httpx.AsyncClient) -> None:
         {"command": "paper",       "description": "모의투자 오픈 포지션 현황"},
         {"command": "paper_perf",  "description": "모의투자 누적 성과 (승률·수익·슬리피지)"},
         {"command": "paper_exit",  "description": "수동 강제 청산 — /paper_exit 005930"},
+        {"command": "watchlist",   "description": "거래대금 워치리스트 즉시 조회 (온디맨드)"},
         {"command": "help",        "description": "명령어 목록"},
     ]
     try:
