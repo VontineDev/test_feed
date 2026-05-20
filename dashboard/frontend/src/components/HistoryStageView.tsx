@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import StageHistoryPopup from './StageHistoryPopup'
 
 interface StageItem {
@@ -28,10 +28,16 @@ export default function HistoryStageView({ items, start, end }: Props) {
   const [activeStage, setActiveStage] = useState<1 | 2 | 3>(1)
   const [popup, setPopup] = useState<{ ticker: string; name: string } | null>(null)
 
-  const stageCounts: Record<number, number> = { 1: 0, 2: 0, 3: 0 }
-  items.forEach(it => { stageCounts[it.stage_queried] = (stageCounts[it.stage_queried] ?? 0) + 1 })
+  const stageCounts = useMemo(() => {
+    const counts: Record<number, number> = { 1: 0, 2: 0, 3: 0 }
+    items.forEach(it => { counts[it.stage_queried] = (counts[it.stage_queried] ?? 0) + 1 })
+    return counts
+  }, [items])
 
-  const filtered = items.filter(it => it.stage_queried === activeStage)
+  const filtered = useMemo(
+    () => items.filter(it => it.stage_queried === activeStage),
+    [items, activeStage],
+  )
 
   return (
     <>

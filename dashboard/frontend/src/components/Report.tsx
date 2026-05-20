@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import DateRangeBar, { DatePreset, computeRange } from './DateRangeBar'
 import HistoryStageView from './HistoryStageView'
 import HistoryScreenerView from './HistoryScreenerView'
@@ -223,24 +223,30 @@ export default function Report() {
   const [loading, setLoading] = useState(false)
   const [lastFetched, setLastFetched] = useState<Date | null>(null)
 
+  const range = useMemo(() => computeRange(preset), [preset])
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
       if (preset === 'today') {
-        const [s, sc] = await Promise.all([
-          fetch('/api/report/stage').then(r => r.json()),
-          fetch('/api/report/screener').then(r => r.json()),
+        const [sr, scr] = await Promise.all([
+          fetch('/api/report/stage'),
+          fetch('/api/report/screener'),
         ])
+        if (!sr.ok || !scr.ok) throw new Error('fetch failed')
+        const [s, sc] = await Promise.all([sr.json(), scr.json()])
         setStage(s.data)
         setScreener(sc.data)
         setHistStage(null)
         setHistScreener(null)
       } else {
-        const { start, end } = computeRange(preset)
-        const [hs, hsc] = await Promise.all([
-          fetch(`/api/history/stage?start=${start}&end=${end}`).then(r => r.json()),
-          fetch(`/api/history/screener?start=${start}&end=${end}`).then(r => r.json()),
+        const { start, end } = range
+        const [hsr, hscr] = await Promise.all([
+          fetch(`/api/history/stage?start=${start}&end=${end}`),
+          fetch(`/api/history/screener?start=${start}&end=${end}`),
         ])
+        if (!hsr.ok || !hscr.ok) throw new Error('fetch failed')
+        const [hs, hsc] = await Promise.all([hsr.json(), hscr.json()])
         setHistStage(hs.data)
         setHistScreener(hsc.data)
         setStage(null)
@@ -252,11 +258,10 @@ export default function Report() {
     } finally {
       setLoading(false)
     }
-  }, [preset])
+  }, [preset, range])
 
   useEffect(() => { load() }, [load])
 
-  const range = computeRange(preset)
   const stageBadge = preset === 'today' ? (stage?.date ?? undefined) : `${range.start}~${range.end}`
   const screenerBadge = preset === 'today' ? (screener?.week ?? undefined) : `${range.start}~${range.end}`
 
