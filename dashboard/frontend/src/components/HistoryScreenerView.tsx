@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import StageHistoryPopup from './StageHistoryPopup'
 
 interface ScreenerItem {
@@ -17,8 +17,23 @@ interface Props {
   end: string
 }
 
+const CHIP_COLOR = { all: '#60a5fa', enhanced: '#a78bfa', gapjum: '#34d399' } as const
+
 export default function HistoryScreenerView({ items, start, end }: Props) {
+  const [filter, setFilter] = useState<'all' | 'enhanced' | 'gapjum'>('all')
   const [popup, setPopup] = useState<{ ticker: string; name: string } | null>(null)
+
+  const counts = useMemo(() => ({
+    all: items.length,
+    enhanced: items.filter(i => i.any_enhanced).length,
+    gapjum: items.filter(i => i.any_gapjum).length,
+  }), [items])
+
+  const filtered = useMemo(() =>
+    filter === 'all' ? items
+    : filter === 'enhanced' ? items.filter(i => i.any_enhanced)
+    : items.filter(i => i.any_gapjum),
+  [items, filter])
 
   if (items.length === 0) {
     return <div style={s.empty}>해당 기간에 스크리닝된 종목 없음</div>
@@ -26,6 +41,23 @@ export default function HistoryScreenerView({ items, start, end }: Props) {
 
   return (
     <>
+      <div style={s.chips}>
+        {(['all', 'enhanced', 'gapjum'] as const).map(f => (
+          <button
+            key={f}
+            style={{
+              ...s.chip,
+              border: filter === f ? `1px solid ${CHIP_COLOR[f]}` : '1px solid transparent',
+              background: filter === f ? '#1e3a5f' : '#1e293b',
+            }}
+            onClick={() => setFilter(f)}
+          >
+            <span style={s.chipLabel}>{f === 'all' ? '통과' : f === 'enhanced' ? '강화' : '갭점프'}</span>
+            <span style={{ ...s.chipVal, color: CHIP_COLOR[f] }}>{counts[f]}</span>
+          </button>
+        ))}
+      </div>
+
       <div style={s.tableWrap}>
         <table style={s.table}>
           <thead>
@@ -36,7 +68,7 @@ export default function HistoryScreenerView({ items, start, end }: Props) {
             </tr>
           </thead>
           <tbody>
-            {items.map(it => (
+            {filtered.map(it => (
               <tr
                 key={it.ticker}
                 style={{ cursor: 'pointer' }}
@@ -78,6 +110,10 @@ export default function HistoryScreenerView({ items, start, end }: Props) {
 
 const s: Record<string, React.CSSProperties> = {
   empty: { color: '#475569', textAlign: 'center', padding: '24px 0', fontSize: 12 },
+  chips: { display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' },
+  chip: { background: '#1e293b', borderRadius: 6, padding: '6px 12px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, outline: 'none', cursor: 'pointer' },
+  chipLabel: { fontSize: 10, color: '#64748b' },
+  chipVal: { fontSize: 18, fontWeight: 700 },
   tableWrap: { overflowX: 'auto', maxHeight: 280, overflowY: 'auto' },
   table: { width: '100%', borderCollapse: 'collapse', fontSize: 11 },
   th: {
