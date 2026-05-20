@@ -1,4 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import DateRangeBar, { DatePreset, computeRange } from './DateRangeBar'
+import HistoryStageView from './HistoryStageView'
+import HistoryScreenerView from './HistoryScreenerView'
 
 // ── 타입 ────────────────────────────────────────────────────
 type StageRow = { ticker: string; name: string; sector: string | null; s1_high: number | null; s1_volume: number | null; peakout_flag: boolean }
@@ -184,31 +187,78 @@ function ScreenerReport({ data }: { data: ScreenerData }) {
   )
 }
 
+// ── 이력 뷰용 타입 ──────────────────────────────────────────
+interface HistoryStageData {
+  start: string
+  end: string
+  stage_filter: number | null
+  items: {
+    ticker: string; name: string; appearance_count: number
+    first_seen: string | null; last_seen: string | null
+    any_peakout: boolean; stage_queried: number; latest_stage: number | null
+  }[]
+}
+
+interface HistoryScreenerData {
+  start: string; end: string
+  items: {
+    ticker: string; name: string; week_count: number
+    first_week: string; last_week: string
+    any_enhanced: boolean; any_gapjum: boolean
+  }[]
+}
+
 // ── 메인 컴포넌트 ────────────────────────────────────────────
 export default function Report() {
+  const [preset, setPreset] = useState<DatePreset>('today')
+
+  // 오늘 뷰 상태
   const [stage, setStage] = useState<StageData | null>(null)
   const [screener, setScreener] = useState<ScreenerData | null>(null)
+
+  // 이력 뷰 상태
+  const [histStage, setHistStage] = useState<HistoryStageData | null>(null)
+  const [histScreener, setHistScreener] = useState<HistoryScreenerData | null>(null)
+
   const [loading, setLoading] = useState(false)
   const [lastFetched, setLastFetched] = useState<Date | null>(null)
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [s, sc] = await Promise.all([
-        fetch('/api/report/stage').then(r => r.json()),
-        fetch('/api/report/screener').then(r => r.json()),
-      ])
-      setStage(s.data)
-      setScreener(sc.data)
+      if (preset === 'today') {
+        const [s, sc] = await Promise.all([
+          fetch('/api/report/stage').then(r => r.json()),
+          fetch('/api/report/screener').then(r => r.json()),
+        ])
+        setStage(s.data)
+        setScreener(sc.data)
+        setHistStage(null)
+        setHistScreener(null)
+      } else {
+        const { start, end } = computeRange(preset)
+        const [hs, hsc] = await Promise.all([
+          fetch(`/api/history/stage?start=${start}&end=${end}`).then(r => r.json()),
+          fetch(`/api/history/screener?start=${start}&end=${end}`).then(r => r.json()),
+        ])
+        setHistStage(hs.data)
+        setHistScreener(hsc.data)
+        setStage(null)
+        setScreener(null)
+      }
       setLastFetched(new Date())
     } catch {
       // 개별 실패는 null 유지
     } finally {
       setLoading(false)
     }
-  }
+  }, [preset])
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [load])
+
+  const range = computeRange(preset)
+  const stageBadge = preset === 'today' ? (stage?.date ?? undefined) : `${range.start}~${range.end}`
+  const screenerBadge = preset === 'today' ? (screener?.week ?? undefined) : `${range.start}~${range.end}`
 
   return (
     <div style={s.wrap}>
@@ -222,16 +272,25 @@ export default function Report() {
         </button>
       </div>
 
-      <Section title="Stage 분류" badge={stage?.date ?? undefined}>
-        {stage
-          ? <StageReport data={stage} />
-          : <div style={s.empty}>데이터 없음</div>}
+      {/* 날짜 범위 선택 바 */}
+      <DateRangeBar preset={preset} onChange={p => setPreset(p)} />
+
+      <Section title="Stage 분류" badge={stageBadge}>
+        {preset === 'today'
+          ? (stage ? <StageReport data={stage} /> : <div style={s.empty}>데이터 없음</div>)
+          : (histStage
+              ? <HistoryStageView items={histStage.items} start={range.start} end={range.end} />
+              : <div style={s.empty}>{loading ? '로딩…' : '데이터 없음'}</div>)
+        }
       </Section>
 
-      <Section title="차트 스크리닝" badge={screener?.week ?? undefined}>
-        {screener
-          ? <ScreenerReport data={screener} />
-          : <div style={s.empty}>데이터 없음</div>}
+      <Section title="차트 스크리닝" badge={screenerBadge}>
+        {preset === 'today'
+          ? (screener ? <ScreenerReport data={screener} /> : <div style={s.empty}>데이터 없음</div>)
+          : (histScreener
+              ? <HistoryScreenerView items={histScreener.items} start={range.start} end={range.end} />
+              : <div style={s.empty}>{loading ? '로딩…' : '데이터 없음'}</div>)
+        }
       </Section>
     </div>
   )
