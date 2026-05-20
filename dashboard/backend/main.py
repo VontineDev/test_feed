@@ -1,6 +1,6 @@
 """
 dashboard/backend/main.py
-웹 대시보드 FastAPI 앱 — 9 엔드포인트 + React dist 서빙.
+웹 대시보드 FastAPI 앱 — 12 엔드포인트 + React dist 서빙.
 
 엔드포인트:
   GET  /api/heatmap              — Stage 색상 히트맵 데이터 (5분 캐시)
@@ -8,10 +8,13 @@ dashboard/backend/main.py
   GET  /api/signals/stream       — SSE 신호 라이브 피드
   POST /api/scheduler/trigger    — 스케줄러 잡 수동 트리거
   GET  /api/scheduler/stream     — SSE 스케줄러 상태 스트림
-  GET  /api/report/stage         — Stage 분류 결과
-  GET  /api/report/screener      — 차트 스크리너 결과
+  GET  /api/report/stage         — Stage 분류 결과 (최신일)
+  GET  /api/report/screener      — 차트 스크리너 결과 (최신주)
   GET  /api/report/paper         — 모의투자 포지션
   GET  /api/top                  — 당일 거래대금 상위 N 종목 (Kiwoom, 5분 캐시)
+  GET  /api/history/stage        — 기간별 Stage 분류 집계 (이력 트래킹)
+  GET  /api/history/screener     — 기간별 스크리너 집계 (이력 트래킹)
+  GET  /api/history/ticker/{t}   — 종목별 Stage+스크리너 이력
 
 개발: uvicorn main:app --reload --port 8000
 프로덕션: npm run build → FastAPI가 ../frontend/dist 서빙
@@ -910,6 +913,213 @@ async def get_paper_ticker_history(ticker: str):
     except Exception as e:
         logger.error("[paper/history] 조회 실패: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 이력 트래킹 엔드포인트 ────────────────────────────────────
+# GET /api/history/stage   — 기간별 Stage 분류 집계
+# GET /api/history/screener — 기간별 스크리너 집계
+# GET /api/history/ticker/{ticker} — 종목별 이력
+
+def _date_to_week(d: date) -> str:
+    """date → ISO 주차 문자열 (예: 2026-W20)"""
+    return d.strftime("%G-W%V")
+
+
+def _parse_date(s: str | None, default: date) -> date:
+    if s is None:
+        return default
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        return default
+
+
+@app.get("/api/history/stage")
+async def get_stage_history(
+    start: str | None = None,
+    end: str | None = None,
+    stage: int | None = None,
+):
+    from datetime import timedelta
+    today = date.today()
+    start_date = _parse_date(start, today - timedelta(days=14))
+    end_date   = _parse_date(end, today)
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # per-stage subquery: GROUP BY에 COALESCE 전체 expression 반복 (alias 금지)
+        # LATERAL로 latest_stage 조회 — idx_stage_class_ticker 사용
+        _SUB = """
+            SELECT agg.ticker, agg.name, agg.appearance_count,
+                   agg.first_seen, agg.last_seen, agg.any_peakout,
+                   {stage_val} AS stage_queried, latest.stage AS latest_stage
+            FROM (
+                SELECT sc.ticker,
+                       COALESCE(tn.name_ko, cs.name, SPLIT_PART(sc.ticker, '.', 1)) AS name,
+                       COUNT(*) AS appearance_count,
+                       MIN(sc.classified_date) AS first_seen,
+                       MAX(sc.classified_date) AS last_seen,
+                       BOOL_OR(sc.peakout_flag) AS any_peakout
+                FROM stage_classifications sc
+                LEFT JOIN ticker_names tn ON tn.ticker = sc.ticker
+                LEFT JOIN LATERAL (
+                    SELECT name FROM chart_signals
+                    WHERE ticker = sc.ticker
+                    ORDER BY screened_at DESC LIMIT 1
+                ) cs ON TRUE
+                WHERE sc.classified_date BETWEEN $1 AND $2
+                  AND sc.stage = {stage_val}
+                GROUP BY sc.ticker,
+                         COALESCE(tn.name_ko, cs.name, SPLIT_PART(sc.ticker, '.', 1))
+                ORDER BY COUNT(*) DESC
+                LIMIT 50
+            ) agg
+            LEFT JOIN LATERAL (
+                SELECT stage FROM stage_classifications
+                WHERE ticker = agg.ticker
+                ORDER BY classified_date DESC LIMIT 1
+            ) latest ON TRUE
+        """
+
+        if stage is not None:
+            # 특정 스테이지만
+            q = _SUB.format(stage_val=stage) + " ORDER BY appearance_count DESC"
+            rows = await conn.fetch(q, start_date, end_date)
+        else:
+            # 3개 스테이지 UNION ALL
+            union_q = (
+                _SUB.format(stage_val=1) +
+                " UNION ALL " +
+                _SUB.format(stage_val=2) +
+                " UNION ALL " +
+                _SUB.format(stage_val=3) +
+                " ORDER BY stage_queried, appearance_count DESC"
+            )
+            # UNION ALL에서 $1/$2는 전체 쿼리에 걸쳐 동일 슬롯 → 한 번만 전달
+            rows = await conn.fetch(union_q, start_date, end_date)
+
+    items = [
+        {
+            "ticker": r["ticker"],
+            "name": r["name"] or r["ticker"],
+            "appearance_count": r["appearance_count"],
+            "first_seen": str(r["first_seen"]) if r["first_seen"] else None,
+            "last_seen": str(r["last_seen"]) if r["last_seen"] else None,
+            "any_peakout": bool(r["any_peakout"]),
+            "stage_queried": r["stage_queried"],
+            "latest_stage": r["latest_stage"],
+        }
+        for r in rows
+    ]
+    return {"data": {"start": str(start_date), "end": str(end_date),
+                     "stage_filter": stage, "items": items}}
+
+
+@app.get("/api/history/screener")
+async def get_screener_history(
+    start: str | None = None,
+    end: str | None = None,
+):
+    from datetime import timedelta
+    today = date.today()
+    start_date = _parse_date(start, today - timedelta(days=14))
+    end_date   = _parse_date(end, today)
+    start_week = _date_to_week(start_date)
+    end_week   = _date_to_week(end_date)
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT ticker, MAX(name) AS name, COUNT(*) AS week_count,
+                   MIN(week_of) AS first_week, MAX(week_of) AS last_week,
+                   BOOL_OR(is_enhanced) AS any_enhanced,
+                   BOOL_OR(has_gapjum) AS any_gapjum
+            FROM chart_signals
+            WHERE week_of BETWEEN $1 AND $2
+            GROUP BY ticker
+            ORDER BY week_count DESC
+            LIMIT 100
+            """,
+            start_week, end_week,
+        )
+
+    items = [
+        {
+            "ticker": r["ticker"],
+            "name": r["name"] or r["ticker"],
+            "week_count": r["week_count"],
+            "first_week": r["first_week"],
+            "last_week": r["last_week"],
+            "any_enhanced": bool(r["any_enhanced"]),
+            "any_gapjum": bool(r["any_gapjum"]),
+        }
+        for r in rows
+    ]
+    return {"data": {"start": str(start_date), "end": str(end_date),
+                     "start_week": start_week, "end_week": end_week,
+                     "items": items}}
+
+
+@app.get("/api/history/ticker/{ticker}")
+async def get_ticker_history(
+    ticker: str,
+    start: str | None = None,
+    end: str | None = None,
+):
+    from datetime import timedelta
+    today = date.today()
+    start_date = _parse_date(start, today - timedelta(days=14))
+    end_date   = _parse_date(end, today)
+    start_week = _date_to_week(start_date)
+    end_week   = _date_to_week(end_date)
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        stage_rows = await conn.fetch(
+            """
+            SELECT classified_date, stage, peakout_flag, s1_high, s1_txamt
+            FROM stage_classifications
+            WHERE ticker = $1
+              AND classified_date BETWEEN $2 AND $3
+            ORDER BY classified_date DESC
+            """,
+            ticker, start_date, end_date,
+        )
+        screener_rows = await conn.fetch(
+            """
+            SELECT week_of, is_enhanced, has_gapjum, close
+            FROM chart_signals
+            WHERE ticker = $1
+              AND week_of BETWEEN $2 AND $3
+            ORDER BY week_of DESC
+            """,
+            ticker, start_week, end_week,
+        )
+
+    stage_history = [
+        {
+            "classified_date": str(r["classified_date"]),
+            "stage": r["stage"],
+            "peakout_flag": bool(r["peakout_flag"]),
+            "s1_high": float(r["s1_high"]) if r["s1_high"] else None,
+            "s1_txamt": r["s1_txamt"],
+        }
+        for r in stage_rows
+    ]
+    screener_history = [
+        {
+            "week_of": r["week_of"],
+            "is_enhanced": bool(r["is_enhanced"]),
+            "has_gapjum": bool(r["has_gapjum"]),
+            "close": float(r["close"]) if r["close"] else None,
+        }
+        for r in screener_rows
+    ]
+    return {"data": {"ticker": ticker,
+                     "start": str(start_date), "end": str(end_date),
+                     "stage_history": stage_history,
+                     "screener_history": screener_history}}
 
 
 # ── React 정적 파일 서빙 (프로덕션) ──────────────────────────
