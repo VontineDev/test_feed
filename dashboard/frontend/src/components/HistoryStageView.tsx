@@ -145,8 +145,9 @@ const s: Record<string, React.CSSProperties> = {
     position: 'sticky', top: 0, background: '#0f172a',
     color: '#475569', padding: '5px 8px', textAlign: 'left',
     fontWeight: 600, whiteSpace: 'nowrap',
+    borderRight: '1px solid #1e293b', borderBottom: '1px solid #1e293b',
   },
-  td: { padding: '5px 8px', borderBottom: '1px solid #0f172a', verticalAlign: 'middle' },
+  td: { padding: '5px 8px', borderBottom: '1px solid #1e293b', borderRight: '1px solid #1e293b', verticalAlign: 'middle' },
   tickerName: { color: '#cbd5e1', fontWeight: 600 },
   tickerCode: { color: '#475569', fontSize: 10 },
 }

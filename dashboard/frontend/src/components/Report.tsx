@@ -329,8 +329,8 @@ const s: Record<string, React.CSSProperties> = {
   tableLabel: { fontSize: 11, color: '#475569', marginBottom: 5, marginTop: 8 },
   tableWrap: { overflowX: 'auto', maxHeight: 280, overflowY: 'auto' as const },
   table: { width: '100%', borderCollapse: 'collapse' as const, fontSize: 11 },
-  th: { position: 'sticky' as const, top: 0, background: '#0f172a', color: '#475569', padding: '5px 8px', textAlign: 'left' as const, fontWeight: 600, whiteSpace: 'nowrap' as const },
-  td: { padding: '5px 8px', borderBottom: '1px solid #0f172a', verticalAlign: 'middle' as const },
+  th: { position: 'sticky' as const, top: 0, background: '#0f172a', color: '#475569', padding: '5px 8px', textAlign: 'left' as const, fontWeight: 600, whiteSpace: 'nowrap' as const, borderRight: '1px solid #1e293b', borderBottom: '1px solid #1e293b' },
+  td: { padding: '5px 8px', borderBottom: '1px solid #1e293b', borderRight: '1px solid #1e293b', verticalAlign: 'middle' as const },
   tickerName: { color: '#cbd5e1', fontWeight: 600 },
   tickerCode: { color: '#475569', fontSize: 10 },
 

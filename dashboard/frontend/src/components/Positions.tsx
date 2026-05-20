@@ -102,9 +102,9 @@ const styles: Record<string, React.CSSProperties> = {
   hdr: { fontWeight: 700, fontSize: 13, marginBottom: 8, color: '#94a3b8' },
   table: { width: '100%', borderCollapse: 'collapse', fontSize: 12 },
   theadRow: { background: '#1e293b' },
-  th: { padding: '6px 10px', textAlign: 'left', color: '#64748b', fontWeight: 600, borderBottom: '1px solid #334155' },
+  th: { padding: '6px 10px', textAlign: 'left', color: '#64748b', fontWeight: 600, borderBottom: '1px solid #334155', borderRight: '1px solid #1e293b' },
   tr: { borderBottom: '1px solid #1e293b' },
-  td: { padding: '6px 10px', color: '#e2e8f0' },
+  td: { padding: '6px 10px', color: '#e2e8f0', borderRight: '1px solid #1e293b' },
   badge: { background: '#1e3a5f', color: '#93c5fd', padding: '2px 6px', borderRadius: 4, fontSize: 11 },
   empty: { padding: 24, color: '#64748b', textAlign: 'center' },
 }
