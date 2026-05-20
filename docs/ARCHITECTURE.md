@@ -831,4 +831,56 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 
 ---
 
-*현재 코드베이스 v0.9.0.0 (2026-05-16) 기준*
+*현재 코드베이스 v0.9.3.0 (2026-05-20) 기준*
+
+---
+
+## v0.9.3.0 신규 기능 (2026-05-20)
+
+### 1. Fuzzy 티커 해석 (resolve_fuzzy)
+
+`ticker_cache.py`에 `resolve_fuzzy(name, threshold=0.82)` 메서드 추가.  
+LLM이 "셀트리온헬스케어"로 추출하고 KRX DB에는 "셀트리온헬스케어(주)"로 등록된 경우를 자동 매칭합니다.
+
+해석 우선순위: 정확 매칭 → fuzzy 매칭 → `_resolution_misses` 카운터 기록.  
+임계값 0.82: "현대차" vs "현대차증권" (ratio ≈ 0.75) false positive를 차단합니다.
+
+### 2. HIGH CONFIDENCE 통합
+
+`TradeSignal`에 `confidence: str = "NORMAL"` 필드 추가.  
+해당 주 Ichimoku 스크리너 통과 종목과 교차하는 뉴스 신호는 `"HIGH"`로 상향되어 🔥 배지와 함께 발송됩니다.
+
+### 3. 워치리스트 3가지 개선
+
+- `/watchlist` 봇 커맨드: `_build_watchlist_entries(pool)` 헬퍼로 데이터 로직 분리, 온디맨드 조회 가능
+- 전일 대비 거래대금 비율 변화 (vol_ratio_delta): `+5%▲` / `-8%▼` 표시
+- D+10 마지막 추적일 표시: `[마지막 추적일]` 배지
+
+### 4. Ichimoku Enhanced 조건 실제 적용
+
+`calc_ichimoku()`에 `tenkan_sen`(전환선, 9주)·`kijun_sen`(기준선, 26주) 컬럼 추가.  
+`screen_ticker()`에서 H(전환선 > 기준선)·I(둘 다 우상향) 판정 → `is_enhanced` 실제 설정.  
+기존에는 항상 `False`였으나 이제 실제 Enhanced 종목이 배지를 받습니다.
+
+### 5. 조건 G NaN 보정 (SCREENER_G_NAN_STRICT)
+
+`SCREENER_G_NAN_STRICT=1` 환경변수로 120주선 데이터 부족 종목의 통과 여부를 제어할 수 있습니다.  
+기본(미설정): NaN → 통과. Strict 모드: NaN → 실패.  
+DB에서 `null_pct > 20%` 확인 후 활성화 권장.
+
+### 6. 일봉 분류기 티커 캡 (DAILY_CLASSIFIER_TICKERS)
+
+`DAILY_CLASSIFIER_TICKERS=150` (기본값) 환경변수로 일봉 분류기의 최대 처리 종목 수를 제어합니다.  
+Ichimoku 통과 종목은 캡 초과 여부와 관계없이 항상 포함됩니다.
+
+### 7. 뉴스 게이팅 강화 (이중 레이어)
+
+기존 단일 스크리너 게이팅에 `_active_stage_tickers` (최근 7일 이내 Stage 활성 종목) 레이어 추가.  
+`get_active_stage_tickers(pool, days=7)` DB 함수, `_daily_stage_job()` 완료 후 자동 캐시 갱신.
+
+| 종목 상태 | 게이팅 결과 |
+|----------|------------|
+| 스크리너 교차 | HIGH CONFIDENCE + 전달 |
+| Stage 7d 활성 (스크리너 미통과) | NORMAL + 전달 |
+| 둘 다 해당 없음 | 억제 |
+| 게이팅 캐시 비어있음 | 전달 (초기 실행 방어) |

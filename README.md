@@ -39,11 +39,18 @@ python run_scheduler.py
 | `/signals sell` | SELL 신호만 조회 |
 | `/signals watch` | WATCH 신호만 조회 |
 | `/today` | 오늘 카테고리별 수집 건수 + 최신 기사 5건 |
-| `/backtest <mode> <start> <end>` | 통합 백테스트 — ichimoku / stage / cross 모드, 기간 지정 가능 |
-| `/watchlist` | 거래대금 워치리스트 현황 (Stage 1 추적 종목, 거래대금 비율·수급·Ichimoku) |
+| `/backtest <mode> <start> <end>` | 통합 백테스트 — ichimoku / stage / stage2 / cross 모드 |
+| `/watchlist` | 거래대금 워치리스트 즉시 조회 (온디맨드) |
 | `/screener` | 최신 주봉 차트 스크리닝 결과 (DM + 채널) |
 | `/scan` | 주봉 스크리닝 즉시 실행 (전 종목 실시간 스캔, 약 10~20분) |
-| `/volume <종목명\|티커>` | 시간대별 거래량 패턴 분석 |
+| `/paper` | 모의투자 오픈 포지션 현황 |
+| `/paper_perf` | 모의투자 누적 성과 (승률·수익·슬리피지) |
+| `/paper_exit <코드>` | 수동 강제 청산 |
+| `/top` | 당일 거래금액 상위 10 (KOSPI+KOSDAQ) |
+| `/buy <코드> <가격> <수량>` | 진입 기록 |
+| `/sell <코드> <가격>` | 청산 기록 (FIFO) |
+| `/port` | 보유 현황 + 미실현 P&L |
+| `/pnl [week\|month\|all]` | 실현 P&L 요약 |
 | `/help` | 명령어 목록 |
 
 ## 데이터 흐름
@@ -125,13 +132,28 @@ pytest tests/test_watchlist_brief.py -v
 
 ## 문서
 
+**시작하기**
 - [docs/USER_MANUAL.md](docs/USER_MANUAL.md) — 설치부터 첫 텔레그램 알림까지 전체 가이드 (처음 설치하는 분은 여기서 시작)
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 시스템 아키텍처, 모듈 상세, 데이터 흐름
-- [docs/Dashboard.md](docs/Dashboard.md) — 웹 대시보드 API 레퍼런스 + 개발·배포 가이드
-- [docs/HTTPS-Setup.md](docs/HTTPS-Setup.md) — Caddy HTTPS 설정 (Let's Encrypt + DuckDNS)
-- [CHANGELOG.md](CHANGELOG.md) — 버전별 변경 이력
+
+**기능별 가이드 (How-to)**
+- [docs/howto-screener.md](docs/howto-screener.md) — 주봉 Ichimoku 스크리너 설정·Calibration
+- [docs/howto-stage-classifier.md](docs/howto-stage-classifier.md) — 일봉 3단계 분류기 설정
+- [docs/howto-watchlist.md](docs/howto-watchlist.md) — 거래대금 워치리스트 온디맨드 조회
 - [docs/HowToBacktest.md](docs/HowToBacktest.md) — 통합 백테스트 엔진 사용 가이드
+- [docs/Dashboard.md](docs/Dashboard.md) — 웹 대시보드 개발·배포 가이드
+- [docs/HTTPS-Setup.md](docs/HTTPS-Setup.md) — Caddy HTTPS 설정 (Let's Encrypt + DuckDNS)
+
+**레퍼런스**
+- [docs/reference-env-vars.md](docs/reference-env-vars.md) — 환경변수 전체 목록
+- [docs/reference-telegram-commands.md](docs/reference-telegram-commands.md) — Telegram 명령어 전체 목록
+
+**설계 해설 (Explanation)**
+- [docs/explanation-signal-pipeline.md](docs/explanation-signal-pipeline.md) — 신호 파이프라인·게이팅·HIGH CONFIDENCE 설계 이유
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 시스템 아키텍처, 모듈 상세, 데이터 흐름
+
+**변경 이력**
+- [CHANGELOG.md](CHANGELOG.md) — 버전별 변경 이력
 
 ## 버전
 
-현재 버전: `0.9.2.0` — [CHANGELOG](CHANGELOG.md) 참고
+현재 버전: `0.9.3.0` — [CHANGELOG](CHANGELOG.md) 참고
