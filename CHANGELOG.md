@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.4.0] - 2026-05-20
+
+### Added
+- **스테이지/스크리너 이력 트래킹** (`dashboard/`): Report 탭에 날짜 범위 선택 바 추가. 오늘/-3일/-1주/-2주/-1달 퀵 버튼으로 기간을 설정하면 해당 기간에 등장한 종목을 등장횟수 순으로 집계 표시. 종목 클릭 시 Stage 이력(날짜/스테이지/진입고가/피크아웃) + 스크리너 이력(주차/강화/갭점프) 팝업.
+- **이력 API 3개** (`dashboard/backend/main.py`): `/api/history/stage`(기간별 Stage 집계, UNION ALL per-stage LIMIT 50), `/api/history/screener`(기간별 스크리너 집계, date→week_of 자동 변환), `/api/history/ticker/{ticker}`(종목별 Stage+스크리너 이력).
+- **모의투자 모델 필터** (`PaperPortfolio.tsx`, `Positions.tsx`): 모델 카드(Stage/KOSDAQ/Cross/Ichimoku) 클릭으로 포지션 테이블 필터링.
+
 ## [0.9.3.0] - 2026-05-20
 
 ### Added
