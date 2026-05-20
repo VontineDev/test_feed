@@ -52,6 +52,9 @@ _HEATMAP_CACHE: dict = {"data": None, "expires": 0.0}
 _PRICE_CACHE: dict = {"data": {}, "expires": 0.0}
 _PRICE_TTL = 300     # 5분 — 가격·등락률·히트맵 구조 공통
 
+# ── 포지션 현재가 캐시 — {ticker: current_price_float} (5분) ──
+_POS_PRICE_CACHE: dict = {"data": {}, "expires": 0.0}
+
 # ── 키움 토큰 캐시 (au10001 반복 호출 방지, 토큰 유효기간 24h) ──
 _KIWOOM_TOKEN: str | None = None
 _KIWOOM_TOKEN_TS: float = 0.0
@@ -167,6 +170,46 @@ class _BasicAuthMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(_BasicAuthMiddleware)
+
+
+# ── 포지션 현재가 조회 (yfinance 2d, 5분 캐시) ──────────────
+async def _fetch_current_prices(tickers: list[str]) -> dict[str, float]:
+    """종목 리스트의 최신 종가를 yfinance로 조회. {ticker: price} 반환."""
+    if not tickers:
+        return {}
+    now = time.time()
+    if _POS_PRICE_CACHE["data"] and now < _POS_PRICE_CACHE["expires"]:
+        return _POS_PRICE_CACHE["data"]
+
+    def _fetch() -> dict[str, float]:
+        result: dict[str, float] = {}
+        try:
+            import yfinance as _yf
+            import pandas as _pd
+            hist = _yf.download(
+                tickers, period="2d", interval="1d",
+                auto_adjust=True, progress=False, threads=True,
+            )
+            if hist.empty:
+                return result
+            close_df = hist["Close"] if isinstance(hist.columns, _pd.MultiIndex) else hist
+            for t in tickers:
+                try:
+                    col = close_df[t] if t in close_df.columns else close_df.iloc[:, 0]
+                    series = col.dropna()
+                    if len(series) >= 1:
+                        result[t] = float(series.iloc[-1])
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning("[prices] 현재가 조회 실패: %s", e)
+        return result
+
+    prices = await asyncio.to_thread(_fetch)
+    _POS_PRICE_CACHE["data"] = prices
+    _POS_PRICE_CACHE["expires"] = now + _PRICE_TTL
+    logger.info("[prices] 포지션 현재가 갱신: %d종목", len(prices))
+    return prices
 
 
 # ── 당일 등락률 조회 (yfinance 2d, 5분 캐시) ─────────────────
@@ -293,8 +336,7 @@ async def get_positions():
                                 cs.name, SPLIT_PART(p.ticker, '.', 1)) AS name,
                        p.model, p.signal_date,
                        p.entry_actual, p.qty, p.status,
-                       p.tp1_pct, p.trail_pct,
-                       o.close AS current_price
+                       p.tp1_pct, p.trail_pct
                 FROM   paper_positions p
                 LEFT JOIN ticker_names tn ON tn.ticker = p.ticker
                 LEFT JOIN krx_listings k  ON k.yfinance_symbol = p.ticker
@@ -302,28 +344,27 @@ async def get_positions():
                     SELECT name FROM chart_signals
                     WHERE  ticker = p.ticker ORDER BY screened_at DESC LIMIT 1
                 ) cs ON TRUE
-                LEFT JOIN LATERAL (
-                    SELECT close FROM daily_ohlcv
-                    WHERE  symbol = p.ticker
-                    ORDER  BY date DESC LIMIT 1
-                ) o ON TRUE
                 WHERE  p.status IN ('open', 'pending')
                 ORDER  BY p.signal_date DESC
                 """
             )
+
+        tickers = list({r["ticker"] for r in rows})
+        prices = await _fetch_current_prices(tickers)
+
         positions = []
         for r in rows:
             d = dict(r)
-            if d.get("entry_actual") and d.get("current_price"):
-                entry = float(d["entry_actual"])
-                curr = float(d["current_price"])
-                d["unrealized_pct"] = round((curr / entry - 1) * 100, 2) if entry else None
-            else:
-                d["unrealized_pct"] = None
-            # decimal → float
-            for k in ("entry_actual", "current_price", "tp1_pct", "trail_pct"):
+            for k in ("entry_actual", "tp1_pct", "trail_pct"):
                 if d.get(k) is not None:
                     d[k] = float(d[k])
+            curr = prices.get(d["ticker"])
+            d["current_price"] = curr
+            entry = d.get("entry_actual")
+            d["unrealized_pct"] = (
+                round((curr / entry - 1) * 100, 2)
+                if curr and entry else None
+            )
             positions.append(d)
         return {"data": positions}
     except Exception as e:
@@ -667,8 +708,7 @@ async def get_paper_report():
             SELECT p.ticker,
                    COALESCE(tn.name_ko, k.name_ko,
                             cs.name, SPLIT_PART(p.ticker, '.', 1)) AS name,
-                   p.model, p.signal_date, p.entry_actual, p.qty, p.status,
-                   o.close AS current_price
+                   p.model, p.signal_date, p.entry_actual, p.qty, p.status
             FROM   paper_positions p
             LEFT JOIN ticker_names tn ON tn.ticker = p.ticker
             LEFT JOIN krx_listings k  ON k.yfinance_symbol = p.ticker
@@ -676,27 +716,31 @@ async def get_paper_report():
                 SELECT name FROM chart_signals
                 WHERE  ticker = p.ticker ORDER BY screened_at DESC LIMIT 1
             ) cs ON TRUE
-            LEFT JOIN LATERAL (
-                SELECT close FROM daily_ohlcv
-                WHERE  symbol = p.ticker ORDER BY date DESC LIMIT 1
-            ) o ON TRUE
             WHERE  p.status IN ('open', 'pending')
             ORDER  BY p.signal_date DESC
             """
         )
 
+    # 오픈 포지션 현재가 yfinance로 조회
+    open_tickers = list({r["ticker"] for r in open_pos})
+    open_prices = await _fetch_current_prices(open_tickers) if open_tickers else {}
+
     def _fmt_pos(r) -> dict:
         d = dict(r)
-        for k in ("entry_actual", "exit_price", "blended_return", "current_price"):
+        for k in ("entry_actual", "exit_price", "blended_return"):
             if d.get(k) is not None:
                 d[k] = float(d[k])
         for k in ("signal_date", "exit_date", "tp1_date"):
             if d.get(k) is not None:
                 d[k] = str(d[k])
-        if d.get("entry_actual") and d.get("current_price"):
-            d["unrealized_pct"] = round((d["current_price"] / d["entry_actual"] - 1) * 100, 2)
-        else:
-            d["unrealized_pct"] = None
+        # 오픈 포지션이면 yfinance 캐시, 청산이면 None
+        curr = open_prices.get(d["ticker"]) if d.get("status") in ("open", "pending") else None
+        d["current_price"] = curr
+        entry = d.get("entry_actual")
+        d["unrealized_pct"] = (
+            round((curr / entry - 1) * 100, 2)
+            if curr and entry else None
+        )
         return d
 
     # 모델별 요약 구조화
@@ -830,26 +874,33 @@ async def get_paper_ticker_history(ticker: str):
                 ticker,
             )
 
+        # 오픈 포지션이 있으면 현재가 갱신
+        active_rows = [r for r in rows if r["status"] in ("open", "pending")]
+        prices: dict[str, float] = {}
+        if active_rows:
+            prices = await _fetch_current_prices([ticker])
+
         def _fmt(r) -> dict:
             d = dict(r)
             for k in ("entry_actual", "entry_theory", "slippage_pct",
                       "tp1_pct", "tp1_ratio", "trail_pct", "hard_stop_pct",
-                      "tp1_price", "watermark", "exit_price",
-                      "blended_return", "current_price"):
+                      "tp1_price", "watermark", "exit_price", "blended_return"):
                 if d.get(k) is not None:
                     d[k] = float(d[k])
+            # current_price: daily_ohlcv 대신 yfinance 캐시 사용
+            d.pop("current_price", None)
+            curr = prices.get(ticker) if d["status"] in ("open", "pending") else None
+            d["current_price"] = curr
             for k in ("signal_date", "tp1_date", "exit_date"):
                 if d.get(k) is not None:
                     d[k] = str(d[k])
             if d.get("created_at") is not None:
                 d["created_at"] = d["created_at"].isoformat()
-            if (d.get("entry_actual") and d.get("current_price")
-                    and d["status"] in ("open", "pending")):
-                d["unrealized_pct"] = round(
-                    (float(d["current_price"]) / float(d["entry_actual"]) - 1) * 100, 2
-                )
-            else:
-                d["unrealized_pct"] = None
+            entry = d.get("entry_actual")
+            d["unrealized_pct"] = (
+                round((curr / entry - 1) * 100, 2)
+                if curr and entry else None
+            )
             return d
 
         positions = [_fmt(r) for r in rows]
