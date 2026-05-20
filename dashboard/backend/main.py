@@ -793,6 +793,74 @@ async def get_top(n: int = 20, refresh: bool = False):
             return {"items": [], "fetched_at": "--:--", "error": _safe_err}
 
 
+# ── GET /api/paper/history ────────────────────────────────────
+@app.get("/api/paper/history")
+async def get_paper_ticker_history(ticker: str):
+    """특정 종목의 모의투자 전체 이력 (모든 포지션, 신호일 역순)."""
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    p.id, p.model, p.ticker,
+                    COALESCE(tn.name_ko, k.name_ko,
+                             cs.name, SPLIT_PART(p.ticker, '.', 1)) AS name,
+                    p.signal_date, p.entry_theory, p.entry_actual,
+                    p.slippage_pct, p.qty, p.status,
+                    p.tp1_pct, p.tp1_ratio, p.tp1_date, p.tp1_price,
+                    p.trail_pct, p.hard_stop_pct, p.watermark,
+                    p.exit_date, p.exit_price, p.exit_type,
+                    p.blended_return, p.created_at,
+                    o.close AS current_price
+                FROM   paper_positions p
+                LEFT JOIN ticker_names tn ON tn.ticker = p.ticker
+                LEFT JOIN krx_listings k  ON k.yfinance_symbol = p.ticker
+                LEFT JOIN LATERAL (
+                    SELECT name FROM chart_signals
+                    WHERE  ticker = p.ticker ORDER BY screened_at DESC LIMIT 1
+                ) cs ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT close FROM daily_ohlcv
+                    WHERE  symbol = p.ticker ORDER BY date DESC LIMIT 1
+                ) o ON TRUE
+                WHERE  p.ticker = $1
+                ORDER  BY p.signal_date DESC, p.id DESC
+                """,
+                ticker,
+            )
+
+        def _fmt(r) -> dict:
+            d = dict(r)
+            for k in ("entry_actual", "entry_theory", "slippage_pct",
+                      "tp1_pct", "tp1_ratio", "trail_pct", "hard_stop_pct",
+                      "tp1_price", "watermark", "exit_price",
+                      "blended_return", "current_price"):
+                if d.get(k) is not None:
+                    d[k] = float(d[k])
+            for k in ("signal_date", "tp1_date", "exit_date"):
+                if d.get(k) is not None:
+                    d[k] = str(d[k])
+            if d.get("created_at") is not None:
+                d["created_at"] = d["created_at"].isoformat()
+            if (d.get("entry_actual") and d.get("current_price")
+                    and d["status"] in ("open", "pending")):
+                d["unrealized_pct"] = round(
+                    (float(d["current_price"]) / float(d["entry_actual"]) - 1) * 100, 2
+                )
+            else:
+                d["unrealized_pct"] = None
+            return d
+
+        positions = [_fmt(r) for r in rows]
+        name = positions[0]["name"] if positions else ticker
+        return {"data": positions, "ticker": ticker, "name": name}
+
+    except Exception as e:
+        logger.error("[paper/history] 조회 실패: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── React 정적 파일 서빙 (프로덕션) ──────────────────────────
 _DIST = Path(__file__).parent.parent / "frontend" / "dist"
 if _DIST.exists():

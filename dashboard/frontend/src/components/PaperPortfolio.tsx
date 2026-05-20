@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import Positions from './Positions'
 import Scheduler from './Scheduler'
+import TickerHistory from './TickerHistory'
 
 interface PaperData {
   model_summary: Record<string, Record<string, { count: number; avg_return: number | null }>>
@@ -23,6 +24,8 @@ const pctColor = (v: number | null | undefined) => {
 
 export default function PaperPortfolio() {
   const [data, setData] = useState<PaperData | null>(null)
+  const [selectedTicker, setSelectedTicker] = useState<string | null>(null)
+  const [selectedName, setSelectedName] = useState<string>('')
 
   useEffect(() => {
     fetch('/api/report/paper')
@@ -31,10 +34,20 @@ export default function PaperPortfolio() {
       .catch(() => {})
   }, [])
 
+  const handleSelect = (ticker: string, name: string) => {
+    if (selectedTicker === ticker) {
+      setSelectedTicker(null)
+      setSelectedName('')
+    } else {
+      setSelectedTicker(ticker)
+      setSelectedName(name)
+    }
+  }
+
   const models = data ? Object.keys(data.model_summary) : []
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'auto', fontSize: 12, color: '#e2e8f0' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', fontSize: 12, color: '#e2e8f0' }}>
 
       {/* 모델별 요약 */}
       {data && models.length > 0 && (
@@ -69,29 +82,57 @@ export default function PaperPortfolio() {
         </div>
       )}
 
-      {/* 실시간 포지션 */}
-      <div style={{ flex: 1, minHeight: 200, borderBottom: '1px solid #1e293b', overflowY: 'auto' }}>
-        <Positions />
+      {/* 포지션 + 이력 패널 (수평 분할) */}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
+
+        {/* 왼쪽: 현재 포지션 목록 */}
+        <div style={{
+          flex: selectedTicker ? '0 0 55%' : 1,
+          minWidth: 0,
+          overflowY: 'auto',
+          borderRight: selectedTicker ? '1px solid #1e293b' : undefined,
+          transition: 'flex 0.15s',
+        }}>
+          <Positions onSelect={handleSelect} selectedTicker={selectedTicker} />
+        </div>
+
+        {/* 오른쪽: 종목 이력 패널 */}
+        {selectedTicker && (
+          <div style={{ flex: '0 0 45%', minWidth: 0, overflowY: 'auto' }}>
+            <TickerHistory
+              ticker={selectedTicker}
+              name={selectedName}
+              onClose={() => { setSelectedTicker(null); setSelectedName('') }}
+            />
+          </div>
+        )}
       </div>
 
       {/* 최근 청산 이력 */}
       {data && data.closed.length > 0 && (
-        <div style={{ borderBottom: '1px solid #1e293b', padding: '10px 12px', flexShrink: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 11, color: '#475569', marginBottom: 8 }}>최근 청산 이력</div>
-          <div style={{ overflowX: 'auto', maxHeight: 220, overflowY: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
-              <thead>
-                <tr>
-                  {['종목', '모델', '청산일', '청산유형', 'blended수익'].map(h => (
-                    <th key={h} style={s.th}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {data.closed.map((r, i) => (
-                  <tr key={i}>
+        <div style={{ borderTop: '1px solid #1e293b', flexShrink: 0, maxHeight: 220, overflowY: 'auto' }}>
+          <div style={{ padding: '7px 12px 0', fontWeight: 700, fontSize: 11, color: '#475569', position: 'sticky', top: 0, background: '#0f172a' }}>
+            최근 청산 이력
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+            <thead>
+              <tr>
+                {['종목', '모델', '청산일', '청산유형', 'blended수익'].map(h => (
+                  <th key={h} style={s.th}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {data.closed.map((r, i) => {
+                const isSelected = r.ticker === selectedTicker
+                return (
+                  <tr
+                    key={i}
+                    style={{ background: isSelected ? '#0f2849' : undefined, cursor: 'pointer' }}
+                    onClick={() => handleSelect(r.ticker, r.name)}
+                  >
                     <td style={s.td}>
-                      <div style={{ color: '#cbd5e1', fontWeight: 600 }}>{r.name}</div>
+                      <div style={{ color: isSelected ? '#93c5fd' : '#cbd5e1', fontWeight: 600 }}>{r.name}</div>
                       <div style={{ color: '#475569', fontSize: 10 }}>{r.signal_date}</div>
                     </td>
                     <td style={{ ...s.td, color: '#94a3b8' }}>{MODEL_LABEL[r.model] ?? r.model}</td>
@@ -106,10 +147,10 @@ export default function PaperPortfolio() {
                         : '—'}
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                )
+              })}
+            </tbody>
+          </table>
         </div>
       )}
 

@@ -22,7 +22,12 @@ const pctColor = (v: number | null) => {
   return '#94a3b8'
 }
 
-export default function Positions() {
+interface Props {
+  onSelect?: (ticker: string, name: string) => void
+  selectedTicker?: string | null
+}
+
+export default function Positions({ onSelect, selectedTicker }: Props) {
   const [rows, setRows] = useState<Position[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -54,22 +59,33 @@ export default function Positions() {
           </tr>
         </thead>
         <tbody>
-          {rows.map(r => (
-            <tr key={r.id} style={styles.tr}>
-              <td style={styles.td}>
-                <div style={{ fontWeight: 600 }}>{r.name}</div>
-                <div style={{ fontSize: 10, color: '#475569' }}>{r.ticker}</div>
-              </td>
-              <td style={styles.td}><span style={styles.badge}>{r.model}</span></td>
-              <td style={styles.td}>{r.signal_date?.slice(0, 10)}</td>
-              <td style={styles.td}>{r.entry_actual?.toLocaleString()}</td>
-              <td style={styles.td}>{r.current_price?.toLocaleString() ?? '—'}</td>
-              <td style={{ ...styles.td, color: pctColor(r.unrealized_pct), fontWeight: 600 }}>
-                {r.unrealized_pct !== null ? `${r.unrealized_pct > 0 ? '+' : ''}${r.unrealized_pct.toFixed(2)}%` : '—'}
-              </td>
-              <td style={styles.td}>{r.status}</td>
-            </tr>
-          ))}
+          {rows.map(r => {
+            const isSelected = r.ticker === selectedTicker
+            return (
+              <tr
+                key={r.id}
+                style={{
+                  ...styles.tr,
+                  background: isSelected ? '#0f2849' : undefined,
+                  cursor: onSelect ? 'pointer' : 'default',
+                }}
+                onClick={() => onSelect?.(r.ticker, r.name)}
+              >
+                <td style={styles.td}>
+                  <div style={{ fontWeight: 600, color: isSelected ? '#93c5fd' : '#e2e8f0' }}>{r.name}</div>
+                  <div style={{ fontSize: 10, color: '#475569' }}>{r.ticker}</div>
+                </td>
+                <td style={styles.td}><span style={styles.badge}>{r.model}</span></td>
+                <td style={styles.td}>{r.signal_date?.slice(0, 10)}</td>
+                <td style={styles.td}>{r.entry_actual?.toLocaleString() ?? '—'}</td>
+                <td style={styles.td}>{r.current_price?.toLocaleString() ?? '—'}</td>
+                <td style={{ ...styles.td, color: pctColor(r.unrealized_pct), fontWeight: 600 }}>
+                  {r.unrealized_pct !== null ? `${r.unrealized_pct > 0 ? '+' : ''}${r.unrealized_pct.toFixed(2)}%` : '—'}
+                </td>
+                <td style={styles.td}>{r.status}</td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>
