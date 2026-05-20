@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.3.0] - 2026-05-20
+
+### Added
+- **Fuzzy 티커 해석** (`ticker_cache.py`): `resolve_fuzzy(name, threshold=0.82)` 메서드 추가. `difflib.SequenceMatcher`로 LLM이 추출한 종목명을 KRX DB 명칭에 근사 매칭. "셀트리온헬스케어" vs "셀트리온헬스케어(주)" 자동 연결. 임계값 0.82: "현대차" vs "현대차증권" (ratio ≈ 0.75) false positive 차단. `_parse_signal_json()`에서 정확 매칭 → fuzzy 매칭 → `_resolution_misses` 카운터 순서로 해석.
+- **HIGH CONFIDENCE 통합** (`run_scheduler.py`, `telegram_notify.py`): 해당 주 Ichimoku 스크리너 통과 종목과 뉴스 신호가 교차할 때 `signal.confidence = "HIGH"`로 상향. 텔레그램 알림에 🔥 *HIGH CONFIDENCE - 스크리너 교차 종목* 배지 표시. `TradeSignal`에 `confidence: str = "NORMAL"` 필드 추가(dataclass 마지막 필드).
+- **`/watchlist` 봇 명령어** (`telegram_bot.py`, `run_scheduler.py`): 거래대금 워치리스트 온디맨드 조회. `_build_watchlist_entries(pool)` 헬퍼를 스케줄러 잡과 봇 핸들러가 공유. `/help` 및 `_register_commands()` 등록 완료.
+- **Vol ratio 전일 대비 델타** (`run_scheduler.py`, `telegram_notify.py`): 워치리스트 일보에 `+5%▲` / `-8%▼` 형식의 전일 대비 거래대금 비율 변화 표시. `watchlist_vol_log` lookback=2 로드 후 `delta = today_ratio − yesterday_ratio` 계산.
+- **D+10 마지막 추적일 배지** (`run_scheduler.py`, `telegram_notify.py`): `days_since >= 10`인 종목에 `[마지막 추적일]` 표시. 다음 일보에서 자동 퇴장.
+- **Enhanced Ichimoku 실제 적용** (`chart_screener.py`): `calc_ichimoku()`에 `tenkan_sen`(전환선, 9주)·`kijun_sen`(기준선, 26주) 컬럼 추가. `screen_ticker()`에서 H(전환선 > 기준선)·I(둘 다 우상향) 조건 판정 → `is_enhanced` 실제 설정. 기존에는 항상 `False`였으나 이제 실제 Enhanced 종목에 배지 부여.
+- **조건 G NaN 보정 토글** (`chart_screener.py`): `SCREENER_G_NAN_STRICT=1` 환경변수로 120주선 데이터 부족 종목의 통과 여부를 제어. 기본(미설정): NaN → 통과. Strict 모드: NaN → 실패. DB `null_pct > 20%` 확인 후 활성화 권장.
+- **일봉 분류기 티커 캡** (`run_scheduler.py`): `DAILY_CLASSIFIER_TICKERS=150` 환경변수(기본값)로 최대 처리 종목 수 제한. Ichimoku 통과 종목은 캡 초과 여부와 관계없이 우선 포함.
+- **뉴스 게이팅 이중 레이어** (`run_scheduler.py`, `db.py`): 기존 `_screener_tickers`(주봉 Ichimoku)에 더해 `_active_stage_tickers`(최근 7일 이내 Stage 1/2/3 활성 종목) 레이어 추가. `get_active_stage_tickers(pool, days=7)` DB 함수 추가. 스케줄러 시작 시 초기 로드, `_daily_stage_job()` 완료 후 자동 갱신. 스크리너 교차 → HIGH CONFIDENCE, Stage 7일 활성 → NORMAL 전달, 둘 다 해당 없음 → 억제.
+- **거래대금 기반 스테이지 분류** (`stage_classifier.py`, `backtest_engine.py`): Stage 1/2/3 거래량 조건을 거래대금(`Volume × Close`, 원화)으로 전면 교체. 시가총액 소형주 과잉 선정 방지. `_calc_txamt(price_df)` 헬퍼 추가. Stage 1 조건 2: `txamt_today >= 2.0 × avg_txamt20`. Stage 2 조건 3: `txamt_ratio = txamt_today / s1_txamt` 범위 `[0.25, 0.65]`. Stage 3 조건 4: `txamt_today >= 1.5 × avg_txamt30`.
+- **`s1_txamt` 컬럼** (`db.py`): `stage_classifications` 및 `watchlist_vol_log` 테이블에 `BIGINT` 컬럼 추가. 기존 DB 행은 `s1_volume × s1_high` 추정값으로 자동 폴백. `get_stage1_history()`, `save_stage_classifications()`, `get_stage1_watchlist()`, `upsert_watchlist_vol_log()` 모두 갱신.
+- **신규 문서 6종** (`docs/`): Diataxis 프레임워크 기반. `howto-screener.md` (스크리너 설정·Calibration), `howto-stage-classifier.md` (분류기 설정), `howto-watchlist.md` (워치리스트 온디맨드 조회), `explanation-signal-pipeline.md` (신호 파이프라인·게이팅 설계 이유), `reference-env-vars.md` (환경변수 전체 목록), `reference-telegram-commands.md` (명령어 전체 목록).
+
+### Changed
+- **워치리스트 `_fetch_vol()` → `_fetch_txamt()`** (`run_scheduler.py`): 일별 거래량 대신 `Volume × Close` 거래대금으로 vol_ratio 계산. `s1_txamt_map` 추가, 기존 DB 행 폴백(`s1_volume × s1_high`).
+- **Stage 2 txamt 임계값** (`stage_classifier.py`, `backtest_engine.py`): 거래량 비율 `[0.30, 0.60]` → 거래대금 비율 `[0.25, 0.65]`. Stage 2 가격은 Stage 1 고점 대비 -5%~-20% 수준이므로 하한 0.05p 하향 조정.
+- **게이팅 버그 수정** (`run_scheduler.py`): `signal.ticker_symbols[:3]`(list 슬라이스 오류) → `list(signal.ticker_symbols.keys())[:3]`. `set(signal.ticker_symbols) & _screener_tickers`(dict key 교차) → `set(signal.ticker_symbols.values()) & _screener_tickers`(yfinance 심볼 기준 교차).
+- **`send_watchlist_brief()` `target_chat_id` 파라미터** (`telegram_notify.py`): `/watchlist` 봇 명령어에서 개인 DM으로 전송하기 위해 추가. 채널 브로드캐스트를 막고 요청자의 chat_id로만 전달.
+
+### Tests
+- `test_resolve_fuzzy.py` (13개): `resolve_fuzzy` 정확 임계값·false positive 방지·대소문자·공백·symbol 해석 통합.
+- `test_high_confidence.py` (7개): HIGH CONFIDENCE 배지 표시·NORMAL 미표시·게이팅 로직.
+- `test_watchlist_features.py` (17개): vol_ratio_delta 포맷, retiring 배지, `target_chat_id`, `/watchlist` 핸들러.
+- `test_p3_remaining.py` (24개): 조건 G NaN 토글, Enhanced Ichimoku, 티커 캡, 이중 게이팅.
+
 ## [0.9.2.0] - 2026-05-19
 
 ### Added

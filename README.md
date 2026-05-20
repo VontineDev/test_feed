@@ -84,7 +84,7 @@ ohlcv_cache.py        # OHLCV DB 캐시 레이어
 krx_flow_sync.py      # 외국인·기관 순매수 파이프라인 → daily_flow 테이블
 ticker_cache.py       # 종목명→yfinance 심볼 인메모리 캐시
 
-tests/                # pytest 테스트 (27개 파일)
+tests/                # pytest 테스트 (32개 파일)
 docs/                 # 문서 (ARCHITECTURE.md, USER_MANUAL.md, TODOS.md, HowToBacktest.md)
 scripts/              # 운영·개발 보조 스크립트 (generate_*.py, register_task.ps1 등)
 logs/                 # 로그 파일
