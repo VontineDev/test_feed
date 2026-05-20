@@ -50,10 +50,9 @@ from kiwoom_aftermarket_sync import KiwoomClient  # noqa: E402
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-# ── 캐시 (히트맵/가격/Top 모두 5분) ──────────────────────────
+# ── 캐시 (히트맵/Top 5분, 포지션 현재가 5분) ─────────────────
 _HEATMAP_CACHE: dict = {"data": None, "expires": 0.0}
-_PRICE_CACHE: dict = {"data": {}, "expires": 0.0}
-_PRICE_TTL = 300     # 5분 — 가격·등락률·히트맵 구조 공통
+_PRICE_TTL = 300     # 5분
 
 # ── 포지션 현재가 캐시 — {ticker: current_price_float} (5분) ──
 _POS_PRICE_CACHE: dict = {"data": {}, "expires": 0.0}
@@ -221,94 +220,40 @@ async def _fetch_current_prices(
     return prices
 
 
-# ── 당일 등락률 조회 (yfinance 2d, 5분 캐시) ─────────────────
-async def _fetch_stage_prices(tickers: list[str]) -> dict[str, float]:
-    now = time.time()
-    if _PRICE_CACHE["data"] and now < _PRICE_CACHE["expires"]:
-        return _PRICE_CACHE["data"]
-
-    def _fetch() -> dict[str, float]:
-        result: dict[str, float] = {}
-        try:
-            import yfinance as _yf
-            import pandas as _pd
-            hist = _yf.download(
-                tickers, period="2d", interval="1d",
-                auto_adjust=True, progress=False, threads=True,
-            )
-            if hist.empty:
-                return result
-            close_df = hist["Close"] if isinstance(hist.columns, _pd.MultiIndex) else hist
-            for t in tickers:
-                try:
-                    series = (close_df[t] if t in close_df.columns else close_df.iloc[:, 0]).dropna()
-                    if len(series) >= 2:
-                        result[t] = round((float(series.iloc[-1]) / float(series.iloc[-2]) - 1) * 100, 2)
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.warning("[heatmap] 가격 조회 실패: %s", e)
-        return result
-
-    prices = await asyncio.to_thread(_fetch)
-    _PRICE_CACHE["data"] = prices
-    _PRICE_CACHE["expires"] = now + _PRICE_TTL
-    logger.info("[heatmap] 가격 갱신: %d종목", len(prices))
-    return prices
-
-
-# ── 히트맵 데이터 빌드 ────────────────────────────────────────
+# ── 히트맵 데이터 빌드 (Kiwoom 거래대금 Top 50 + Stage 오버레이) ──
 async def _build_heatmap_data() -> list[dict]:
-    pool = await get_pool()
-    today = date.today()
-
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT
-                sc.ticker,
-                sc.stage,
-                sc.s1_high,
-                sc.s1_volume,
-                sc.peakout_flag,
-                COALESCE(tn.name_ko, k.name_ko, cs.name,
-                         SPLIT_PART(sc.ticker, '.', 1))                      AS name,
-                CASE WHEN sc.ticker LIKE '%.KS' THEN 'KOSPI'
-                     WHEN sc.ticker LIKE '%.KQ' THEN 'KOSDAQ'
-                     ELSE '' END                                              AS market
-            FROM   stage_classifications sc
-            LEFT JOIN ticker_names tn ON tn.ticker = sc.ticker
-            LEFT JOIN krx_listings k  ON k.yfinance_symbol = sc.ticker
-            LEFT JOIN LATERAL (
-                SELECT name FROM chart_signals
-                WHERE  ticker = sc.ticker ORDER BY screened_at DESC LIMIT 1
-            ) cs ON TRUE
-            WHERE  sc.classified_date = $1
-            """,
-            today,
-        )
-
-    if not rows:
+    # 1. Kiwoom top 50 조회 (등락률·거래대금 모두 포함)
+    top_data = await asyncio.to_thread(_fetch_top_kiwoom, 50)
+    items = top_data.get("items", [])
+    if not items:
         return []
 
-    tickers_list = [r["ticker"] for r in rows]
-    prices = await _fetch_stage_prices(tickers_list)
+    # 2. 오늘 Stage 분류 조회 (ticker → stage 매핑)
+    tickers = [i["ticker"] for i in items]
+    pool = await get_pool()
+    today = date.today()
+    async with pool.acquire() as conn:
+        stage_rows = await conn.fetch(
+            """
+            SELECT ticker, stage FROM stage_classifications
+            WHERE classified_date = $1 AND ticker = ANY($2::text[])
+            """,
+            today, tickers,
+        )
+    stage_map = {r["ticker"]: r["stage"] for r in stage_rows}
 
-    result = []
-    for r in rows:
-        s1_high   = float(r["s1_high"])   if r["s1_high"]   else 0.0
-        s1_volume = float(r["s1_volume"]) if r["s1_volume"] else 0.0
-        amount = s1_high * s1_volume if s1_high and s1_volume else 1.0
-        result.append({
-            "ticker":     r["ticker"],
-            "name":       r["name"],
-            "stage":      r["stage"],
-            "amount":     amount,
-            "change_pct": prices.get(r["ticker"], 0.0),
-            "market":     r["market"] or "",
-        })
-
-    return sorted(result, key=lambda x: x["amount"], reverse=True)
+    # 3. 합치기 — 거래대금 순 정렬은 Kiwoom 응답이 이미 보장
+    return [
+        {
+            "ticker":     it["ticker"],
+            "name":       it["name"],
+            "stage":      stage_map.get(it["ticker"]),   # None = 미분류 (회색 테두리)
+            "amount":     it["amount"],                   # 당일 실제 거래대금
+            "change_pct": it["change_pct"],               # Kiwoom 일중 등락률
+            "market":     it.get("market", ""),
+        }
+        for it in items
+    ]
 
 
 # ── GET /api/heatmap ──────────────────────────────────────────
@@ -321,8 +266,6 @@ async def get_heatmap():
     try:
         data = await _build_heatmap_data()
         _HEATMAP_CACHE["data"] = data
-        # stage 구조는 30분, 가격은 _PRICE_CACHE가 5분 관리
-        # heatmap 캐시는 5분으로 설정 (가격 갱신 주기에 맞춤)
         _HEATMAP_CACHE["expires"] = now + _PRICE_TTL
         return {"data": data, "cached": False}
     except Exception as e:
