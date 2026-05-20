@@ -222,38 +222,74 @@ async def _fetch_current_prices(
 
 # ── 히트맵 데이터 빌드 (Kiwoom 거래대금 Top 50 + Stage 오버레이) ──
 async def _build_heatmap_data() -> list[dict]:
-    # 1. Kiwoom top 50 조회 (등락률·거래대금 모두 포함)
-    top_data = await asyncio.to_thread(_fetch_top_kiwoom, 50)
-    items = top_data.get("items", [])
-    if not items:
-        return []
+    # 1. Kiwoom top 50 조회 (15초 타임아웃)
+    try:
+        top_data = await asyncio.wait_for(
+            asyncio.to_thread(_fetch_top_kiwoom, 50),
+            timeout=15.0,
+        )
+        kiwoom_items = top_data.get("items", [])
+    except (asyncio.TimeoutError, Exception) as e:
+        logger.warning("[heatmap] Kiwoom 조회 실패, Stage 분류 폴백: %s", e)
+        kiwoom_items = []
 
-    # 2. 오늘 Stage 분류 조회 (ticker → stage 매핑)
-    tickers = [i["ticker"] for i in items]
     pool = await get_pool()
     today = date.today()
-    async with pool.acquire() as conn:
-        stage_rows = await conn.fetch(
-            """
-            SELECT ticker, stage FROM stage_classifications
-            WHERE classified_date = $1 AND ticker = ANY($2::text[])
-            """,
-            today, tickers,
-        )
-    stage_map = {r["ticker"]: r["stage"] for r in stage_rows}
 
-    # 3. 합치기 — 거래대금 순 정렬은 Kiwoom 응답이 이미 보장
-    return [
-        {
-            "ticker":     it["ticker"],
-            "name":       it["name"],
-            "stage":      stage_map.get(it["ticker"]),   # None = 미분류 (회색 테두리)
-            "amount":     it["amount"],                   # 당일 실제 거래대금
-            "change_pct": it["change_pct"],               # Kiwoom 일중 등락률
-            "market":     it.get("market", ""),
-        }
-        for it in items
-    ]
+    if kiwoom_items:
+        # ── Kiwoom 데이터 경로 ─────────────────────────────────
+        tickers = [i["ticker"] for i in kiwoom_items]
+        async with pool.acquire() as conn:
+            stage_rows = await conn.fetch(
+                """
+                SELECT ticker, stage FROM stage_classifications
+                WHERE classified_date = $1 AND ticker = ANY($2::text[])
+                """,
+                today, tickers,
+            )
+        stage_map = {r["ticker"]: r["stage"] for r in stage_rows}
+        return [
+            {
+                "ticker":     it["ticker"],
+                "name":       it["name"],
+                "stage":      stage_map.get(it["ticker"]),
+                "amount":     it["amount"],
+                "change_pct": it["change_pct"],
+                "market":     it.get("market", ""),
+            }
+            for it in kiwoom_items
+        ]
+
+    # ── Stage 분류 폴백 (Kiwoom 미응답 시) ──────────────────────
+    logger.info("[heatmap] Stage 분류 데이터로 폴백")
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT sc.ticker, sc.stage, sc.s1_high, sc.s1_volume,
+                   COALESCE(tn.name_ko, SPLIT_PART(sc.ticker, '.', 1)) AS name,
+                   CASE WHEN sc.ticker LIKE '%.KS' THEN 'KOSPI'
+                        WHEN sc.ticker LIKE '%.KQ' THEN 'KOSDAQ'
+                        ELSE '' END AS market
+            FROM stage_classifications sc
+            LEFT JOIN ticker_names tn ON tn.ticker = sc.ticker
+            WHERE sc.classified_date = $1
+            """,
+            today,
+        )
+    result = []
+    for r in rows:
+        s1_high = float(r["s1_high"]) if r["s1_high"] else 0.0
+        s1_vol  = float(r["s1_volume"]) if r["s1_volume"] else 0.0
+        amount  = s1_high * s1_vol if s1_high and s1_vol else 1.0
+        result.append({
+            "ticker":     r["ticker"],
+            "name":       r["name"],
+            "stage":      r["stage"],
+            "amount":     amount,
+            "change_pct": 0.0,
+            "market":     r["market"] or "",
+        })
+    return sorted(result, key=lambda x: x["amount"], reverse=True)
 
 
 # ── GET /api/heatmap ──────────────────────────────────────────

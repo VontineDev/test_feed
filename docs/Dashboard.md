@@ -1,7 +1,7 @@
 # 웹 대시보드
 
 Trading Dashboard는 FastAPI + React로 구성된 웹 인터페이스입니다.  
-Stage 분류 히트맵, 실시간 매매 신호 피드, 모의투자 포지션, 차트 스크리닝 결과를 제공합니다.
+거래대금 히트맵, 실시간 매매 신호 피드, 모의투자 포지션, 차트 스크리닝 결과를 제공합니다.
 
 외부 접속: `https://vtrading.duckdns.org` (Caddy HTTPS 경유 → [HTTPS 설정 가이드](HTTPS-Setup.md))
 
@@ -30,7 +30,7 @@ PostgreSQL (Supabase)
 
 | 탭 | 컴포넌트 | 기능 |
 |----|----------|------|
-| 히트맵 | `Heatmap.tsx` | Stage 1/2/3 종목을 거래대금 크기·등락률 색상으로 표시. 5분 자동갱신 |
+| 히트맵 | `Heatmap.tsx` | 당일 거래대금 상위 50종목(Kiwoom ka10032). 셀 크기=실제 거래대금, 색상=등락률. Stage 분류 종목은 컬러 테두리 오버레이. 5분 자동갱신 |
 | 레포트 | `Report.tsx` | Stage 분류 결과 + 차트 스크리닝 결과. 날짜 범위 선택(오늘/-3일/-1주/-2주/-1달)으로 이력 조회 가능. 종목 클릭 시 Stage·스크리너 이력 팝업 |
 | Top | `Top.tsx` | 당일 거래대금 상위 20종목. Kiwoom ka10032 API, 5분 캐시 |
 | 모의투자 | `PaperPortfolio.tsx` | 모델별 요약 + 실시간 포지션(60s 갱신) + 청산 이력 + 스케줄러 컨트롤. 모델 카드 클릭으로 포지션 필터링 |
@@ -44,7 +44,7 @@ PostgreSQL (Supabase)
 
 ### GET /api/heatmap
 
-Stage 분류 종목의 히트맵 데이터를 반환합니다.
+당일 거래대금 상위 50종목(Kiwoom ka10032)의 히트맵 데이터를 반환합니다. Stage 분류 결과와 무관하게 항상 채워집니다. Kiwoom 응답 실패 시 Stage 분류 데이터로 폴백합니다.
 
 **응답:**
 ```json
@@ -65,11 +65,12 @@ Stage 분류 종목의 히트맵 데이터를 반환합니다.
 
 | 필드 | 타입 | 설명 |
 |------|------|------|
-| `amount` | float | `s1_high × s1_volume` — 히트맵 셀 크기 결정 |
-| `change_pct` | float | 당일 등락률(%). yfinance 2일 종가 비교 |
+| `amount` | float | 당일 실제 거래대금(Kiwoom). 셀 크기 결정 |
+| `change_pct` | float | 당일 등락률(%). Kiwoom 실시간 기준 |
+| `stage` | int\|null | Stage 1/2/3 또는 `null`(미분류) |
 | `cached` | bool | 5분 캐시 히트 여부 |
 
-**캐시:** 5분(`_PRICE_TTL = 300`). 가격 데이터와 Stage 구조 동일 TTL.
+**캐시:** 5분(`_HEATMAP_TTL = 300`).
 
 ---
 
