@@ -212,6 +212,13 @@ class TestStage2C2:
 # ── Condition 3: 거래량 비율 ─────────────────────────────────────
 
 class TestStage2C3:
+    """거래대금 비율 기준 C3 검증.
+    spike_close=11664, s2_close=9720 → txamt_ratio = vol_ratio × (9720/11664) ≈ vol_ratio × 0.833
+    Lower boundary: vol_ratio=0.30 → txamt_ratio≈0.25 (threshold 0.25)
+    Upper boundary: vol_ratio=0.60 → txamt_ratio≈0.50 (threshold 0.65)
+    Fail-low:       vol_ratio=0.20 → txamt_ratio≈0.167 (<0.25)
+    Fail-high:      vol_ratio=0.80 → txamt_ratio≈0.667 (>0.65)
+    """
     def _run_with_vol_ratio(self, vol_ratio: float) -> list[SignalRecord]:
         spike_vol = int(100_000 * 3.0)
         s2_vol    = int(spike_vol * vol_ratio)

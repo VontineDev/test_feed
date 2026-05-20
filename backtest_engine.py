@@ -1348,10 +1348,10 @@ def _replay_stage2(
             continue
 
         s1_row = df.iloc[s1_idx]
-        if pd.isna(s1_row["Volume"]):
+        if pd.isna(s1_row["Volume"]) or pd.isna(s1_row["Close"]):
             continue
-        vol_s1 = float(s1_row["Volume"])
-        if vol_s1 <= 0:
+        txamt_s1 = float(s1_row["Volume"]) * float(s1_row["Close"])
+        if txamt_s1 <= 0:
             continue
 
         cutoff = s1.signal_date + timedelta(days=14)
@@ -1370,9 +1370,10 @@ def _replay_stage2(
             if pd.isna(cur["Close"]) or pd.isna(cur["Volume"]):
                 continue
 
-            c_today = float(cur["Close"])
-            v_today = float(cur["Volume"])
-            ma20    = cur["ma_20"]
+            c_today      = float(cur["Close"])
+            v_today      = float(cur["Volume"])
+            txamt_today  = v_today * c_today
+            ma20         = cur["ma_20"]
 
             # C1: -5% ~ -20% 되돌림
             if not (0.80 <= c_today / s1_close <= 0.95):
@@ -1380,8 +1381,8 @@ def _replay_stage2(
             # C2: close ≥ MA20 × 0.95
             if pd.isna(ma20) or c_today < float(ma20) * 0.95:
                 continue
-            # C3: 거래량 비율 [0.30, 0.60]
-            if not (0.30 <= v_today / vol_s1 <= 0.60):
+            # C3: 거래대금 비율 [0.25, 0.65] (S2 가격 할인 -5%~-20% 반영한 조정 임계값)
+            if not (0.25 <= txamt_today / txamt_s1 <= 0.65):
                 continue
             # C4: 건너뜀
 
@@ -1595,10 +1596,12 @@ def _compute_sell_signals_and_s2(
 
             stop_price = entry_price * (1 - stop_loss_pct)
 
-            s1_vol: float = 0.0
+            s1_txamt: float = 0.0
             if sig.mode == "stage":
                 v = df.iloc[entry_idx]["Volume"]
-                s1_vol = float(v) if not pd.isna(v) else 0.0
+                c = df.iloc[entry_idx]["Close"]
+                if not pd.isna(v) and not pd.isna(c):
+                    s1_txamt = float(v) * float(c)
 
             s2_cutoff      = sig.signal_date + timedelta(days=14)
             mdd_window_end = sig.signal_date + timedelta(days=91)
@@ -1632,12 +1635,13 @@ def _compute_sell_signals_and_s2(
 
                 # S2 진행 감지 (Stage 1 신호 × 14일 이내)
                 if sig.mode == "stage" and not s2_found and row_date <= s2_cutoff:
-                    if ma20 is not None and s1_vol > 0:
-                        ratio     = close / entry_price
-                        vol_ratio = vol / s1_vol
+                    if ma20 is not None and s1_txamt > 0:
+                        ratio       = close / entry_price
+                        txamt_today = vol * close
+                        txamt_ratio = txamt_today / s1_txamt
                         if (0.80 <= ratio <= 0.95
                                 and close >= ma20 * 0.95
-                                and 0.30 <= vol_ratio <= 0.60):
+                                and 0.25 <= txamt_ratio <= 0.65):
                             sig.s2_date = row_date
                             s2_found    = True
 

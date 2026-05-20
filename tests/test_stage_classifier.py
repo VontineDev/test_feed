@@ -60,11 +60,13 @@ def _make_flow_df(
 
 
 def _s1_history_14d(ticker: str, s1_high: float = 115.0, s1_volume: int = 900_000) -> dict:
+    s1_txamt = int(s1_volume * s1_high) if s1_high else None
     return {
         ticker: [{
             "classified_date": date.today() - timedelta(days=7),
             "s1_high":   s1_high,
             "s1_volume": s1_volume,
+            "s1_txamt":  s1_txamt,  # 거래대금 = s1_volume × s1_high
         }]
     }
 
@@ -91,8 +93,9 @@ class TestStage1:
         assert classify_stage("TEST.KQ", df, flow, {}, "KOSDAQ") is None
 
     def test_volume_below_2x_avg(self):
-        # vol_today = 1.9× avg — fails Stage 1's ≥2×; inst_net=-1 blocks Stage 3's AND requirement
-        df = _make_price_df(close_today=106.0, close_prev=100.0, vol_today=760_000, avg_vol=400_000)
+        # txamt_today ≈ 1.95× avg_txamt — 거래대금 기준 2× 미달; inst_net=-1 blocks Stage 3
+        # close=106, avg_close≈95: txamt_today=700k×106=74.2M vs avg≈38.1M → ratio 1.95× < 2×
+        df = _make_price_df(close_today=106.0, close_prev=100.0, vol_today=700_000, avg_vol=400_000)
         flow = _make_flow_df(inst_net=-1)
         assert classify_stage("TEST.KS", df, flow, {}, "KOSPI") is None
 
@@ -190,7 +193,7 @@ class TestStage2:
         assert classify_stage("TEST.KS", df, flow, self._s1_hist(), "KOSPI") is None
 
     def test_volume_outside_range(self):
-        # vol_today too high (80% of s1_volume = 720_000 > 60%)
+        # txamt_today=720k×100=72M / s1_txamt=900k×115=103.5M → ratio=0.696 > 0.65 → C3 실패
         df   = _make_price_df(close_today=100.0, close_prev=99.0, vol_today=720_000, avg_vol=400_000)
         flow = _make_flow_df(foreign_net=-50, inst_net=0, inst_streak=0)
         assert classify_stage("TEST.KS", df, flow, self._s1_hist(), "KOSPI") is None
@@ -201,12 +204,12 @@ class TestStage2:
         assert classify_stage("TEST.KS", df, flow, self._s1_hist(), "KOSPI") is None
 
     def test_null_s1_high_skips_price_condition(self):
-        # s1_high=None → price condition skipped, rest must pass
+        # s1_high=None → price C1 skipped; s1_txamt=None(계산불가) → C3 skipped; inst_streak ✓
         hist = {"TEST.KS": [{"classified_date": date.today() - timedelta(days=7),
-                              "s1_high": None, "s1_volume": 900_000}]}
+                              "s1_high": None, "s1_volume": 900_000, "s1_txamt": None}]}
         df   = _make_price_df(close_today=100.0, close_prev=99.0, vol_today=360_000, avg_vol=400_000)
         flow = _make_flow_df(foreign_net=-50, inst_net=0, inst_streak=0)
-        # price condition skipped; volume + inst_streak still apply
+        # C1/C3 skipped (null s1_high, null s1_txamt); C2 ✓; C4 inst_streak ≥ 0 ✓
         assert classify_stage("TEST.KS", df, flow, hist, "KOSPI") == 2
 
 

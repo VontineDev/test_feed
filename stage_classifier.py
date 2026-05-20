@@ -33,6 +33,16 @@ logger = logging.getLogger(__name__)
 _S1_CHANGE_THRESHOLD = {"KOSPI": 0.05, "KOSDAQ": 0.07}
 
 
+def _calc_txamt(price_df: pd.DataFrame) -> pd.Series:
+    """거래대금 = Volume × Close (원 기준).
+
+    시가총액이 작은 주식은 주식 수 기준 거래량이 많아 보여도
+    거래대금이 작을 수 있어, 거래량 대신 거래대금으로 비교한다.
+    (compare_tx_amt.py 검증: Volume×Close ≈ 실제 거래대금, MAE 1.38%)
+    """
+    return (price_df["Volume"] * price_df["Close"]).dropna()
+
+
 def classify_stage(
     ticker: str,
     price_df: pd.DataFrame,
@@ -114,8 +124,8 @@ def _check_stage1(
     market: str,
 ) -> bool:
     """Stage 1 (랠리 초입) 5개 조건 모두 통과 시 True."""
-    closes = price_df["Close"].dropna()
-    vols   = price_df["Volume"].dropna()
+    closes  = price_df["Close"].dropna()
+    txamts  = _calc_txamt(price_df)
 
     # 최소 데이터 요건 (MA20 계산용)
     if len(closes) < 21:
@@ -133,14 +143,14 @@ def _check_stage1(
     if change_pct < threshold:
         return False
 
-    # 조건 2: 거래량 ≥ 2× 20일 평균
-    if len(vols) < 20:
+    # 조건 2: 거래대금 ≥ 2× 20일 평균 (시가총액 편향 방지)
+    if len(txamts) < 21:
         return False
-    vol_today = float(vols.iloc[-1])
-    avg_vol20 = float(vols.iloc[-21:-1].mean())
-    if avg_vol20 <= 0:
+    txamt_today = float(txamts.iloc[-1])
+    avg_txamt20 = float(txamts.iloc[-21:-1].mean())
+    if avg_txamt20 <= 0:
         return False
-    if vol_today < 2.0 * avg_vol20:
+    if txamt_today < 2.0 * avg_txamt20:
         return False
 
     # 조건 3: close > MA20 AND close > MA60 (with div-by-zero guard)
@@ -190,9 +200,9 @@ def _check_stage2(
     s1_high   = entry.get("s1_high")
     s1_volume = entry.get("s1_volume")
 
-    # s1_high / s1_volume NULL이면 가격·볼륨 조건 스킵 (안전 처리)
-    closes = price_df["Close"].dropna()
-    vols   = price_df["Volume"].dropna()
+    # s1_high / s1_txamt NULL이면 해당 조건 스킵 (안전 처리)
+    closes  = price_df["Close"].dropna()
+    txamts  = _calc_txamt(price_df)
 
     if len(closes) < 21:
         return False
@@ -210,11 +220,16 @@ def _check_stage2(
     if close_today < ma20 * 0.95:
         return False
 
-    # 조건 3: 거래량이 Stage 1 스파이크의 30~60%
-    if s1_volume is not None and s1_volume > 0 and len(vols) >= 1:
-        vol_today = float(vols.iloc[-1])
-        ratio = vol_today / float(s1_volume)
-        if not (0.30 <= ratio <= 0.60):
+    # 조건 3: 거래대금이 Stage 1 스파이크의 25~65% (눌림목 매집 구간)
+    # 임계값 [0.25, 0.65]: Stage 2 가격 할인(-5%~-20%)만큼 거래대금이 낮아지는 것을 반영
+    s1_txamt = entry.get("s1_txamt")
+    # s1_txamt 없으면 s1_volume × s1_high로 추정 (구버전 DB 행 대응)
+    if s1_txamt is None and s1_volume is not None and s1_high is not None:
+        s1_txamt = int(float(s1_volume) * float(s1_high))
+    if s1_txamt is not None and s1_txamt > 0 and len(txamts) >= 1:
+        txamt_today = float(txamts.iloc[-1])
+        ratio = txamt_today / float(s1_txamt)
+        if not (0.25 <= ratio <= 0.65):
             return False
 
     # 조건 4: inst_streak ≥ 0 (기관 순매수 유지 또는 중립)
@@ -240,9 +255,9 @@ def _check_stage3(
     완전한 Stage 2→3 파이프라인은 s2_history를 별도로 받는 확장 버전에서 구현.
     현재: Stage 2 이력 없이 나머지 4개 조건(돌파, 거래량, 외인+기관, RSI)만으로 판정.
     """
-    closes = price_df["Close"].dropna()
-    vols   = price_df["Volume"].dropna()
-    highs  = price_df["High"].dropna() if "High" in price_df.columns else pd.Series(dtype=float)
+    closes  = price_df["Close"].dropna()
+    txamts  = _calc_txamt(price_df)
+    highs   = price_df["High"].dropna() if "High" in price_df.columns else pd.Series(dtype=float)
 
     if len(closes) < 31:
         return False
@@ -267,12 +282,12 @@ def _check_stage3(
     if rsi is None or rsi < 70:
         return False
 
-    # 조건 4: 거래량 ≥ 1.5× 30일 평균
-    if len(vols) < 31:
+    # 조건 4: 거래대금 ≥ 1.5× 30일 평균 (시가총액 편향 방지)
+    if len(txamts) < 31:
         return False
-    vol_today = float(vols.iloc[-1])
-    avg_vol30 = float(vols.iloc[-31:-1].mean())
-    if avg_vol30 <= 0 or vol_today < 1.5 * avg_vol30:
+    txamt_today = float(txamts.iloc[-1])
+    avg_txamt30 = float(txamts.iloc[-31:-1].mean())
+    if avg_txamt30 <= 0 or txamt_today < 1.5 * avg_txamt30:
         return False
 
     # 조건 5: 외국인 AND 기관 동시 순매수

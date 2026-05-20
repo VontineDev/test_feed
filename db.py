@@ -147,7 +147,8 @@ CREATE TABLE IF NOT EXISTS stage_classifications (
     stage           SMALLINT    NOT NULL,  -- 1, 2, 3
     s1_entry_date   DATE,                  -- Stage 1 감지일
     s1_high         NUMERIC,               -- Stage 1 당일 고가
-    s1_volume       BIGINT,                -- Stage 1 당일 거래량 (Stage 2 볼륨 수축 조건용)
+    s1_volume       BIGINT,                -- Stage 1 당일 거래량 (구버전 호환용, 신규는 s1_txamt 사용)
+    s1_txamt        BIGINT,                -- Stage 1 당일 거래대금 = Volume × Close (원)
     peakout_flag    BOOLEAN     DEFAULT false,
     created_at      TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (ticker, classified_date)
@@ -159,8 +160,9 @@ CREATE INDEX IF NOT EXISTS idx_stage_class_ticker ON stage_classifications (tick
 CREATE TABLE IF NOT EXISTS watchlist_vol_log (
     ticker          TEXT        NOT NULL,
     trade_date      DATE        NOT NULL,
-    vol_ratio       FLOAT,                   -- today_vol / s1_vol
-    s1_vol          BIGINT,                  -- Stage 1 진입 거래량 스냅샷
+    vol_ratio       FLOAT,                   -- today_txamt / s1_txamt (거래대금 비율)
+    s1_vol          BIGINT,                  -- Stage 1 진입 거래량 (구버전 호환용)
+    s1_txamt        BIGINT,                  -- Stage 1 진입 거래대금 = Volume × Close (원)
     PRIMARY KEY (ticker, trade_date)
 );
 CREATE INDEX IF NOT EXISTS idx_watchlist_vol_ticker ON watchlist_vol_log (ticker, trade_date DESC);
@@ -333,6 +335,12 @@ async def init_db(pool: asyncpg.Pool) -> None:
         )
         await conn.execute(
             "ALTER TABLE stage_classifications ADD COLUMN IF NOT EXISTS s1_volume BIGINT"
+        )
+        await conn.execute(
+            "ALTER TABLE stage_classifications ADD COLUMN IF NOT EXISTS s1_txamt BIGINT"
+        )
+        await conn.execute(
+            "ALTER TABLE watchlist_vol_log ADD COLUMN IF NOT EXISTS s1_txamt BIGINT"
         )
         # RLS: 반드시 존재하는 테이블은 개별 실행 (한 번에 보내면 한 테이블 실패 시 전체 롤백)
         for _tbl in _RLS_ALWAYS:
@@ -929,8 +937,8 @@ async def get_stage1_history(
     이유: 전 종목 Stage 1 일별 감지와 일관 — Ichimoku 통과 여부와 독립.
     Stage 2 lookback은 최소 5일이므로 당일 Stage 1과 충돌 없음 (D9).
 
-    반환: {ticker: [{classified_date, s1_high, s1_volume}, ...]}
-    s1_high / s1_volume이 NULL인 행은 Stage 2 볼륨/가격 조건 스킵.
+    반환: {ticker: [{classified_date, s1_high, s1_volume, s1_txamt}, ...]}
+    s1_high / s1_txamt이 NULL인 행은 해당 조건 스킵.
     """
     if not tickers:
         return {}
@@ -940,7 +948,7 @@ async def get_stage1_history(
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT ticker, classified_date, s1_high, s1_volume
+                SELECT ticker, classified_date, s1_high, s1_volume, s1_txamt
                 FROM   stage_classifications
                 WHERE  ticker = ANY($1)
                   AND  stage  = 1
@@ -965,7 +973,7 @@ async def save_stage_classifications(
 ) -> int:
     """
     stage_classifications upsert.
-    rows: list of {ticker, classified_date, stage, s1_entry_date, s1_high, s1_volume, peakout_flag}
+    rows: list of {ticker, classified_date, stage, s1_entry_date, s1_high, s1_volume, s1_txamt, peakout_flag}
     반환: 저장/갱신 건수.
     """
     if not rows:
@@ -978,13 +986,14 @@ async def save_stage_classifications(
                     """
                     INSERT INTO stage_classifications
                         (ticker, classified_date, stage,
-                         s1_entry_date, s1_high, s1_volume, peakout_flag)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7)
+                         s1_entry_date, s1_high, s1_volume, s1_txamt, peakout_flag)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
                     ON CONFLICT (ticker, classified_date) DO UPDATE SET
                         stage         = EXCLUDED.stage,
                         s1_entry_date = EXCLUDED.s1_entry_date,
                         s1_high       = EXCLUDED.s1_high,
                         s1_volume     = EXCLUDED.s1_volume,
+                        s1_txamt      = EXCLUDED.s1_txamt,
                         peakout_flag  = EXCLUDED.peakout_flag
                     """,
                     r["ticker"],
@@ -993,6 +1002,7 @@ async def save_stage_classifications(
                     r.get("s1_entry_date"),
                     r.get("s1_high"),
                     r.get("s1_volume"),
+                    r.get("s1_txamt"),
                     r.get("peakout_flag", False),
                 )
                 count += 1
@@ -1036,7 +1046,7 @@ async def get_stage1_watchlist(
     """
     최근 `days` 캘린더일 이내에 Stage 1로 분류된 종목의 최신 기록 조회.
     종목당 가장 최근 Stage 1 날짜 1건만 반환.
-    반환: [{ticker, s1_date, s1_volume}]
+    반환: [{ticker, s1_date, s1_volume, s1_txamt}]
     """
     from datetime import date as _date, timedelta as _td
     cutoff = _date.today() - _td(days=days)
@@ -1047,7 +1057,8 @@ async def get_stage1_watchlist(
                 SELECT DISTINCT ON (ticker)
                        ticker,
                        classified_date AS s1_date,
-                       s1_volume
+                       s1_volume,
+                       s1_txamt
                 FROM   stage_classifications
                 WHERE  stage = 1
                   AND  classified_date >= $1
@@ -1065,7 +1076,10 @@ async def upsert_watchlist_vol_log(
     pool: asyncpg.Pool,
     rows: list[dict],
 ) -> None:
-    """Upsert daily vol_ratio for watchlist tickers. rows: [{ticker, trade_date, vol_ratio, s1_vol}]."""
+    """Upsert daily vol_ratio for watchlist tickers.
+    rows: [{ticker, trade_date, vol_ratio, s1_txamt, s1_vol(optional)}]
+    vol_ratio = today_txamt / s1_txamt (거래대금 기준).
+    """
     if not rows:
         return
     try:
@@ -1073,15 +1087,18 @@ async def upsert_watchlist_vol_log(
             for r in rows:
                 await conn.execute(
                     """
-                    INSERT INTO watchlist_vol_log (ticker, trade_date, vol_ratio, s1_vol)
-                    VALUES ($1, $2, $3, $4)
+                    INSERT INTO watchlist_vol_log (ticker, trade_date, vol_ratio, s1_vol, s1_txamt)
+                    VALUES ($1, $2, $3, $4, $5)
                     ON CONFLICT (ticker, trade_date)
-                    DO UPDATE SET vol_ratio = EXCLUDED.vol_ratio, s1_vol = EXCLUDED.s1_vol
+                    DO UPDATE SET vol_ratio = EXCLUDED.vol_ratio,
+                                  s1_vol    = EXCLUDED.s1_vol,
+                                  s1_txamt  = EXCLUDED.s1_txamt
                     """,
                     r["ticker"],
                     r["trade_date"],
                     r.get("vol_ratio"),
                     r.get("s1_vol"),
+                    r.get("s1_txamt"),
                 )
     except Exception as e:
         logger.warning("[watchlist_vol_log] upsert 실패: %s", e)

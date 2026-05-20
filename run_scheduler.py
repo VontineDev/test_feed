@@ -617,13 +617,16 @@ async def _daily_stage_job() -> None:
                     if peakout:
                         peakout_flags.add(ticker)
 
-                    s1_high = s1_vol = None
+                    s1_high = s1_vol = s1_txamt = None
                     if stage == 1:
                         pdf = price_map.get(ticker)
                         if pdf is not None and not pdf.empty:
                             last_row = pdf.iloc[-1]
-                            s1_high = float(last_row.get("High") or last_row.get("Close") or 0) or None
-                            s1_vol  = int(last_row.get("Volume") or 0) or None
+                            s1_high  = float(last_row.get("High") or last_row.get("Close") or 0) or None
+                            _vol     = int(last_row.get("Volume") or 0)
+                            _close   = float(last_row.get("Close") or 0)
+                            s1_vol   = _vol or None
+                            s1_txamt = int(_vol * _close) or None  # 거래대금 = Volume × Close
 
                     upsert_rows.append({
                         "ticker":          ticker,
@@ -632,6 +635,7 @@ async def _daily_stage_job() -> None:
                         "s1_entry_date":   today if stage == 1 else None,
                         "s1_high":         s1_high,
                         "s1_volume":       s1_vol,
+                        "s1_txamt":        s1_txamt,
                         "peakout_flag":    peakout,
                     })
             except Exception as e:
@@ -704,9 +708,13 @@ async def _build_watchlist_entries(pool) -> dict:
             "s1_date_map": {}, "yesterday_stage_map": {},
         }
 
-    tickers     = [r["ticker"]   for r in watchlist]
-    s1_vol_map  = {r["ticker"]: r["s1_volume"] for r in watchlist}
-    s1_date_map = {r["ticker"]: r["s1_date"]   for r in watchlist}
+    tickers      = [r["ticker"]   for r in watchlist]
+    s1_txamt_map = {r["ticker"]: r.get("s1_txamt") or (
+        # 구버전 DB 행 fallback: s1_volume × s1_high 추정값 사용
+        int(r["s1_volume"] * r["s1_high"])
+        if r.get("s1_volume") and r.get("s1_high") else None
+    ) for r in watchlist}
+    s1_date_map  = {r["ticker"]: r["s1_date"]   for r in watchlist}
 
     # Step 2: 5개 벌크 쿼리
     flow_map: dict[str, dict]           = {}
@@ -769,31 +777,37 @@ async def _build_watchlist_entries(pool) -> dict:
     # Step 3: vol_ratio 이력 (lookback=3, 최신순). index 0 = 어제 (upsert 전이므로 오늘 없음)
     vol_log_map: dict[str, list[float]] = await get_watchlist_vol_log(pool, tickers, lookback=3)
 
-    # Step 4: yfinance 병렬 거래량 fetch
-    def _fetch_vol(t: str) -> tuple[str, Optional[float]]:
+    # Step 4: yfinance 병렬 거래대금 fetch (Volume × Close)
+    def _fetch_txamt(t: str) -> tuple[str, Optional[float]]:
         try:
             df = _yf.Ticker(t).history(period="2d", interval="1d", auto_adjust=True)
-            return t, float(df["Volume"].iloc[-1]) if not df.empty else None
+            if df.empty:
+                return t, None
+            last = df.iloc[-1]
+            vol   = float(last["Volume"])
+            close = float(last["Close"])
+            txamt = vol * close
+            return t, txamt if txamt > 0 else None
         except Exception:
             return t, None
 
-    vol_today: dict[str, Optional[float]] = {}
+    txamt_today: dict[str, Optional[float]] = {}
     with _TPE(max_workers=4) as pool_ex:
-        futures = {pool_ex.submit(_fetch_vol, t): t for t in tickers if s1_vol_map.get(t)}
+        futures = {pool_ex.submit(_fetch_txamt, t): t for t in tickers if s1_txamt_map.get(t)}
         for fut in _as_completed(futures):
             t, v = fut.result()
-            vol_today[t] = v
+            txamt_today[t] = v
 
     # Step 5: 결과 조합 (vol_ratio_delta, retiring 포함)
     entries: list[dict] = []
     vol_log_rows: list[dict] = []
 
     for ticker in tickers:
-        s1_vol     = s1_vol_map.get(ticker)
+        s1_txamt   = s1_txamt_map.get(ticker)
         s1_date    = s1_date_map[ticker]
         days_since = (today - s1_date).days
-        today_vol  = vol_today.get(ticker)
-        vol_ratio  = (today_vol / s1_vol) if (s1_vol and s1_vol > 0 and today_vol is not None) else None
+        today_txamt = txamt_today.get(ticker)
+        vol_ratio  = (today_txamt / s1_txamt) if (s1_txamt and s1_txamt > 0 and today_txamt is not None) else None
 
         # 전일 대비 vol_ratio 변화 (vol_log_map index 0 = 어제)
         hist            = vol_log_map.get(ticker) or []
@@ -829,7 +843,13 @@ async def _build_watchlist_entries(pool) -> dict:
         })
 
         if vol_ratio is not None:
-            vol_log_rows.append({"ticker": ticker, "trade_date": today, "vol_ratio": vol_ratio, "s1_vol": s1_vol})
+            vol_log_rows.append({
+                "ticker":     ticker,
+                "trade_date": today,
+                "vol_ratio":  vol_ratio,
+                "s1_txamt":   s1_txamt,
+                "s1_vol":     None,   # 구버전 호환용 컬럼, txamt 기준 전환 후 미사용
+            })
 
     # Step 7: 확신도 순 정렬
     def _conviction(e: dict) -> float:
