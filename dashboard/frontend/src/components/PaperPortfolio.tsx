@@ -26,6 +26,7 @@ export default function PaperPortfolio() {
   const [data, setData] = useState<PaperData | null>(null)
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null)
   const [selectedName, setSelectedName] = useState<string>('')
+  const [filterModel, setFilterModel] = useState<string | null>(null)
 
   useEffect(() => {
     fetch('/api/report/paper')
@@ -60,7 +61,17 @@ export default function PaperPortfolio() {
               const pending = info['pending'] ?? { count: 0, avg_return: null }
               const closed  = info['closed']  ?? { count: 0, avg_return: null }
               return (
-                <div key={m} style={{ background: '#1e293b', borderRadius: 8, padding: '10px 12px' }}>
+                <div
+                key={m}
+                onClick={() => setFilterModel(prev => prev === m ? null : m)}
+                style={{
+                  background: filterModel === m ? '#1e3a5f' : '#1e293b',
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                  cursor: 'pointer',
+                  outline: filterModel === m ? '1px solid #3b82f6' : undefined,
+                }}
+              >
                   <div style={{ fontWeight: 700, color: '#93c5fd', marginBottom: 6 }}>{MODEL_LABEL[m] ?? m}</div>
                   <div style={s.modelRow}><span style={s.lbl}>오픈</span><span>{open.count}</span></div>
                   <div style={s.modelRow}><span style={s.lbl}>대기</span><span>{pending.count}</span></div>
@@ -93,7 +104,7 @@ export default function PaperPortfolio() {
           borderRight: selectedTicker ? '1px solid #1e293b' : undefined,
           transition: 'flex 0.15s',
         }}>
-          <Positions onSelect={handleSelect} selectedTicker={selectedTicker} />
+          <Positions onSelect={handleSelect} selectedTicker={selectedTicker} filterModel={filterModel} />
         </div>
 
         {/* 오른쪽: 종목 이력 패널 */}

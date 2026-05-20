@@ -25,9 +25,10 @@ const pctColor = (v: number | null) => {
 interface Props {
   onSelect?: (ticker: string, name: string) => void
   selectedTicker?: string | null
+  filterModel?: string | null
 }
 
-export default function Positions({ onSelect, selectedTicker }: Props) {
+export default function Positions({ onSelect, selectedTicker, filterModel }: Props) {
   const [rows, setRows] = useState<Position[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -47,9 +48,13 @@ export default function Positions({ onSelect, selectedTicker }: Props) {
   if (loading) return <div style={styles.empty}>포지션 로딩 중…</div>
   if (!rows.length) return <div style={styles.empty}>오픈 포지션 없음</div>
 
+  const filtered = filterModel ? rows.filter(r => r.model === filterModel) : rows
+
   return (
     <div style={styles.wrap}>
-      <div style={styles.hdr}>모의투자 포지션 ({rows.length})</div>
+      <div style={styles.hdr}>
+        모의투자 포지션 ({filterModel ? `${filtered.length} / ${rows.length}` : rows.length})
+      </div>
       <table style={styles.table}>
         <thead>
           <tr style={styles.theadRow}>
@@ -59,7 +64,7 @@ export default function Positions({ onSelect, selectedTicker }: Props) {
           </tr>
         </thead>
         <tbody>
-          {rows.map(r => {
+          {filtered.map(r => {
             const isSelected = r.ticker === selectedTicker
             return (
               <tr
