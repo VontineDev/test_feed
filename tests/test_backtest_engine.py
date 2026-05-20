@@ -1008,12 +1008,12 @@ class TestComputeSellSignalsAndS2:
     def test_s3_not_set_without_s2(self):
         """No S2 → s3_date stays None.
 
-        post vol = 200k → vol_ratio = 200k/300k = 0.667 > 0.60, C3 fails → no S2.
-        price 9_950 < MA20 ≈ 10_037 → sell fires; no S2 → S3 also not scanned.
+        post vol = 220k → txamt_ratio = (9950×220k)/(10800×300k) ≈ 0.676 > 0.65,
+        C3 fails → no S2. price 9_950 < MA20 ≈ 10_037 → sell fires; no S2 → S3 also not scanned.
         """
         df, spike_date, _ = _make_ohlcv_for_sell(
             n_flat=60, flat_price=10_000.0, spike_pct=0.08, spike_vol_mult=3.0,
-            post=[(9_950, 200_000)])  # vol_ratio=0.667 > 0.60 → C3 fails → no S2
+            post=[(9_950, 220_000)])  # txamt_ratio≈0.676 > 0.65 → C3 fails → no S2
         sig = self._make_sig("T.KS", spike_date, 10_800.0, mode="stage")
         _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0)
         assert sig.s2_date is None
