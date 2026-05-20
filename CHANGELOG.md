@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.5.0] - 2026-05-21
+
+### Changed
+- **히트맵 재설계** (`Heatmap.tsx`, `main.py`): 오늘 시장에서 돈이 어디 가는지 파악할 수 있도록 데이터 소스 교체. Stage 분류 종목(10~50개) 대신 Kiwoom 당일 거래대금 상위 50종목을 항상 표시. 셀 크기=당일 실제 거래대금, 등락률=Kiwoom 일중 change_pct. Stage 분류된 종목은 컬러 테두리(S1 파랑·S2 보라·S3 주황), 미분류 종목은 회색 테두리로 표시. Stage 분류 잡 미실행 시에도 히트맵이 항상 채워짐.
+
 ## [0.9.4.0] - 2026-05-20
 
 ### Added
