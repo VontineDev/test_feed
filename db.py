@@ -1002,6 +1002,33 @@ async def save_stage_classifications(
     return count
 
 
+async def get_active_stage_tickers(
+    pool: asyncpg.Pool,
+    days: int = 7,
+) -> set[str]:
+    """최근 days일 이내에 Stage 1/2/3으로 분류된 종목 yfinance 심볼 set.
+
+    뉴스 게이팅: 스크리너(주봉) 미통과 종목이라도 Stage 활성 중이면 신호 전달.
+    """
+    from datetime import date as _date, timedelta as _td
+    cutoff = _date.today() - _td(days=days)
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ticker
+                FROM   stage_classifications
+                WHERE  classified_date >= $1
+                  AND  stage IS NOT NULL
+                """,
+                cutoff,
+            )
+        return {r["ticker"] for r in rows}
+    except Exception as e:
+        logger.warning("[stage_classifications] 활성 티커 조회 실패: %s", e)
+        return set()
+
+
 async def get_stage1_watchlist(
     pool: asyncpg.Pool,
     days: int = 14,

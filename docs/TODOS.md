@@ -98,6 +98,7 @@ WHERE week_of = '2026-W17';
 **Effort:** XS (human: ~10 min / CC: ~5 min)
 **Priority:** P3
 **Blocked by:** First successful v2 screener run.
+**Completed:** v0.9.3.0 (2026-05-20) — `SCREENER_G_NAN_STRICT=1` env var 토글 추가; strict 모드에서 NaN→fail 동작.
 
 ---
 
@@ -190,6 +191,7 @@ await conn.execute("""
 **Effort:** S (human: ~4h / CC: ~15 min)
 **Priority:** P3
 **Blocked by:** First real Sunday screener run.
+**Completed:** v0.9.3.0 (2026-05-20) — `calc_ichimoku()`에 tenkan_sen/kijun_sen 추가; `screen_ticker()`에서 H(전환>기준)/I(둘다 상승) 판정 → `is_enhanced` 설정.
 
 ---
 
@@ -254,6 +256,7 @@ Success Criterion 1 (stranger installs without asking a question).
 **Effort:** XS (human: ~15 min / CC: ~5 min)
 **Priority:** P3
 **Blocked by:** Sprint 2 daily job implementation.
+**Completed:** v0.9.3.0 (2026-05-20) — `DAILY_CLASSIFIER_TICKERS=150` env var; Ichimoku 통과 종목 우선 포함 후 나머지 채움.
 
 ---
 
@@ -276,6 +279,7 @@ to:
 **Effort:** XS (human: ~20 min / CC: ~5 min)
 **Priority:** P3
 **Blocked by:** Sprint 2 (stage_classifications table populated for ≥ 7 days).
+**Completed:** v0.9.3.0 (2026-05-20) — `_active_stage_tickers` 전역 캐시; `get_active_stage_tickers()` DB 함수; 게이팅: 스크리너 OR Stage 7일 이내 분류 종목 통과, 스크리너 교차 시 HIGH CONFIDENCE.
 
 ---
 

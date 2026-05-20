@@ -83,9 +83,12 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
-# ── 스크리닝 종목 캐시 (뉴스 게이팅용) ───────────────────────
-# 주봉 스크리닝 완료 시 갱신. 비어 있으면 게이팅 비활성 (초기 실행 방어).
-_screener_tickers: set[str] = set()
+# ── 스크리닝·Stage 캐시 (뉴스 게이팅용) ─────────────────────
+# _screener_tickers: 주봉 스크리닝 통과 종목 (일요일 갱신)
+# _active_stage_tickers: 최근 7일 이내 Stage 1/2/3 분류 종목 (일봉 분류기 갱신)
+# 둘 다 비어 있으면 게이팅 비활성 (초기 실행 방어).
+_screener_tickers: set[str]      = set()
+_active_stage_tickers: set[str]  = set()
 
 
 # ── 피드 목록 ────────────────────────────────────────────────
@@ -448,22 +451,28 @@ async def summary_worker() -> None:
 
                 # ── 4. Telegram 전송 ──────────────────────────
                 if signal and signal.is_actionable:
-                    # 스크리너 게이팅: 심볼(values) 기준으로 스크리닝 통과 종목과 교차 확인
-                    signal_syms = set(signal.ticker_symbols.values())
-                    if _screener_tickers and signal.ticker_symbols and not (
-                        signal_syms & _screener_tickers
-                    ):
+                    # 게이팅: Ichimoku 스크리너 OR 최근 7일 활성 Stage 종목만 전달
+                    signal_syms  = set(signal.ticker_symbols.values())
+                    in_screener  = bool(signal_syms & _screener_tickers)
+                    in_stage     = bool(signal_syms & _active_stage_tickers)
+                    has_any_gate = bool(_screener_tickers or _active_stage_tickers)
+
+                    if has_any_gate and signal.ticker_symbols and not (in_screener or in_stage):
                         logger.info(
-                            "  [게이팅] 스크리너 미통과 종목 신호 억제: %s",
+                            "  [게이팅] 스크리너·Stage 미등록 종목 신호 억제: %s",
                             ", ".join(list(signal.ticker_symbols.keys())[:3]),
                         )
                     else:
-                        # 스크리너 교차 종목이면 HIGH CONFIDENCE로 상향
-                        if _screener_tickers and signal_syms & _screener_tickers:
+                        if in_screener:
                             signal.confidence = "HIGH"
                             logger.info(
                                 "  [HIGH CONFIDENCE] 스크리너 교차 종목: %s",
                                 ", ".join(signal_syms & _screener_tickers),
+                            )
+                        elif in_stage:
+                            logger.info(
+                                "  [Stage 통과] 최근 7일 활성 종목: %s",
+                                ", ".join(signal_syms & _active_stage_tickers),
                             )
                         await tg_send_signal(art, summary_ko, signal, http=http)
 
@@ -492,6 +501,17 @@ async def _daily_stage_job() -> None:
     all_tickers: list[tuple[str, str, str]] = await loop.run_in_executor(
         None, _get_all_tickers, None
     )
+    # 티커 캡: Ichimoku 통과 종목 우선 포함, 나머지는 순서대로 채움
+    cap = int(os.environ.get("DAILY_CLASSIFIER_TICKERS", "150"))
+    if len(all_tickers) > cap:
+        _ichi_syms = {r["ticker"] for r in ichimoku_rows}
+        _priority  = [(t, n, s) for t, n, s in all_tickers if t in _ichi_syms]
+        _others    = [(t, n, s) for t, n, s in all_tickers if t not in _ichi_syms]
+        _n_fill    = max(0, cap - len(_priority))
+        all_tickers = _priority + _others[:_n_fill]
+        logger.info("[3단계] 티커 캡 %d 적용 (Ichimoku 우선 %d + 기타 %d)",
+                    cap, len(_priority), _n_fill)
+
     logger.info("[3단계] 분류 대상: %d종목 / SCREENER_WORKERS=%s",
                 len(all_tickers), os.environ.get("SCREENER_WORKERS", "1"))
 
@@ -643,6 +663,15 @@ async def _daily_stage_job() -> None:
         )
     except Exception as e:
         logger.warning("[3단계] 텔레그램 전송 실패: %s", e)
+
+    # 8. 활성 Stage 캐시 갱신 (뉴스 게이팅용, 7일 이내 분류 종목)
+    global _active_stage_tickers
+    try:
+        from db import get_active_stage_tickers as _get_active
+        _active_stage_tickers = await _get_active(_db_pool, days=7)
+        logger.info("[3단계] 활성 Stage 캐시 갱신 — %d종목", len(_active_stage_tickers))
+    except Exception as e:
+        logger.warning("[3단계] 활성 Stage 캐시 갱신 실패: %s", e)
 
     logger.info("[3단계] 일별 분류 완료")
 
@@ -921,7 +950,7 @@ async def _watchlist_brief_job() -> None:
 
 # ── 스케줄러 진입점 ───────────────────────────────────────────
 async def main(interval: int, enable_summary: bool) -> None:
-    global _summary_queue, _db_pool, _screener_tickers
+    global _summary_queue, _db_pool, _screener_tickers, _active_stage_tickers
 
     logger.info("뉴스 크롤러 시작 — 수집 %d분 간격", interval)
     logger.info("구조: [수집 잡] → Queue → [요약 워커] (완전 분리)")
@@ -981,6 +1010,12 @@ async def main(interval: int, enable_summary: bool) -> None:
             logger.info("[게이팅] 스크리너 캐시 로드 — %d종목", len(_screener_tickers))
         except Exception as _gt_e:
             logger.warning("[게이팅] 스크리너 캐시 로드 실패: %s", _gt_e)
+        try:
+            from db import get_active_stage_tickers as _get_active_stage
+            _active_stage_tickers = await _get_active_stage(_db_pool, days=7)
+            logger.info("[게이팅] 활성 Stage 캐시 로드 — %d종목", len(_active_stage_tickers))
+        except Exception as _st_e:
+            logger.warning("[게이팅] 활성 Stage 캐시 로드 실패: %s", _st_e)
 
     # ── 봇 초기화 ─────────────────────────────────────────────
     init_bot(_seen_hashes)

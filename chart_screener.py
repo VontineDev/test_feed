@@ -203,7 +203,8 @@ def calc_ichimoku(df: pd.DataFrame) -> pd.DataFrame:
     """
     ta 패키지로 일목균형표 계산.
     visual=False → 선행스팬이 현재 봉 기준 정렬 (앞당김 없음).
-    df에 senkou_a, senkou_b, cloud_top, cloud_bottom 컬럼 추가.
+    df에 senkou_a, senkou_b, cloud_top, cloud_bottom,
+         tenkan_sen, kijun_sen 컬럼 추가.
     """
     ichi = IchimokuIndicator(
         high=df["High"],
@@ -211,8 +212,10 @@ def calc_ichimoku(df: pd.DataFrame) -> pd.DataFrame:
         visual=False,
     )
     df = df.copy()
-    df["senkou_a"] = ichi.ichimoku_a()
-    df["senkou_b"] = ichi.ichimoku_b()
+    df["senkou_a"]   = ichi.ichimoku_a()
+    df["senkou_b"]   = ichi.ichimoku_b()
+    df["tenkan_sen"] = ichi.ichimoku_conversion_line()   # 전환선 (9-period)
+    df["kijun_sen"]  = ichi.ichimoku_base_line()         # 기준선 (26-period)
     df["cloud_top"]    = df[["senkou_a", "senkou_b"]].max(axis=1)
     df["cloud_bottom"] = df[["senkou_a", "senkou_b"]].min(axis=1)
     return df
@@ -267,10 +270,12 @@ def screen_ticker(ticker: str, name: str, sector: str = "") -> Optional[ScreenRe
     prev_ma_20w    = float(prev["ma_20w"])
     prev_ma_60w    = float(prev["ma_60w"])
 
-    # 조건 G: 120주선 — 데이터 부족 시 NaN-pass
+    # 조건 G: 120주선 — 기본 NaN-pass; SCREENER_G_NAN_STRICT=1 시 NaN→fail
     ma_120w_raw   = cur.get("ma_120w", float("nan"))
     ma_120w_valid = not pd.isna(ma_120w_raw)
     ma_120w       = float(ma_120w_raw) if ma_120w_valid else None
+
+    g_strict = os.environ.get("SCREENER_G_NAN_STRICT", "").lower() in ("1", "true", "yes")
 
     # ── 7개 조건 ────────────────────────────────────────────────
     A = close > cloud_top             # 이번 주 구름 상향 돌파
@@ -279,10 +284,30 @@ def screen_ticker(ticker: str, name: str, sector: str = "") -> Optional[ScreenRe
     D = close > ma_60w                # 60주선 위
     E = ma_20w > prev_ma_20w          # 20주선 우상향
     F = ma_60w > prev_ma_60w          # 60주선 우상향
-    G = (not ma_120w_valid) or (close > ma_120w)  # 120주선 위 (데이터 부족 시 통과)
+    G = (ma_120w_valid and close > ma_120w) if g_strict else (
+        (not ma_120w_valid) or (close > ma_120w))  # 120주선 위
 
     if not (A and B and C and D and E and F and G):
         return None
+
+    # ── Enhanced 조건 (is_enhanced 플래그) ───────────────────────
+    # H: 전환선(tenkan_sen) > 기준선(kijun_sen)
+    # I: 전환선·기준선 모두 우상향
+    tenkan_cur  = cur.get("tenkan_sen", float("nan"))
+    kijun_cur   = cur.get("kijun_sen",  float("nan"))
+    tenkan_prev = prev.get("tenkan_sen", float("nan"))
+    kijun_prev  = prev.get("kijun_sen",  float("nan"))
+
+    tenkan_ok = not pd.isna(tenkan_cur) and not pd.isna(tenkan_prev)
+    kijun_ok  = not pd.isna(kijun_cur)  and not pd.isna(kijun_prev)
+
+    if tenkan_ok and kijun_ok:
+        H = float(tenkan_cur) > float(kijun_cur)           # 전환선 > 기준선
+        I = (float(tenkan_cur) > float(tenkan_prev) and    # 전환선 상승
+             float(kijun_cur)  > float(kijun_prev))        # 기준선 상승
+        is_enhanced = H and I
+    else:
+        is_enhanced = False
 
     close_history = df["Close"].dropna().tail(12).tolist()
 
@@ -308,7 +333,7 @@ def screen_ticker(ticker: str, name: str, sector: str = "") -> Optional[ScreenRe
         ma_20w=ma_20w,
         ma_60w=ma_60w,
         cloud_top=cloud_top,
-        is_enhanced=False,
+        is_enhanced=is_enhanced,
         has_gapjum=(ma_20w > ma_60w),
         screened_at=datetime.now(timezone.utc).isoformat(),
         week_of=current_week_of(),
