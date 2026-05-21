@@ -1,7 +1,7 @@
 # 웹 대시보드
 
 Trading Dashboard는 FastAPI + React로 구성된 웹 인터페이스입니다.  
-Stage 분류 히트맵, 실시간 매매 신호 피드, 모의투자 포지션, 차트 스크리닝 결과를 제공합니다.
+거래대금 히트맵, 실시간 매매 신호 피드, 모의투자 포지션, 차트 스크리닝 결과를 제공합니다.
 
 외부 접속: `https://vtrading.duckdns.org` (Caddy HTTPS 경유 → [HTTPS 설정 가이드](HTTPS-Setup.md))
 
@@ -30,10 +30,10 @@ PostgreSQL (Supabase)
 
 | 탭 | 컴포넌트 | 기능 |
 |----|----------|------|
-| 히트맵 | `Heatmap.tsx` | Stage 1/2/3 종목을 거래대금 크기·등락률 색상으로 표시. 5분 자동갱신 |
-| 레포트 | `Report.tsx` | Stage 분류 결과 + 차트 스크리닝 결과. 섹션 접기/펼치기 지원 |
+| 히트맵 | `Heatmap.tsx` | 당일 거래대금 상위 50종목(Kiwoom ka10032). 셀 크기=실제 거래대금, 색상=등락률. Stage 분류 종목은 컬러 테두리 오버레이. 5분 자동갱신 |
+| 레포트 | `Report.tsx` | Stage 분류 결과 + 차트 스크리닝 결과. 날짜 범위 선택(오늘/-3일/-1주/-2주/-1달)으로 이력 조회 가능. 종목 클릭 시 Stage·스크리너 이력 팝업 |
 | Top | `Top.tsx` | 당일 거래대금 상위 20종목. Kiwoom ka10032 API, 5분 캐시 |
-| 모의투자 | `PaperPortfolio.tsx` | 모델별 요약 + 실시간 포지션(60s 갱신) + 청산 이력 + 스케줄러 컨트롤 |
+| 모의투자 | `PaperPortfolio.tsx` | 모델별 요약 + 실시간 포지션(60s 갱신) + 청산 이력 + 스케줄러 컨트롤. 모델 카드 클릭으로 포지션 필터링 |
 | 시그널 (우측 패널/모바일) | `SignalFeed.tsx` | 실시간 매매 신호 SSE 스트림. 15초 폴링 |
 
 모바일(≤768px)에서는 하단 탭바(`MobileNav.tsx`)로 전환됩니다.
@@ -44,7 +44,7 @@ PostgreSQL (Supabase)
 
 ### GET /api/heatmap
 
-Stage 분류 종목의 히트맵 데이터를 반환합니다.
+당일 거래대금 상위 50종목(Kiwoom ka10032)의 히트맵 데이터를 반환합니다. Stage 분류 결과와 무관하게 항상 채워집니다. Kiwoom 응답 실패 시 Stage 분류 데이터로 폴백합니다.
 
 **응답:**
 ```json
@@ -65,11 +65,12 @@ Stage 분류 종목의 히트맵 데이터를 반환합니다.
 
 | 필드 | 타입 | 설명 |
 |------|------|------|
-| `amount` | float | `s1_high × s1_volume` — 히트맵 셀 크기 결정 |
-| `change_pct` | float | 당일 등락률(%). yfinance 2일 종가 비교 |
+| `amount` | float | 당일 실제 거래대금(Kiwoom). 셀 크기 결정 |
+| `change_pct` | float | 당일 등락률(%). Kiwoom 실시간 기준 |
+| `stage` | int\|null | Stage 1/2/3 또는 `null`(미분류) |
 | `cached` | bool | 5분 캐시 히트 여부 |
 
-**캐시:** 5분(`_PRICE_TTL = 300`). 가격 데이터와 Stage 구조 동일 TTL.
+**캐시:** 5분(`_HEATMAP_TTL = 300`).
 
 ---
 
@@ -225,6 +226,91 @@ data: [{"id": 123, "direction": "BUY", "strength": 4, ...}]
 
 ---
 
+### GET /api/history/stage
+
+기간 내 Stage 분류 집계를 반환합니다. 등장 횟수 순 정렬, 스테이지별 최대 50개.
+
+**쿼리 파라미터:** `?start=2026-05-01&end=2026-05-20&stage=1` (모두 선택 사항, 기본 14일)
+
+```json
+{
+  "data": {
+    "start": "2026-05-06",
+    "end": "2026-05-20",
+    "stage_filter": null,
+    "items": [
+      {
+        "ticker": "005930.KS",
+        "name": "삼성전자",
+        "appearance_count": 5,
+        "first_seen": "2026-05-06",
+        "last_seen": "2026-05-19",
+        "any_peakout": false,
+        "stage_queried": 1,
+        "latest_stage": 2
+      }
+    ]
+  }
+}
+```
+
+---
+
+### GET /api/history/screener
+
+기간 내 차트 스크리너 통과 이력을 주차 단위로 집계합니다. 등장 횟수 순 정렬, 최대 100개.
+
+**쿼리 파라미터:** `?start=2026-04-01&end=2026-05-20` (기본 14일)
+
+```json
+{
+  "data": {
+    "start": "2026-05-06",
+    "end": "2026-05-20",
+    "start_week": "2026-W19",
+    "end_week": "2026-W21",
+    "items": [
+      {
+        "ticker": "005930.KS",
+        "name": "삼성전자",
+        "week_count": 3,
+        "first_week": "2026-W19",
+        "last_week": "2026-W21",
+        "any_enhanced": true,
+        "any_gapjum": false
+      }
+    ]
+  }
+}
+```
+
+---
+
+### GET /api/history/ticker/{ticker}
+
+특정 종목의 Stage 분류 이력과 스크리너 등장 이력을 함께 반환합니다.
+
+**경로 파라미터:** `ticker` — yfinance 심볼 (예: `005930.KS`)  
+**쿼리 파라미터:** `?start=2026-04-01&end=2026-05-20` (기본 14일)
+
+```json
+{
+  "data": {
+    "ticker": "005930.KS",
+    "start": "2026-05-06",
+    "end": "2026-05-20",
+    "stage_history": [
+      {"classified_date": "2026-05-19", "stage": 2, "peakout_flag": false, "s1_high": 87000, "s1_txamt": 1234567890}
+    ],
+    "screener_history": [
+      {"week_of": "2026-W21", "is_enhanced": true, "has_gapjum": false, "close": 87500}
+    ]
+  }
+}
+```
+
+---
+
 ## 개발 서버 실행
 
 ```bash
@@ -238,7 +324,7 @@ npm run dev
 # → http://localhost:5173
 ```
 
-개발 중에는 Vite(5173)와 FastAPI(8000)가 분리됩니다. CORS 설정(`main.py:131`)이 5173을 허용합니다.
+개발 중에는 Vite(5173)와 FastAPI(8000)가 분리됩니다. CORS 설정(`main.py:138`)이 5173을 허용합니다.
 
 ---
 
@@ -256,7 +342,7 @@ cd dashboard/backend
 uvicorn main:app --port 8000
 ```
 
-빌드된 파일이 `dist/`에 위치하면 FastAPI가 `StaticFiles`로 서빙합니다(`main.py:797-799`).  
+빌드된 파일이 `dist/`에 위치하면 FastAPI가 `StaticFiles`로 서빙합니다(`main.py:1151-1153`).  
 새 빌드 후 브라우저에서 `Ctrl+Shift+R` (강제 새로고침) 필요.
 
 ---

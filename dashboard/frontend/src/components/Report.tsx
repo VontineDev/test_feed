@@ -1,4 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import DateRangeBar, { DatePreset, computeRange } from './DateRangeBar'
+import HistoryStageView from './HistoryStageView'
+import HistoryScreenerView from './HistoryScreenerView'
 
 // ── 타입 ────────────────────────────────────────────────────
 type StageRow = { ticker: string; name: string; sector: string | null; s1_high: number | null; s1_volume: number | null; peakout_flag: boolean }
@@ -184,31 +187,83 @@ function ScreenerReport({ data }: { data: ScreenerData }) {
   )
 }
 
+// ── 이력 뷰용 타입 ──────────────────────────────────────────
+interface HistoryStageData {
+  start: string
+  end: string
+  stage_filter: number | null
+  items: {
+    ticker: string; name: string; appearance_count: number
+    first_seen: string | null; last_seen: string | null
+    any_peakout: boolean; stage_queried: number; latest_stage: number | null
+  }[]
+}
+
+interface HistoryScreenerData {
+  start: string; end: string
+  items: {
+    ticker: string; name: string; week_count: number
+    first_week: string; last_week: string
+    any_enhanced: boolean; any_gapjum: boolean
+  }[]
+}
+
 // ── 메인 컴포넌트 ────────────────────────────────────────────
 export default function Report() {
+  const [preset, setPreset] = useState<DatePreset>('today')
+
+  // 오늘 뷰 상태
   const [stage, setStage] = useState<StageData | null>(null)
   const [screener, setScreener] = useState<ScreenerData | null>(null)
+
+  // 이력 뷰 상태
+  const [histStage, setHistStage] = useState<HistoryStageData | null>(null)
+  const [histScreener, setHistScreener] = useState<HistoryScreenerData | null>(null)
+
   const [loading, setLoading] = useState(false)
   const [lastFetched, setLastFetched] = useState<Date | null>(null)
 
-  const load = async () => {
+  const range = useMemo(() => computeRange(preset), [preset])
+
+  const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [s, sc] = await Promise.all([
-        fetch('/api/report/stage').then(r => r.json()),
-        fetch('/api/report/screener').then(r => r.json()),
-      ])
-      setStage(s.data)
-      setScreener(sc.data)
+      if (preset === 'today') {
+        const [sr, scr] = await Promise.all([
+          fetch('/api/report/stage'),
+          fetch('/api/report/screener'),
+        ])
+        if (!sr.ok || !scr.ok) throw new Error('fetch failed')
+        const [s, sc] = await Promise.all([sr.json(), scr.json()])
+        setStage(s.data)
+        setScreener(sc.data)
+        setHistStage(null)
+        setHistScreener(null)
+      } else {
+        const { start, end } = range
+        const [hsr, hscr] = await Promise.all([
+          fetch(`/api/history/stage?start=${start}&end=${end}`),
+          fetch(`/api/history/screener?start=${start}&end=${end}`),
+        ])
+        if (!hsr.ok || !hscr.ok) throw new Error('fetch failed')
+        const [hs, hsc] = await Promise.all([hsr.json(), hscr.json()])
+        setHistStage(hs.data)
+        setHistScreener(hsc.data)
+        setStage(null)
+        setScreener(null)
+      }
       setLastFetched(new Date())
     } catch {
       // 개별 실패는 null 유지
     } finally {
       setLoading(false)
     }
-  }
+  }, [preset, range])
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [load])
+
+  const stageBadge = preset === 'today' ? (stage?.date ?? undefined) : `${range.start}~${range.end}`
+  const screenerBadge = preset === 'today' ? (screener?.week ?? undefined) : `${range.start}~${range.end}`
 
   return (
     <div style={s.wrap}>
@@ -222,16 +277,25 @@ export default function Report() {
         </button>
       </div>
 
-      <Section title="Stage 분류" badge={stage?.date ?? undefined}>
-        {stage
-          ? <StageReport data={stage} />
-          : <div style={s.empty}>데이터 없음</div>}
+      {/* 날짜 범위 선택 바 */}
+      <DateRangeBar preset={preset} onChange={p => setPreset(p)} />
+
+      <Section title="Stage 분류" badge={stageBadge}>
+        {preset === 'today'
+          ? (stage ? <StageReport data={stage} /> : <div style={s.empty}>데이터 없음</div>)
+          : (histStage
+              ? <HistoryStageView items={histStage.items} start={range.start} end={range.end} />
+              : <div style={s.empty}>{loading ? '로딩…' : '데이터 없음'}</div>)
+        }
       </Section>
 
-      <Section title="차트 스크리닝" badge={screener?.week ?? undefined}>
-        {screener
-          ? <ScreenerReport data={screener} />
-          : <div style={s.empty}>데이터 없음</div>}
+      <Section title="차트 스크리닝" badge={screenerBadge}>
+        {preset === 'today'
+          ? (screener ? <ScreenerReport data={screener} /> : <div style={s.empty}>데이터 없음</div>)
+          : (histScreener
+              ? <HistoryScreenerView items={histScreener.items} start={range.start} end={range.end} />
+              : <div style={s.empty}>{loading ? '로딩…' : '데이터 없음'}</div>)
+        }
       </Section>
     </div>
   )
@@ -265,8 +329,8 @@ const s: Record<string, React.CSSProperties> = {
   tableLabel: { fontSize: 11, color: '#475569', marginBottom: 5, marginTop: 8 },
   tableWrap: { overflowX: 'auto', maxHeight: 280, overflowY: 'auto' as const },
   table: { width: '100%', borderCollapse: 'collapse' as const, fontSize: 11 },
-  th: { position: 'sticky' as const, top: 0, background: '#0f172a', color: '#475569', padding: '5px 8px', textAlign: 'left' as const, fontWeight: 600, whiteSpace: 'nowrap' as const },
-  td: { padding: '5px 8px', borderBottom: '1px solid #0f172a', verticalAlign: 'middle' as const },
+  th: { position: 'sticky' as const, top: 0, background: '#0f172a', color: '#475569', padding: '5px 8px', textAlign: 'left' as const, fontWeight: 600, whiteSpace: 'nowrap' as const, borderRight: '1px solid #1e293b', borderBottom: '1px solid #1e293b' },
+  td: { padding: '5px 8px', borderBottom: '1px solid #1e293b', borderRight: '1px solid #1e293b', verticalAlign: 'middle' as const },
   tickerName: { color: '#cbd5e1', fontWeight: 600 },
   tickerCode: { color: '#475569', fontSize: 10 },
 

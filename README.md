@@ -156,4 +156,4 @@ pytest tests/test_watchlist_brief.py -v
 
 ## 버전
 
-현재 버전: `0.9.3.0` — [CHANGELOG](CHANGELOG.md) 참고
+현재 버전: `0.9.5.0` — [CHANGELOG](CHANGELOG.md) 참고

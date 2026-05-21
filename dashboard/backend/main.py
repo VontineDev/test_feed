@@ -1,6 +1,6 @@
 """
 dashboard/backend/main.py
-웹 대시보드 FastAPI 앱 — 9 엔드포인트 + React dist 서빙.
+웹 대시보드 FastAPI 앱 — 12 엔드포인트 + React dist 서빙.
 
 엔드포인트:
   GET  /api/heatmap              — Stage 색상 히트맵 데이터 (5분 캐시)
@@ -8,10 +8,13 @@ dashboard/backend/main.py
   GET  /api/signals/stream       — SSE 신호 라이브 피드
   POST /api/scheduler/trigger    — 스케줄러 잡 수동 트리거
   GET  /api/scheduler/stream     — SSE 스케줄러 상태 스트림
-  GET  /api/report/stage         — Stage 분류 결과
-  GET  /api/report/screener      — 차트 스크리너 결과
+  GET  /api/report/stage         — Stage 분류 결과 (최신일)
+  GET  /api/report/screener      — 차트 스크리너 결과 (최신주)
   GET  /api/report/paper         — 모의투자 포지션
   GET  /api/top                  — 당일 거래대금 상위 N 종목 (Kiwoom, 5분 캐시)
+  GET  /api/history/stage        — 기간별 Stage 분류 집계 (이력 트래킹)
+  GET  /api/history/screener     — 기간별 스크리너 집계 (이력 트래킹)
+  GET  /api/history/ticker/{t}   — 종목별 Stage+스크리너 이력
 
 개발: uvicorn main:app --reload --port 8000
 프로덕션: npm run build → FastAPI가 ../frontend/dist 서빙
@@ -26,7 +29,7 @@ import os
 import secrets
 import time
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -47,10 +50,12 @@ from kiwoom_aftermarket_sync import KiwoomClient  # noqa: E402
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-# ── 캐시 (히트맵/가격/Top 모두 5분) ──────────────────────────
+# ── 캐시 (히트맵/Top 5분, 포지션 현재가 5분) ─────────────────
 _HEATMAP_CACHE: dict = {"data": None, "expires": 0.0}
-_PRICE_CACHE: dict = {"data": {}, "expires": 0.0}
-_PRICE_TTL = 300     # 5분 — 가격·등락률·히트맵 구조 공통
+_PRICE_TTL = 300     # 5분
+
+# ── 포지션 현재가 캐시 — {ticker: current_price_float} (5분) ──
+_POS_PRICE_CACHE: dict = {"data": {}, "expires": 0.0}
 
 # ── 키움 토큰 캐시 (au10001 반복 호출 방지, 토큰 유효기간 24h) ──
 _KIWOOM_TOKEN: str | None = None
@@ -169,11 +174,19 @@ class _BasicAuthMiddleware(BaseHTTPMiddleware):
 app.add_middleware(_BasicAuthMiddleware)
 
 
-# ── 당일 등락률 조회 (yfinance 2d, 5분 캐시) ─────────────────
-async def _fetch_stage_prices(tickers: list[str]) -> dict[str, float]:
+# ── 포지션 현재가 조회 (yfinance 2d, 5분 캐시) ──────────────
+async def _fetch_current_prices(
+    tickers: list[str], *, update_cache: bool = True
+) -> dict[str, float]:
+    """종목 리스트의 최신 종가를 yfinance로 조회. {ticker: price} 반환.
+
+    update_cache=False: 단일 종목 조회 시 공유 캐시 오염 방지용.
+    """
+    if not tickers:
+        return {}
     now = time.time()
-    if _PRICE_CACHE["data"] and now < _PRICE_CACHE["expires"]:
-        return _PRICE_CACHE["data"]
+    if _POS_PRICE_CACHE["data"] and now < _POS_PRICE_CACHE["expires"]:
+        return _POS_PRICE_CACHE["data"]
 
     def _fetch() -> dict[str, float]:
         result: dict[str, float] = {}
@@ -189,73 +202,93 @@ async def _fetch_stage_prices(tickers: list[str]) -> dict[str, float]:
             close_df = hist["Close"] if isinstance(hist.columns, _pd.MultiIndex) else hist
             for t in tickers:
                 try:
-                    series = (close_df[t] if t in close_df.columns else close_df.iloc[:, 0]).dropna()
-                    if len(series) >= 2:
-                        result[t] = round((float(series.iloc[-1]) / float(series.iloc[-2]) - 1) * 100, 2)
+                    col = close_df[t] if t in close_df.columns else close_df.iloc[:, 0]
+                    series = col.dropna()
+                    if len(series) >= 1:
+                        result[t] = float(series.iloc[-1])
                 except Exception:
                     pass
         except Exception as e:
-            logger.warning("[heatmap] 가격 조회 실패: %s", e)
+            logger.warning("[prices] 현재가 조회 실패: %s", e)
         return result
 
     prices = await asyncio.to_thread(_fetch)
-    _PRICE_CACHE["data"] = prices
-    _PRICE_CACHE["expires"] = now + _PRICE_TTL
-    logger.info("[heatmap] 가격 갱신: %d종목", len(prices))
+    if update_cache:
+        _POS_PRICE_CACHE["data"] = prices
+        _POS_PRICE_CACHE["expires"] = now + _PRICE_TTL
+        logger.info("[prices] 포지션 현재가 갱신: %d종목", len(prices))
     return prices
 
 
-# ── 히트맵 데이터 빌드 ────────────────────────────────────────
+# ── 히트맵 데이터 빌드 (Kiwoom 거래대금 Top 50 + Stage 오버레이) ──
 async def _build_heatmap_data() -> list[dict]:
+    # 1. Kiwoom top 50 조회 (15초 타임아웃)
+    try:
+        top_data = await asyncio.wait_for(
+            asyncio.to_thread(_fetch_top_kiwoom, 50),
+            timeout=15.0,
+        )
+        kiwoom_items = top_data.get("items", [])
+    except (asyncio.TimeoutError, Exception) as e:
+        logger.warning("[heatmap] Kiwoom 조회 실패, Stage 분류 폴백: %s", e)
+        kiwoom_items = []
+
     pool = await get_pool()
     today = date.today()
 
+    if kiwoom_items:
+        # ── Kiwoom 데이터 경로 ─────────────────────────────────
+        tickers = [i["ticker"] for i in kiwoom_items]
+        async with pool.acquire() as conn:
+            stage_rows = await conn.fetch(
+                """
+                SELECT ticker, stage FROM stage_classifications
+                WHERE classified_date = $1 AND ticker = ANY($2::text[])
+                """,
+                today, tickers,
+            )
+        stage_map = {r["ticker"]: r["stage"] for r in stage_rows}
+        return [
+            {
+                "ticker":     it["ticker"],
+                "name":       it["name"],
+                "stage":      stage_map.get(it["ticker"]),
+                "amount":     it["amount"],
+                "change_pct": it["change_pct"],
+                "market":     it.get("market", ""),
+            }
+            for it in kiwoom_items
+        ]
+
+    # ── Stage 분류 폴백 (Kiwoom 미응답 시) ──────────────────────
+    logger.info("[heatmap] Stage 분류 데이터로 폴백")
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT
-                sc.ticker,
-                sc.stage,
-                sc.s1_high,
-                sc.s1_volume,
-                sc.peakout_flag,
-                COALESCE(tn.name_ko, k.name_ko, cs.name,
-                         SPLIT_PART(sc.ticker, '.', 1))                      AS name,
-                CASE WHEN sc.ticker LIKE '%.KS' THEN 'KOSPI'
-                     WHEN sc.ticker LIKE '%.KQ' THEN 'KOSDAQ'
-                     ELSE '' END                                              AS market
-            FROM   stage_classifications sc
+            SELECT sc.ticker, sc.stage, sc.s1_high, sc.s1_volume,
+                   COALESCE(tn.name_ko, SPLIT_PART(sc.ticker, '.', 1)) AS name,
+                   CASE WHEN sc.ticker LIKE '%.KS' THEN 'KOSPI'
+                        WHEN sc.ticker LIKE '%.KQ' THEN 'KOSDAQ'
+                        ELSE '' END AS market
+            FROM stage_classifications sc
             LEFT JOIN ticker_names tn ON tn.ticker = sc.ticker
-            LEFT JOIN krx_listings k  ON k.yfinance_symbol = sc.ticker
-            LEFT JOIN LATERAL (
-                SELECT name FROM chart_signals
-                WHERE  ticker = sc.ticker ORDER BY screened_at DESC LIMIT 1
-            ) cs ON TRUE
-            WHERE  sc.classified_date = $1
+            WHERE sc.classified_date = $1
             """,
             today,
         )
-
-    if not rows:
-        return []
-
-    tickers_list = [r["ticker"] for r in rows]
-    prices = await _fetch_stage_prices(tickers_list)
-
     result = []
     for r in rows:
-        s1_high   = float(r["s1_high"])   if r["s1_high"]   else 0.0
-        s1_volume = float(r["s1_volume"]) if r["s1_volume"] else 0.0
-        amount = s1_high * s1_volume if s1_high and s1_volume else 1.0
+        s1_high = float(r["s1_high"]) if r["s1_high"] else 0.0
+        s1_vol  = float(r["s1_volume"]) if r["s1_volume"] else 0.0
+        amount  = s1_high * s1_vol if s1_high and s1_vol else 1.0
         result.append({
             "ticker":     r["ticker"],
             "name":       r["name"],
             "stage":      r["stage"],
             "amount":     amount,
-            "change_pct": prices.get(r["ticker"], 0.0),
+            "change_pct": 0.0,
             "market":     r["market"] or "",
         })
-
     return sorted(result, key=lambda x: x["amount"], reverse=True)
 
 
@@ -269,8 +302,6 @@ async def get_heatmap():
     try:
         data = await _build_heatmap_data()
         _HEATMAP_CACHE["data"] = data
-        # stage 구조는 30분, 가격은 _PRICE_CACHE가 5분 관리
-        # heatmap 캐시는 5분으로 설정 (가격 갱신 주기에 맞춤)
         _HEATMAP_CACHE["expires"] = now + _PRICE_TTL
         return {"data": data, "cached": False}
     except Exception as e:
@@ -293,8 +324,7 @@ async def get_positions():
                                 cs.name, SPLIT_PART(p.ticker, '.', 1)) AS name,
                        p.model, p.signal_date,
                        p.entry_actual, p.qty, p.status,
-                       p.tp1_pct, p.trail_pct,
-                       o.close AS current_price
+                       p.tp1_pct, p.trail_pct
                 FROM   paper_positions p
                 LEFT JOIN ticker_names tn ON tn.ticker = p.ticker
                 LEFT JOIN krx_listings k  ON k.yfinance_symbol = p.ticker
@@ -302,28 +332,27 @@ async def get_positions():
                     SELECT name FROM chart_signals
                     WHERE  ticker = p.ticker ORDER BY screened_at DESC LIMIT 1
                 ) cs ON TRUE
-                LEFT JOIN LATERAL (
-                    SELECT close FROM daily_ohlcv
-                    WHERE  symbol = p.ticker
-                    ORDER  BY date DESC LIMIT 1
-                ) o ON TRUE
                 WHERE  p.status IN ('open', 'pending')
                 ORDER  BY p.signal_date DESC
                 """
             )
+
+        tickers = list({r["ticker"] for r in rows})
+        prices = await _fetch_current_prices(tickers)
+
         positions = []
         for r in rows:
             d = dict(r)
-            if d.get("entry_actual") and d.get("current_price"):
-                entry = float(d["entry_actual"])
-                curr = float(d["current_price"])
-                d["unrealized_pct"] = round((curr / entry - 1) * 100, 2) if entry else None
-            else:
-                d["unrealized_pct"] = None
-            # decimal → float
-            for k in ("entry_actual", "current_price", "tp1_pct", "trail_pct"):
+            for k in ("entry_actual", "tp1_pct", "trail_pct"):
                 if d.get(k) is not None:
                     d[k] = float(d[k])
+            curr = prices.get(d["ticker"])
+            d["current_price"] = curr
+            entry = d.get("entry_actual")
+            d["unrealized_pct"] = (
+                round((curr / entry - 1) * 100, 2)
+                if curr and entry else None
+            )
             positions.append(d)
         return {"data": positions}
     except Exception as e:
@@ -667,8 +696,7 @@ async def get_paper_report():
             SELECT p.ticker,
                    COALESCE(tn.name_ko, k.name_ko,
                             cs.name, SPLIT_PART(p.ticker, '.', 1)) AS name,
-                   p.model, p.signal_date, p.entry_actual, p.qty, p.status,
-                   o.close AS current_price
+                   p.model, p.signal_date, p.entry_actual, p.qty, p.status
             FROM   paper_positions p
             LEFT JOIN ticker_names tn ON tn.ticker = p.ticker
             LEFT JOIN krx_listings k  ON k.yfinance_symbol = p.ticker
@@ -676,27 +704,31 @@ async def get_paper_report():
                 SELECT name FROM chart_signals
                 WHERE  ticker = p.ticker ORDER BY screened_at DESC LIMIT 1
             ) cs ON TRUE
-            LEFT JOIN LATERAL (
-                SELECT close FROM daily_ohlcv
-                WHERE  symbol = p.ticker ORDER BY date DESC LIMIT 1
-            ) o ON TRUE
             WHERE  p.status IN ('open', 'pending')
             ORDER  BY p.signal_date DESC
             """
         )
 
+    # 오픈 포지션 현재가 yfinance로 조회
+    open_tickers = list({r["ticker"] for r in open_pos})
+    open_prices = await _fetch_current_prices(open_tickers) if open_tickers else {}
+
     def _fmt_pos(r) -> dict:
         d = dict(r)
-        for k in ("entry_actual", "exit_price", "blended_return", "current_price"):
+        for k in ("entry_actual", "exit_price", "blended_return"):
             if d.get(k) is not None:
                 d[k] = float(d[k])
         for k in ("signal_date", "exit_date", "tp1_date"):
             if d.get(k) is not None:
                 d[k] = str(d[k])
-        if d.get("entry_actual") and d.get("current_price"):
-            d["unrealized_pct"] = round((d["current_price"] / d["entry_actual"] - 1) * 100, 2)
-        else:
-            d["unrealized_pct"] = None
+        # 오픈 포지션이면 yfinance 캐시, 청산이면 None
+        curr = open_prices.get(d["ticker"]) if d.get("status") in ("open", "pending") else None
+        d["current_price"] = curr
+        entry = d.get("entry_actual")
+        d["unrealized_pct"] = (
+            round((curr / entry - 1) * 100, 2)
+            if curr and entry else None
+        )
         return d
 
     # 모델별 요약 구조화
@@ -791,6 +823,307 @@ async def get_top(n: int = 20, refresh: bool = False):
             if _TOP_CACHE["data"]:
                 return {**_TOP_CACHE["data"], "stale": True, "error": _safe_err}
             return {"items": [], "fetched_at": "--:--", "error": _safe_err}
+
+
+# ── GET /api/paper/history ────────────────────────────────────
+@app.get("/api/paper/history")
+async def get_paper_ticker_history(ticker: str):
+    """특정 종목의 모의투자 전체 이력 (모든 포지션, 신호일 역순)."""
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    p.id, p.model, p.ticker,
+                    COALESCE(tn.name_ko, k.name_ko,
+                             cs.name, SPLIT_PART(p.ticker, '.', 1)) AS name,
+                    p.signal_date, p.entry_theory, p.entry_actual,
+                    p.slippage_pct, p.qty, p.status,
+                    p.tp1_pct, p.tp1_ratio, p.tp1_date, p.tp1_price,
+                    p.trail_pct, p.hard_stop_pct, p.watermark,
+                    p.exit_date, p.exit_price, p.exit_type,
+                    p.blended_return, p.created_at,
+                    o.close AS current_price
+                FROM   paper_positions p
+                LEFT JOIN ticker_names tn ON tn.ticker = p.ticker
+                LEFT JOIN krx_listings k  ON k.yfinance_symbol = p.ticker
+                LEFT JOIN LATERAL (
+                    SELECT name FROM chart_signals
+                    WHERE  ticker = p.ticker ORDER BY screened_at DESC LIMIT 1
+                ) cs ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT close FROM daily_ohlcv
+                    WHERE  symbol = p.ticker ORDER BY date DESC LIMIT 1
+                ) o ON TRUE
+                WHERE  p.ticker = $1
+                ORDER  BY p.signal_date DESC, p.id DESC
+                """,
+                ticker,
+            )
+
+        # 오픈 포지션이 있으면 현재가 갱신
+        active_rows = [r for r in rows if r["status"] in ("open", "pending")]
+        prices: dict[str, float] = {}
+        if active_rows:
+            # update_cache=False: 단일 종목이 공유 포지션 캐시를 오염시키지 않도록
+            prices = await _fetch_current_prices([ticker], update_cache=False)
+
+        def _fmt(r) -> dict:
+            d = dict(r)
+            for k in ("entry_actual", "entry_theory", "slippage_pct",
+                      "tp1_pct", "tp1_ratio", "trail_pct", "hard_stop_pct",
+                      "tp1_price", "watermark", "exit_price", "blended_return"):
+                if d.get(k) is not None:
+                    d[k] = float(d[k])
+            # current_price: daily_ohlcv 대신 yfinance 캐시 사용
+            d.pop("current_price", None)
+            curr = prices.get(ticker) if d["status"] in ("open", "pending") else None
+            d["current_price"] = curr
+            for k in ("signal_date", "tp1_date", "exit_date"):
+                if d.get(k) is not None:
+                    d[k] = str(d[k])
+            if d.get("created_at") is not None:
+                d["created_at"] = d["created_at"].isoformat()
+            entry = d.get("entry_actual")
+            d["unrealized_pct"] = (
+                round((curr / entry - 1) * 100, 2)
+                if curr and entry else None
+            )
+            return d
+
+        positions = [_fmt(r) for r in rows]
+        name = positions[0]["name"] if positions else ticker
+        return {"data": positions, "ticker": ticker, "name": name}
+
+    except Exception as e:
+        logger.error("[paper/history] 조회 실패: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 이력 트래킹 엔드포인트 ────────────────────────────────────
+# GET /api/history/stage   — 기간별 Stage 분류 집계
+# GET /api/history/screener — 기간별 스크리너 집계
+# GET /api/history/ticker/{ticker} — 종목별 이력
+
+_HISTORY_DEFAULT_DAYS = 14  # 기본 조회 기간 (일)
+
+
+def _date_to_week(d: date) -> str:
+    """date → ISO 주차 문자열 (예: 2026-W20)"""
+    return d.strftime("%G-W%V")
+
+
+def _parse_date(s: str | None, default: date) -> date:
+    if s is None:
+        return default
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        return default
+
+
+@app.get("/api/history/stage")
+async def get_stage_history(
+    start: str | None = None,
+    end: str | None = None,
+    stage: int | None = None,
+):
+    if stage is not None and stage not in (1, 2, 3):
+        raise HTTPException(status_code=422, detail="stage must be 1, 2, or 3")
+    today = date.today()
+    start_date = _parse_date(start, today - timedelta(days=_HISTORY_DEFAULT_DAYS))
+    end_date   = _parse_date(end, today)
+    if start_date > end_date:
+        start_date = end_date
+
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            # per-stage subquery: GROUP BY에 COALESCE 전체 expression 반복 (alias 금지)
+            # LATERAL로 latest_stage 조회 — idx_stage_class_ticker 사용
+            _SUB = """
+                SELECT agg.ticker, agg.name, agg.appearance_count,
+                       agg.first_seen, agg.last_seen, agg.any_peakout,
+                       {stage_val} AS stage_queried, latest.stage AS latest_stage
+                FROM (
+                    SELECT sc.ticker,
+                           COALESCE(tn.name_ko, cs.name, SPLIT_PART(sc.ticker, '.', 1)) AS name,
+                           COUNT(*) AS appearance_count,
+                           MIN(sc.classified_date) AS first_seen,
+                           MAX(sc.classified_date) AS last_seen,
+                           BOOL_OR(sc.peakout_flag) AS any_peakout
+                    FROM stage_classifications sc
+                    LEFT JOIN ticker_names tn ON tn.ticker = sc.ticker
+                    LEFT JOIN LATERAL (
+                        SELECT name FROM chart_signals
+                        WHERE ticker = sc.ticker
+                        ORDER BY screened_at DESC LIMIT 1
+                    ) cs ON TRUE
+                    WHERE sc.classified_date BETWEEN $1 AND $2
+                      AND sc.stage = {stage_val}
+                    GROUP BY sc.ticker,
+                             COALESCE(tn.name_ko, cs.name, SPLIT_PART(sc.ticker, '.', 1))
+                    ORDER BY COUNT(*) DESC
+                    LIMIT 50
+                ) agg
+                LEFT JOIN LATERAL (
+                    SELECT stage FROM stage_classifications
+                    WHERE ticker = agg.ticker
+                    ORDER BY classified_date DESC LIMIT 1
+                ) latest ON TRUE
+            """
+
+            if stage is not None:
+                q = _SUB.format(stage_val=stage) + " ORDER BY appearance_count DESC"
+                rows = await conn.fetch(q, start_date, end_date)
+            else:
+                # UNION ALL에서 $1/$2는 전체 쿼리에 걸쳐 동일 슬롯 → 한 번만 전달
+                union_q = (
+                    _SUB.format(stage_val=1) +
+                    " UNION ALL " +
+                    _SUB.format(stage_val=2) +
+                    " UNION ALL " +
+                    _SUB.format(stage_val=3) +
+                    " ORDER BY stage_queried, appearance_count DESC"
+                )
+                rows = await conn.fetch(union_q, start_date, end_date)
+
+        items = [
+            {
+                "ticker": r["ticker"],
+                "name": r["name"] or r["ticker"],
+                "appearance_count": r["appearance_count"],
+                "first_seen": str(r["first_seen"]) if r["first_seen"] else None,
+                "last_seen": str(r["last_seen"]) if r["last_seen"] else None,
+                "any_peakout": bool(r["any_peakout"]),
+                "stage_queried": r["stage_queried"],
+                "latest_stage": r["latest_stage"],
+            }
+            for r in rows
+        ]
+        return {"data": {"start": str(start_date), "end": str(end_date),
+                         "stage_filter": stage, "items": items}}
+    except Exception as e:
+        logger.error("[history/stage] 조회 실패: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/history/screener")
+async def get_screener_history(
+    start: str | None = None,
+    end: str | None = None,
+):
+    today = date.today()
+    start_date = _parse_date(start, today - timedelta(days=_HISTORY_DEFAULT_DAYS))
+    end_date   = _parse_date(end, today)
+    if start_date > end_date:
+        start_date = end_date
+    start_week = _date_to_week(start_date)
+    end_week   = _date_to_week(end_date)
+
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT ticker, MAX(name) AS name, COUNT(*) AS week_count,
+                       MIN(week_of) AS first_week, MAX(week_of) AS last_week,
+                       BOOL_OR(is_enhanced) AS any_enhanced,
+                       BOOL_OR(has_gapjum) AS any_gapjum
+                FROM chart_signals
+                WHERE week_of BETWEEN $1 AND $2
+                GROUP BY ticker
+                ORDER BY week_count DESC
+                LIMIT 100
+                """,
+                start_week, end_week,
+            )
+
+        items = [
+            {
+                "ticker": r["ticker"],
+                "name": r["name"] or r["ticker"],
+                "week_count": r["week_count"],
+                "first_week": r["first_week"],
+                "last_week": r["last_week"],
+                "any_enhanced": bool(r["any_enhanced"]),
+                "any_gapjum": bool(r["any_gapjum"]),
+            }
+            for r in rows
+        ]
+        return {"data": {"start": str(start_date), "end": str(end_date),
+                         "start_week": start_week, "end_week": end_week,
+                         "items": items}}
+    except Exception as e:
+        logger.error("[history/screener] 조회 실패: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/history/ticker/{ticker}")
+async def get_ticker_history(
+    ticker: str,
+    start: str | None = None,
+    end: str | None = None,
+):
+    today = date.today()
+    start_date = _parse_date(start, today - timedelta(days=_HISTORY_DEFAULT_DAYS))
+    end_date   = _parse_date(end, today)
+    if start_date > end_date:
+        start_date = end_date
+    start_week = _date_to_week(start_date)
+    end_week   = _date_to_week(end_date)
+
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            stage_rows = await conn.fetch(
+                """
+                SELECT classified_date, stage, peakout_flag, s1_high, s1_txamt
+                FROM stage_classifications
+                WHERE ticker = $1
+                  AND classified_date BETWEEN $2 AND $3
+                ORDER BY classified_date DESC
+                """,
+                ticker, start_date, end_date,
+            )
+            screener_rows = await conn.fetch(
+                """
+                SELECT week_of, is_enhanced, has_gapjum, close
+                FROM chart_signals
+                WHERE ticker = $1
+                  AND week_of BETWEEN $2 AND $3
+                ORDER BY week_of DESC
+                """,
+                ticker, start_week, end_week,
+            )
+
+        stage_history = [
+            {
+                "classified_date": str(r["classified_date"]),
+                "stage": r["stage"],
+                "peakout_flag": bool(r["peakout_flag"]),
+                "s1_high": float(r["s1_high"]) if r["s1_high"] else None,
+                "s1_txamt": r["s1_txamt"],
+            }
+            for r in stage_rows
+        ]
+        screener_history = [
+            {
+                "week_of": r["week_of"],
+                "is_enhanced": bool(r["is_enhanced"]),
+                "has_gapjum": bool(r["has_gapjum"]),
+                "close": float(r["close"]) if r["close"] else None,
+            }
+            for r in screener_rows
+        ]
+        return {"data": {"ticker": ticker,
+                         "start": str(start_date), "end": str(end_date),
+                         "stage_history": stage_history,
+                         "screener_history": screener_history}}
+    except Exception as e:
+        logger.error("[history/ticker] 조회 실패: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── React 정적 파일 서빙 (프로덕션) ──────────────────────────

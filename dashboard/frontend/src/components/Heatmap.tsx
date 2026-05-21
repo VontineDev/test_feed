@@ -84,7 +84,7 @@ export default function Heatmap() {
     return () => clearInterval(id)
   }, [])
 
-  const filtered = items.filter(i => i.stage && i.amount > 0)
+  const filtered = items.filter(i => i.amount > 0)
 
   const nivoData = {
     id: 'root',
@@ -124,7 +124,7 @@ export default function Heatmap() {
             {loading ? '…' : '↻'}
           </button>
         </span>
-        <span style={styles.count}>{filtered.length}종목</span>
+        <span style={styles.count}>{filtered.length}종목 (Top 거래대금)</span>
       </div>
 
       {/* 맵 영역 */}
@@ -142,8 +142,8 @@ export default function Heatmap() {
                 <rect x="28" y="6" width="7" height="30" rx="2" fill="#60a5fa"/>
                 <path d="M7 20 L19 12 L31 4" stroke="#f87171" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
-              <div style={{ fontSize: 14, fontWeight: 600, color: '#64748b', marginBottom: 4 }}>오늘 분류 데이터 없음</div>
-              <div style={{ fontSize: 12, color: '#334155' }}>장 시작 후 Stage 분류 버튼을 눌러 갱신하세요</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: '#64748b', marginBottom: 4 }}>거래 데이터 없음</div>
+              <div style={{ fontSize: 12, color: '#334155' }}>Kiwoom 연결을 확인하거나 새로고침하세요</div>
             </div>
           )
           : (
@@ -166,7 +166,8 @@ export default function Heatmap() {
               if (!d.label) return ''
               const pct = d.change_pct ?? 0
               const sign = pct > 0 ? '+' : ''
-              return `[S${d.stage ?? '?'}] ${d.label}  ${sign}${pct.toFixed(2)}%`
+              const stagePrefix = d.stage != null ? `[S${d.stage}] ` : ''
+              return `${stagePrefix}${d.label}  ${sign}${pct.toFixed(2)}%`
             }}
             labelSkipSize={28}
             labelTextColor="#fff"
