@@ -46,6 +46,7 @@ import sys as _sys
 _sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from db import upsert_ticker_names as _upsert_ticker_names  # noqa: E402
 from kiwoom_aftermarket_sync import KiwoomClient  # noqa: E402
+from macro_tracker import MacroTracker, DEFAULT_TICKERS as _MACRO_TICKERS  # noqa: E402
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -68,6 +69,11 @@ _KIWOOM_TOKEN_TTL = 82800  # 23시간
 _TOP_CACHE: dict = {"data": None, "expires": 0.0}
 _TOP_TTL = 300
 _TOP_LOCK = asyncio.Lock()
+
+# ── 매크로 캐시 (10분) ───────────────────────────────────────
+_MACRO_CACHE: dict = {"data": None, "expires": 0.0}
+_MACRO_TTL = 600  # 10분 (yfinance 다운로드 비용 고려)
+_MACRO_LOCK = asyncio.Lock()
 
 
 # ── lifespan ──────────────────────────────────────────────────
@@ -1124,6 +1130,77 @@ async def get_ticker_history(
     except Exception as e:
         logger.error("[history/ticker] 조회 실패: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── GET /api/macro ────────────────────────────────────────────
+def _run_macro_analysis() -> dict:
+    """MacroTracker 분석 실행 (동기, asyncio.to_thread에서 호출)."""
+    tracker = MacroTracker(period="2y", min_obs=60)
+    tracker.fit(_MACRO_TICKERS)
+
+    snapshot = tracker.snapshot()
+
+    # 종목별 결과 + 팩터별 5일 기여 계산
+    stocks = []
+    for r in sorted(tracker._results, key=lambda x: x["macro_score"], reverse=True):
+        factor_contribs: dict[str, float] = {}
+        for f in ["rate", "fx", "oil", "vix", "dxy", "export"]:
+            beta = r["betas"].get(f, 0.0)
+            delta5 = snapshot.get(f, {}).get("change_5d", 0.0)
+            factor_contribs[f] = round(beta * delta5, 4)
+
+        stocks.append({
+            "ticker":              r["ticker"],
+            "name":                r["name"],
+            "n_obs":               r["n_obs"],
+            "r_squared":           r["r_squared"],
+            "adj_r_squared":       r["adj_r_squared"],
+            "residual_std":        r["residual_std"],
+            "macro_score":         r["macro_score"],
+            "macro_score_5d":      r["macro_score_5d"],
+            "macro_score_20d":     r["macro_score_20d"],
+            "significant_factors": r["significant_factors"],
+            "betas":               {k: round(v, 5) for k, v in r["betas"].items() if k != "alpha"},
+            "alpha":               round(r["betas"].get("alpha", 0.0), 6),
+            "t_stats":             {k: v for k, v in r["t_stats"].items() if k != "alpha"},
+            "p_values":            {k: v for k, v in r["p_values"].items() if k != "alpha"},
+            "factor_contribs_5d":  factor_contribs,
+        })
+
+    return {
+        "snapshot":   snapshot,
+        "stocks":     stocks,
+        "fetched_at": time.strftime("%H:%M:%S"),
+    }
+
+
+@app.get("/api/macro")
+async def get_macro(refresh: bool = False):
+    """
+    매크로 팩터 분석 결과 (10분 캐시).
+
+    최초 호출 시 yfinance 다운로드로 30~60초 소요.
+    이후 캐시에서 즉시 반환.
+    """
+    now = time.time()
+    if not refresh and _MACRO_CACHE["data"] and now < _MACRO_CACHE["expires"]:
+        return {**_MACRO_CACHE["data"], "cached": True}
+
+    async with _MACRO_LOCK:
+        now = time.time()
+        if not refresh and _MACRO_CACHE["data"] and now < _MACRO_CACHE["expires"]:
+            return {**_MACRO_CACHE["data"], "cached": True}
+        try:
+            data = await asyncio.to_thread(_run_macro_analysis)
+            _MACRO_CACHE["data"] = data
+            _MACRO_CACHE["expires"] = now + _MACRO_TTL
+            return {**data, "cached": False}
+        except Exception as e:
+            logger.error("[macro] 분석 실패: %s", e)
+            if _MACRO_CACHE["data"]:
+                return {**_MACRO_CACHE["data"], "cached": True, "stale": True,
+                        "error": "분석 오류 — 이전 데이터 표시 중"}
+            raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── React 정적 파일 서빙 (프로덕션) ──────────────────────────

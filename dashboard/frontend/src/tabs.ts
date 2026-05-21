@@ -4,8 +4,9 @@ const Heatmap        = lazy(() => import('./components/Heatmap'))
 const Report         = lazy(() => import('./components/Report'))
 const Top            = lazy(() => import('./components/Top'))
 const PaperPortfolio = lazy(() => import('./components/PaperPortfolio'))
+const Macro          = lazy(() => import('./components/Macro'))
 
-export type TabKey = 'heatmap' | 'report' | 'top' | 'paper'
+export type TabKey = 'heatmap' | 'report' | 'top' | 'paper' | 'macro'
 export type MobileTabKey = TabKey | 'more'
 
 export interface TabConfig {
@@ -20,6 +21,7 @@ export const TAB_CONFIG: TabConfig[] = [
   { key: 'report',  label: '레포트',  icon: '📈', component: Report         },
   { key: 'top',     label: 'Top',    icon: '📊', component: Top            },
   { key: 'paper',   label: '모의투자', icon: '💼', component: PaperPortfolio },
+  { key: 'macro',   label: '매크로',  icon: '🌐', component: Macro          },
 ]
 
 export const MORE_TAB = { key: 'more' as const, label: '시그널', icon: '📡' }
