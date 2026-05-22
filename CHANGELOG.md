@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.6.1] - 2026-05-23
+
+### Changed
+- **매크로 현재가 정확도 개선** (`dashboard/backend/main.py`): yfinance 조회 파라미터를 `period="2d" interval="1d"` → `period="1d" interval="1m"`으로 변경. 일봉 기준 전날 종가가 반환되던 문제 해결 — 이제 장중 최신 1분봉 마지막 값을 사용.
+
+### Fixed
+- **현재가 멀티 티커 컬럼 오류** (`dashboard/backend/main.py`): `close_df[t]` 키 부재 시 `KeyError` 발생하던 버그 수정. 티커가 반환 컬럼에 없으면 `continue`로 건너뛰도록 처리.
+
+### Refactored
+- **Macro 순수 유틸 분리** (`dashboard/frontend/src/components/Macro.utils.ts`): `Macro.tsx`에 인라인으로 있던 타입(`FactorSnap`, `StockResult`), 상수(`FACTOR_KEYS`, `FACTOR_LABELS`, `FACTOR_UNITS`, `FACTOR_CARD_INTERPRET` 등), 순수 함수(`getFactorState`, `getSensitivity`, `generateVerdict`, `generateBanner`)를 별도 모듈로 추출. 테스트 가능한 단위로 분리.
+- **FactorCard 컴포넌트 분리** (`Macro.tsx`): 팩터 카드 렌더링 로직을 `FactorCard` 독립 컴포넌트로 분리. ScoreBar `width` 100→80px 조정.
+
+### Tests
+- **Macro 유틸 단위 테스트** (`dashboard/frontend/src/components/Macro.utils.test.ts`): Vitest 기반 174줄. `getFactorState`(경계값·극단값), `getSensitivity`(R² 구간), `generateVerdict`(시나리오별 판정문), `generateBanner`(배너 생성·null 조건) 4개 함수 커버.
+
 ## [0.9.6.0] - 2026-05-22
 
 ### Added
