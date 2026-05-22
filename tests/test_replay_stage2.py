@@ -18,7 +18,7 @@ from typing import Optional
 import pandas as pd
 import pytest
 
-from backtest_engine import (
+from analysis.backtest_engine import (
     BacktestConfig,
     SignalRecord,
     _replay_stage2,

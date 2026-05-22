@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
-from ticker_cache import ticker_cache  # KRX DB-backed ticker lookup
+from core.ticker_cache import ticker_cache  # KRX DB-backed ticker lookup
 
 logger = logging.getLogger(__name__)
 

@@ -25,7 +25,7 @@ from typing import Optional
 
 import pandas as pd
 
-from market_data import calc_rsi
+from data.market_data import calc_rsi
 
 logger = logging.getLogger(__name__)
 

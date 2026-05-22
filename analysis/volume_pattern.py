@@ -24,7 +24,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-from ticker_cache import ticker_cache  # KRX DB-backed ticker lookup
+from core.ticker_cache import ticker_cache  # KRX DB-backed ticker lookup
 
 # 한국 주식 별명 → KRX 종목코드
 # 코스피(KOSPI) 종목 별명 → KRX 종목코드

@@ -44,9 +44,9 @@ from database import close_pool, get_pool
 
 import sys as _sys
 _sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from db import upsert_ticker_names as _upsert_ticker_names  # noqa: E402
-from kiwoom_aftermarket_sync import KiwoomClient  # noqa: E402
-from macro_tracker import MacroTracker, DEFAULT_TICKERS as _MACRO_TICKERS  # noqa: E402
+from core.db import upsert_ticker_names as _upsert_ticker_names  # noqa: E402
+from data.kiwoom_aftermarket_sync import KiwoomClient  # noqa: E402
+from analysis.macro_tracker import MacroTracker, DEFAULT_TICKERS as _MACRO_TICKERS  # noqa: E402
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

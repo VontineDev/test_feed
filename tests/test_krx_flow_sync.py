@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from krx_flow_sync import (
+from data.krx_flow_sync import (
     FlowRecord,
     _KrxDirectFetcher,
     _compute_streaks,

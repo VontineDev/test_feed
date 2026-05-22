@@ -21,8 +21,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
 import pytest
 
-from market_data import MacroContext, _fetch_usd_krw_sync, get_macro_context
-from signal_detector import SIGNAL_PROMPT, _build_macro_section
+from data.market_data import MacroContext, _fetch_usd_krw_sync, get_macro_context
+from analysis.signal_detector import SIGNAL_PROMPT, _build_macro_section
 
 
 # ═══════════════════════════════════════════════════════════════

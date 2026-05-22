@@ -14,14 +14,14 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
-from krx_sync import (
+from data.krx_sync import (
     _derive_yfinance_symbol,
     _parse_listed_at,
     _parse_listed_shares,
     _row_to_params,
     SUPPORTED_MARKETS,
 )
-from ticker_cache import TickerCache
+from core.ticker_cache import TickerCache
 
 
 # ── _derive_yfinance_symbol ──────────────────────────────────────────────────

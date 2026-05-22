@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from kiwoom_aftermarket_sync import KiwoomClient
+from data.kiwoom_aftermarket_sync import KiwoomClient
 
 logger = logging.getLogger(__name__)
 

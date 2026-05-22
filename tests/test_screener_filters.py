@@ -7,8 +7,8 @@ import pytest
 from dataclasses import replace
 from unittest.mock import patch
 
-from chart_screener import ScreenResult
-from screener_filters import (
+from analysis.chart_screener import ScreenResult
+from analysis.screener_filters import (
     저평가_우량주,
     성장주,
     배당주,

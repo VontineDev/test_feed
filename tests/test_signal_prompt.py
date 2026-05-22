@@ -9,8 +9,8 @@ Fix: added "Output ONLY the JSON object..." instruction at the end of the prompt
 from __future__ import annotations
 
 import pytest
-from signal_detector import SIGNAL_PROMPT, _build_macro_section
-from market_data import MacroContext
+from analysis.signal_detector import SIGNAL_PROMPT, _build_macro_section
+from data.market_data import MacroContext
 
 
 class TestSignalPromptEndsWithOutputInstruction:

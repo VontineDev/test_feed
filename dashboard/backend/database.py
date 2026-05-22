@@ -11,7 +11,7 @@ import asyncpg
 
 # 프로젝트 루트의 db.py에서 DSN 함수 재사용
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from db import get_dsn  # noqa: E402
+from core.db import get_dsn  # noqa: E402
 
 _pool: asyncpg.Pool | None = None
 

@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ticker_cache import TickerCache
+from core.ticker_cache import TickerCache
 
 
 # ── TickerCache.resolve_fuzzy ────────────────────────────────────────────────

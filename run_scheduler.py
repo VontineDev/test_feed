@@ -43,23 +43,23 @@ try:
 except ImportError:
     pass  # python-dotenv 미설치 시 환경변수 직접 설정으로 동작
 
-from summarizer import summarize, Backend
-from db import (
+from reports.summarizer import summarize, Backend
+from core.db import (
     create_pool, get_dsn, init_db, save_article, save_signal,
     load_seen_hashes, save_chart_signals, load_chart_signals_latest,
     get_stage1_history, save_stage_classifications,
     get_stage1_watchlist, upsert_watchlist_vol_log, get_watchlist_vol_log,
 )
-from telegram_notify import (
+from telegram.telegram_notify import (
     send_signal as tg_send_signal,
     send_weekly_screener as tg_send_weekly_screener,
     send_screener_comparison as tg_send_screener_comparison,
     send_watchlist_brief as tg_send_watchlist_brief,
 )
-from signal_detector import detect_signal
-from article_fetcher import fetch_article_body
-from telegram_bot import bot_polling_loop, init_bot
-from market_data import MacroContext, get_macro_context, get_resolution_miss_report
+from analysis.signal_detector import detect_signal
+from core.article_fetcher import fetch_article_body
+from telegram.telegram_bot import bot_polling_loop, init_bot
+from data.market_data import MacroContext, get_macro_context, get_resolution_miss_report
 
 # ── 로깅 설정 ────────────────────────────────────────────────
 _LOG_DIR = Path(__file__).parent / "logs"

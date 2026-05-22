@@ -27,10 +27,10 @@ try:
 except ImportError:
     pass
 
-import market_data as _md
-from market_data import MacroContext
-from ticker_cache import ticker_cache as _tc
-from summarizer import (
+from data import market_data as _md
+from data.market_data import MacroContext
+from core.ticker_cache import ticker_cache as _tc
+from reports.summarizer import (
     _call_openai_compat,
     _call_ollama_native,
     _ollama_is_alive,

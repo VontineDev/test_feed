@@ -14,7 +14,7 @@ import pandas as pd
 import pytest
 
 # 프로젝트 루트에서 임포트
-from backtest_engine import (
+from analysis.backtest_engine import (
     BacktestConfig,
     SignalRecord,
     _compute_exit_logic,

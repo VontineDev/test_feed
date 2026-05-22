@@ -17,7 +17,7 @@ from typing import Optional
 
 import httpx
 
-from db import (
+from core.db import (
     save_trade,
     close_position,
     get_open_positions,

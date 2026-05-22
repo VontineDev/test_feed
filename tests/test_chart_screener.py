@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
 
-from chart_screener import (
+from analysis.chart_screener import (
     screen_ticker,
     calc_ichimoku,
     current_week_of,

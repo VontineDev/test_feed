@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 from datetime import date, timedelta
 
-from stage_classifier import classify_stage, check_peakout
+from analysis.stage_classifier import classify_stage, check_peakout
 
 
 # ── fixtures ─────────────────────────────────────────────────

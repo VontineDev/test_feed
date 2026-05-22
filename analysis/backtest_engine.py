@@ -34,7 +34,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from chart_screener import calc_ichimoku
+from analysis.chart_screener import calc_ichimoku
 
 logger = logging.getLogger(__name__)
 _KST = ZoneInfo("Asia/Seoul")
