@@ -164,12 +164,24 @@ export default function Heatmap() {
             label={(node) => {
               const d = node.data as unknown as { label?: string; change_pct?: number; stage?: number | null }
               if (!d.label) return ''
+              const { width, height } = node
               const pct = d.change_pct ?? 0
               const sign = pct > 0 ? '+' : ''
-              const stagePrefix = d.stage != null ? `[S${d.stage}] ` : ''
-              return `${stagePrefix}${d.label}  ${sign}${pct.toFixed(2)}%`
+              const pctStr = `${sign}${pct.toFixed(1)}%`
+              const stageStr = d.stage != null ? `S${d.stage} ` : ''
+              // 한글 글자 너비 추정 ~11px @ 11px font
+              const maxChars = Math.floor(Math.min(width, height < width ? width : width) / 11) - 1
+              const full = `${stageStr}${d.label}  ${pctStr}`
+              if (full.length <= maxChars) return full
+              const nameMax = maxChars - pctStr.length - 2
+              if (nameMax >= 2) {
+                const name = d.label.length > nameMax ? d.label.slice(0, nameMax - 1) + '…' : d.label
+                return `${name}  ${pctStr}`
+              }
+              return d.label.length > maxChars ? d.label.slice(0, maxChars - 1) + '…' : d.label
             }}
-            labelSkipSize={28}
+            orientLabel={false}
+            labelSkipSize={36}
             labelTextColor="#fff"
             tooltip={({ node }) => {
               const d = node.data as unknown as { item?: HeatmapItem }
