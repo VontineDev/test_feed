@@ -64,32 +64,57 @@ RSS 피드 수집 → 기사 본문 크롤링 → LLM 한글 요약
 ## 프로젝트 구조
 
 ```
-run_scheduler.py      # 메인 실행 — RSS 루프 + 봇 병렬 실행 / --once watchlist|stage 지원
-article_fetcher.py    # 기사 본문 크롤링
-summarizer.py         # 로컬 LLM 한글 요약
-signal_detector.py    # LLM 매매 신호 감지
-market_data.py        # MacroContext(USD/KRW·기준금리), calc_rsi, fetch_daily_flow
-backtest_engine.py    # 통합 백테스트 엔진 — ichimoku / stage / cross 3모드, Sharpe·MDD·거래비용
-chart_screener.py     # 주봉 차트 스크리너 (Ichimoku + MA, KOSPI/KOSDAQ 전종목)
-screener_filters.py   # 스크리너 필터 프리셋
-stage_classifier.py   # 일봉 3단계 분류기 — Stage 1/2/3 분류 + 피크아웃 신호
-batch_run.py          # 배치 OHLCV 내보내기 + 분석
-db.py                 # PostgreSQL 연동 (asyncpg)
-telegram_bot.py       # 봇 명령어 처리
-telegram_notify.py    # 신호 알림 전송 + Ichimoku/Stage 비교 메시지
-volume_pattern.py     # 거래량 패턴 분석
-krx_sync.py           # KRX 전체 종목 DB 동기화 (KOSPI+KOSDAQ ~2500종목)
-krx_openapi.py        # KRX Open API REST 클라이언트 — OHLCV·종목마스터·지수 시세
-ohlcv_cache.py        # OHLCV DB 캐시 레이어
-krx_flow_sync.py      # 외국인·기관 순매수 파이프라인 → daily_flow 테이블
-ticker_cache.py       # 종목명→yfinance 심볼 인메모리 캐시
+run_scheduler.py          # 메인 실행 — RSS 루프 + 봇 병렬 실행 / --once watchlist|stage 지원
 
-tests/                # pytest 테스트 (32개 파일)
-docs/                 # 문서 (ARCHITECTURE.md, USER_MANUAL.md, TODOS.md, HowToBacktest.md)
-scripts/              # 운영·개발 보조 스크립트 (generate_*.py, register_task.ps1 등)
-logs/                 # 로그 파일
-reports/              # 스크리닝 리포트 출력물
-sql/                  # DB 스키마 마이그레이션
+core/                     # 공유 유틸리티
+  db.py                   # PostgreSQL 연동 (asyncpg)
+  ticker_cache.py         # 종목명 → yfinance 심볼 인메모리 캐시
+  ohlcv_cache.py          # OHLCV DB 캐시 레이어
+  article_fetcher.py      # 기사 본문 크롤링
+
+data/                     # 데이터 수집·동기화
+  market_data.py          # MacroContext(USD/KRW·기준금리), calc_rsi, fetch_daily_flow
+  krx_sync.py             # KRX 전체 종목 DB 동기화 (KOSPI+KOSDAQ ~2500종목)
+  krx_openapi.py          # KRX Open API REST 클라이언트 — OHLCV·종목마스터·지수 시세
+  krx_flow_sync.py        # 외국인·기관 순매수 파이프라인 → daily_flow 테이블
+  krx_aftermarket_sync.py # KRX 장후 데이터 동기화
+  kiwoom_aftermarket_sync.py  # Kiwoom REST API 클라이언트
+  kiwoom_paper_trader.py  # 모의투자 Kiwoom 연동
+
+analysis/                 # 분석·전략
+  signal_detector.py      # LLM 매매 신호 감지
+  chart_screener.py       # 주봉 차트 스크리너 (Ichimoku + MA, KOSPI/KOSDAQ 전종목)
+  screener_filters.py     # 스크리너 필터 프리셋
+  stage_classifier.py     # 일봉 3단계 분류기 — Stage 1/2/3 분류 + 피크아웃 신호
+  backtest_engine.py      # 통합 백테스트 엔진 — ichimoku / stage / cross 3모드
+  volume_pattern.py       # 거래량 패턴 분석
+  macro_tracker.py        # OLS 팩터 모델 — 6개 매크로 팩터 추적
+
+telegram/                 # 텔레그램 연동
+  telegram_bot.py         # 봇 명령어 처리
+  telegram_notify.py      # 신호 알림 전송 + Ichimoku/Stage 비교 메시지
+  telegram_trade.py       # 매매 기록 명령어 처리
+
+reports/                  # 리포트·요약
+  summarizer.py           # 로컬 LLM 한글 요약
+  generate_html_report.py # 주봉 스크리닝 HTML 리포트 생성
+
+dashboard/                # 웹 대시보드 (FastAPI + React)
+  backend/                # FastAPI 서버 (포트 8000)
+  frontend/               # React + Vite (dist/ 정적 빌드)
+
+tests/                    # pytest 테스트 (591개)
+docs/                     # 문서
+scripts/                  # 운영 스크립트
+  restart_dashboard.bat   # 대시보드 서버 재시작
+  start_crawler.bat       # 크롤러 직접 실행
+  run_aftermarket_sync.bat # 장후 동기화 실행
+  duckdns_update.bat      # DuckDNS IP 업데이트
+  restart_scheduler.bat   # Windows 작업 스케줄러 NewsCrawler 재시작
+  run_sweep.py            # 백테스트 파라미터 그리드서치
+  register_task.ps1       # Windows 작업 스케줄러 등록
+sql/                      # DB 스키마 마이그레이션
+logs/                     # 로그 파일
 ```
 
 ## 환경변수
@@ -121,6 +146,14 @@ KRX_VISITOR=your_smvisitorid_cookie  # __smVisitorID (선택)
 KRX_ID=your_krx_id
 KRX_PW=your_krx_password
 ```
+
+## 대시보드 실행
+
+```bash
+scripts\restart_dashboard.bat   # 백엔드 서버 시작 (http://localhost:8000)
+```
+
+탭 구성: 히트맵 · 레포트 · Top · 모의투자 · 매크로
 
 ## 테스트 실행
 
