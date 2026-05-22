@@ -26,13 +26,28 @@ if not exist "%PYTHON%" (
 :: ── 1. 기존 프로세스 종료 ────────────────────────────────────
 echo [1/3] 포트 %PORT% 기존 서버 종료 중...
 set KILLED=0
-for /f "tokens=5" %%i in ('netstat -ano 2^>nul ^| findstr ":%PORT%"^| findstr "LISTENING"') do (
+
+:: 부모 PID 확인
+for /f "tokens=5" %%i in ('netstat -ano 2^>nul ^| findstr ":%PORT% "^| findstr "LISTENING"') do (
     if not "%%i"=="" (
-        echo   PID %%i 종료 시도...
-        taskkill /F /PID %%i >nul 2>&1
+        set PARENT_PID=%%i
+        echo   포트 점유 PID: %%i
+
+        :: 프로세스 트리 전체 종료 (uvicorn multiprocessing 자식 포함)
+        taskkill /T /F /PID %%i >nul 2>&1
+
+        :: taskkill 실패 시 — 자식 프로세스 직접 종료
+        :: (uvicorn spawn_main 자식: parent_pid=%%i 패턴으로 찾아 종료)
+        for /f "tokens=2" %%j in ('wmic process where "commandline like '%%parent_pid=%%i%%'" get processid 2^>nul ^| findstr /r "[0-9]"') do (
+            taskkill /F /PID %%j >nul 2>&1
+        )
         set KILLED=1
     )
 )
+
+:: python.exe 중 uvicorn main:app 실행 중인 것도 추가 정리
+taskkill /F /FI "IMAGENAME eq python.exe" /FI "WINDOWTITLE eq *uvicorn*" >nul 2>&1
+
 if "!KILLED!"=="0" (
     echo   실행 중인 서버 없음.
 ) else (
