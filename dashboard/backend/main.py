@@ -181,7 +181,7 @@ class _BasicAuthMiddleware(BaseHTTPMiddleware):
 app.add_middleware(_BasicAuthMiddleware)
 
 
-# ── 포지션 현재가 조회 (yfinance 2d, 5분 캐시) ──────────────
+# ── 포지션 현재가 조회 (yfinance 1d 1m 인터벌, 5분 캐시) ────
 async def _fetch_current_prices(
     tickers: list[str], *, update_cache: bool = True
 ) -> dict[str, float]:
@@ -201,7 +201,7 @@ async def _fetch_current_prices(
             import yfinance as _yf
             import pandas as _pd
             hist = _yf.download(
-                tickers, period="2d", interval="1d",
+                tickers, period="1d", interval="1m",
                 auto_adjust=True, progress=False, threads=True,
             )
             if hist.empty:
@@ -209,8 +209,9 @@ async def _fetch_current_prices(
             close_df = hist["Close"] if isinstance(hist.columns, _pd.MultiIndex) else hist
             for t in tickers:
                 try:
-                    col = close_df[t] if t in close_df.columns else close_df.iloc[:, 0]
-                    series = col.dropna()
+                    if t not in close_df.columns:
+                        continue
+                    series = close_df[t].dropna()
                     if len(series) >= 1:
                         result[t] = float(series.iloc[-1])
                 except Exception:
