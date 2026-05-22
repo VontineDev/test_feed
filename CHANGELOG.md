@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.6.0] - 2026-05-22
+
+### Added
+- **매크로 탭** (`analysis/macro_tracker.py`, `dashboard/frontend/src/components/Macro.tsx`): 대시보드에 매크로 탭 추가. OLS 팩터 모델로 6개 매크로 팩터(USD/KRW, 기준금리, 코스피 52주 고저비, VIX, 구리/금 비율, 10Y-2Y 스프레드) 추적. `--scenario` CLI 옵션으로 시나리오별 팩터 시뮬레이션 가능.
+
+### Changed
+- **프로젝트 패키지 구조 재편** (`core/`, `data/`, `analysis/`, `telegram/`, `reports/`): 루트에 흩어져 있던 Python 소스 파일 23개를 기능별 패키지로 분류. `core/`(db, ticker_cache, ohlcv_cache, article_fetcher), `data/`(market_data, krx_*, kiwoom_*), `analysis/`(signal_detector, chart_screener, stage_classifier, backtest_engine, macro_tracker, volume_pattern, screener_filters), `telegram/`(telegram_bot, telegram_notify, telegram_trade), `reports/`(summarizer, generate_html_report). 모든 import 경로 및 테스트 파일 업데이트 포함. 591개 테스트 통과.
+- **scripts/ 폴더 정리**: 루트에 있던 배치파일(`restart_dashboard.bat`, `start_crawler.bat`, `run_aftermarket_sync.bat`, `duckdns_update.bat`)을 `scripts/`로 이동. `start_dashboard.bat` 제거(`restart_dashboard.bat`과 중복).
+
+### Fixed
+- **히트맵 세로 텍스트** (`Heatmap.tsx`): `orientLabel=false` 적용 — 좁은 셀에서 종목명이 90도 회전되어 표시되던 문제 해결.
+- **히트맵 모바일 글씨 미표시** (`Heatmap.tsx`): `labelSkipSize={36}→{0}` + label 함수에서 width 기준 직접 스킵 처리. nivo 기본 `labelSkipSize`가 width·height 둘 다 체크해서 세로로 긴 좁은 셀(모바일에서 흔함)의 라벨이 전부 숨겨지던 문제 해결.
+- **히트맵 라벨 overflow** (`Heatmap.tsx`): 셀 너비(÷11px) 기반 동적 글자 수 계산으로 작은 셀에서 텍스트가 인접 셀로 삐져나오는 문제 해결.
+
 ## [0.9.5.0] - 2026-05-21
 
 ### Changed

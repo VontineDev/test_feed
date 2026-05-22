@@ -71,26 +71,26 @@
     연합뉴스 · 한국경제 · 매일경제 (한국어, v0.2.0.0~)
     → 새 기사 URL 감지 (url_hash로 중복 필터)
 ▼
-📄  기사 본문 크롤링 (article_fetcher.py)
+📄  기사 본문 크롤링 (core/article_fetcher.py)
     JSON-LD → 소스별 파서 → fallback 파서 (최대 3,000자)
 ▼
-🤖  로컬 LLM 한글 요약 (summarizer.py)
+🤖  로컬 LLM 한글 요약 (reports/summarizer.py)
     Ollama(Qwen3.5-9B) → LM Studio(Qwen3-8B) 폴백
     → 2~3문장 한글 요약 (핵심 수치·종목명 포함)
 ▼
-🎯  LLM 매매 신호 감지 (signal_detector.py)
+🎯  LLM 매매 신호 감지 (analysis/signal_detector.py)
     → direction: BUY / SELL / WATCH / NONE
     → strength: 1~5
     → tickers: [{name, yfinance_symbol}]
 ▼
-📊  시세 교차분석 (market_data.py)
+📊  시세 교차분석 (data/market_data.py)
     yfinance로 관련 종목 시세 조회 + Naver Finance 펀더멘털 조회 (PER/PBR/EPS)
     → CrossAnalysis: CONFIRM / CAUTION / FILTER / NEUTRAL
 ▼
-💾  DB 저장 (db.py)
+💾  DB 저장 (core/db.py)
     news_articles + trade_signals (PostgreSQL · asyncpg)
 ▼
-📲  텔레그램 알림 전송 (telegram_notify.py)
+📲  텔레그램 알림 전송 (telegram/telegram_notify.py)
     유효 신호(is_actionable: direction ∈ {BUY,SELL,WATCH} AND strength ≥ 2)만 즉시 발송
     한·외신 동일 기준 적용 (v0.2.1.0~)
 ▼
@@ -102,7 +102,7 @@
 
 ## 3. 모듈 상세
 
-### 3-1. `article_fetcher.py` — 기사 본문 크롤러
+### 3-1. `core/article_fetcher.py` — 기사 본문 크롤러
 
 **역할**: 뉴스 URL → 본문 텍스트 추출
 
@@ -123,7 +123,7 @@ body = await fetch_article_body(url, source="cnbc", http=http)
 
 ---
 
-### 3-2. `summarizer.py` — 로컬 LLM 한글 요약
+### 3-2. `reports/summarizer.py` — 로컬 LLM 한글 요약
 
 **역할**: 국내외 금융 기사 → 한글 2~3문장 요약
 
@@ -154,7 +154,7 @@ class SummaryResult:
 
 ---
 
-### 3-3. `signal_detector.py` — LLM 매매 신호 감지
+### 3-3. `analysis/signal_detector.py` — LLM 매매 신호 감지
 
 **역할**: 뉴스 제목 + 한글 요약 → 매매 신호 JSON 추출
 
@@ -211,7 +211,7 @@ class TradeSignal:
 
 ---
 
-### 3-4. `market_data.py` — 시세 조회 + 교차분석
+### 3-4. `data/market_data.py` — 시세 조회 + 교차분석
 
 **역할**: 뉴스 신호 + 실시간 시세 → 교차분석 판정
 
@@ -275,7 +275,7 @@ class CrossAnalysis:
 
 ---
 
-### 3-5. `db.py` — PostgreSQL 연동
+### 3-5. `core/db.py` — PostgreSQL 연동
 
 **DB 엔진**: asyncpg (비동기 커넥션 풀, min=2, max=8)
 
