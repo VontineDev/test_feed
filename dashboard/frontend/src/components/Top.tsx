@@ -7,6 +7,7 @@ interface TopItem {
   price: number
   change_pct: number
   amount: number
+  eps?: number | null
 }
 
 const th: React.CSSProperties = { padding: '4px 8px', textAlign: 'left', fontWeight: 600 }
@@ -28,7 +29,7 @@ export default function Top() {
     setLoading(true)
     setError('')
     try {
-      const r = await fetch(`/api/top?n=20${refresh ? '&refresh=true' : ''}`)
+      const r = await fetch(`/api/top?n=50${refresh ? '&refresh=true' : ''}`)
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       setItems(d.items ?? [])
@@ -51,7 +52,7 @@ export default function Top() {
   return (
     <div style={{ padding: 12, overflow: 'auto', height: '100%' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-        <span style={{ fontSize: 13, fontWeight: 700 }}>거래대금 상위 {items.length || 20}</span>
+        <span style={{ fontSize: 13, fontWeight: 700 }}>거래대금 상위 {items.length || 50}</span>
         <span style={{ fontSize: 11, color: '#64748b' }}>
           {fetchedAt && `갱신: ${fetchedAt}`}
           <button
@@ -84,6 +85,7 @@ export default function Top() {
             <th style={{ ...th, textAlign: 'right' }}>현재가</th>
             <th style={{ ...th, textAlign: 'right' }}>등락률</th>
             <th style={{ ...th, textAlign: 'right' }}>거래대금</th>
+            <th style={{ ...th, textAlign: 'right' }}>EPS</th>
           </tr>
         </thead>
         <tbody>
@@ -106,6 +108,9 @@ export default function Top() {
                 {it.change_pct > 0 ? '+' : ''}{it.change_pct.toFixed(2)}%
               </td>
               <td style={tdNum}>{fmtAmt(it.amount)}</td>
+              <td style={{ ...tdNum, color: it.eps != null && it.eps < 0 ? '#f87171' : undefined }}>
+                {it.eps != null ? it.eps.toLocaleString() : '—'}
+              </td>
             </tr>
           ))}
         </tbody>

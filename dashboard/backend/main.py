@@ -47,6 +47,7 @@ _sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from core.db import upsert_ticker_names as _upsert_ticker_names  # noqa: E402
 from data.kiwoom_aftermarket_sync import KiwoomClient  # noqa: E402
 from analysis.macro_tracker import MacroTracker, DEFAULT_TICKERS as _MACRO_TICKERS  # noqa: E402
+from data.market_data import _fetch_fundamental  # noqa: E402
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -804,22 +805,41 @@ def _fetch_top_kiwoom(n: int) -> dict:
 
 # ── GET /api/top ──────────────────────────────────────────────
 @app.get("/api/top")
-async def get_top(n: int = 20, refresh: bool = False):
+async def get_top(n: int = 50, refresh: bool = False):
     """당일 거래대금 상위 N 종목 (Kiwoom ka10032 거래대금상위요청, 5분 캐시).
 
-    캐시는 n=20 기준 단일 슬롯. 뮤텍스(_TOP_LOCK)로 동시 API 호출 방지.
+    캐시는 단일 슬롯. 뮤텍스(_TOP_LOCK)로 동시 API 호출 방지.
+    EPS는 Naver Finance에서 병렬 조회 후 각 항목에 추가.
     """
     n = min(max(n, 1), 100)
     now = time.time()
     if not refresh and _TOP_CACHE["data"] and now < _TOP_CACHE["expires"]:
         return _TOP_CACHE["data"]
     async with _TOP_LOCK:
-        # 락 대기 중 다른 코루틴이 캐시를 채웠을 수 있음 — 재확인
         now = time.time()
         if not refresh and _TOP_CACHE["data"] and now < _TOP_CACHE["expires"]:
             return _TOP_CACHE["data"]
         try:
             data = await asyncio.to_thread(_fetch_top_kiwoom, n)
+            # EPS 병렬 조회 (Naver Finance) — 실패 시 None으로 폴백
+            items = data.get("items", [])
+            try:
+                fund_results = await asyncio.wait_for(
+                    asyncio.gather(
+                        *[asyncio.to_thread(_fetch_fundamental, it["ticker"]) for it in items],
+                        return_exceptions=True,
+                    ),
+                    timeout=8.0,
+                )
+                for it, fund in zip(items, fund_results):
+                    eps = None
+                    if isinstance(fund, dict):
+                        eps = fund.get("eps")
+                    it["eps"] = eps
+            except Exception:
+                for it in items:
+                    it.setdefault("eps", None)
+            data["items"] = items
             _TOP_CACHE["data"] = data
             _TOP_CACHE["expires"] = now + _TOP_TTL
             return data

@@ -84,7 +84,7 @@ export default function Heatmap() {
     return () => clearInterval(id)
   }, [])
 
-  const filtered = items.filter(i => i.amount > 0)
+  const filtered = items.filter(i => i.amount > 0).slice(0, 20)
 
   const nivoData = {
     id: 'root',

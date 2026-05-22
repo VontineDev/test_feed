@@ -134,6 +134,51 @@ def _parse_naver_value(s: str) -> Optional[float]:
         return None
 
 
+_FUND_CACHE: dict = {}  # krx_code → {per, pbr, eps, dividend_yield, foreign_rate, _date}
+
+
+def _fetch_fundamental(krx_code: str) -> dict:
+    """Naver Finance Integration API에서 PER/PBR/EPS/배당수익률/외국인비율 조회.
+
+    URL: https://m.stock.naver.com/api/stock/{code}/integration
+    인증 불필요. 결과는 날짜 키로 당일 캐시.
+    """
+    empty: dict = {"per": None, "pbr": None, "eps": None, "dividend_yield": None, "foreign_rate": None}
+    if not HTTPX_OK or not str(krx_code).isdigit():
+        return empty
+    import datetime as _dt
+    today = _dt.date.today().isoformat()
+    cached = _FUND_CACHE.get(krx_code)
+    if cached and cached.get("_date") == today:
+        return {k: v for k, v in cached.items() if k != "_date"}
+    try:
+        r = _httpx.get(
+            f"https://m.stock.naver.com/api/stock/{krx_code}/integration",
+            timeout=5,
+        )
+        r.raise_for_status()
+        data = r.json()
+        result = dict(empty)
+        for item in (data.get("totalInfos") or data.get("totalInfoList") or []):
+            code = str(item.get("code") or "").upper()
+            val  = _parse_naver_value(str(item.get("value") or ""))
+            if code == "EPS":
+                result["eps"] = val
+            elif code == "PER":
+                result["per"] = val
+            elif code in ("PBR", "PBR배"):
+                result["pbr"] = val
+            elif code in ("DIV", "시가배당률"):
+                result["dividend_yield"] = val
+        fi = data.get("foreignRatioInfo") or {}
+        if fi.get("percent"):
+            result["foreign_rate"] = _parse_naver_value(str(fi["percent"]))
+        _FUND_CACHE[krx_code] = {**result, "_date": today}
+        return result
+    except Exception:
+        return empty
+
+
 def fetch_daily_flow(ticker: str) -> dict:
     """Fetch today's foreign/institutional net buy for a single KRX ticker.
 
