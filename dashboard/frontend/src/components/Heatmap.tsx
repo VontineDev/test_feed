@@ -164,13 +164,15 @@ export default function Heatmap() {
             label={(node) => {
               const d = node.data as unknown as { label?: string; change_pct?: number; stage?: number | null }
               if (!d.label) return ''
-              const { width, height } = node
+              const { width } = node
+              // 가로 텍스트 기준으로 width만 체크 (nivo 기본 labelSkipSize는 width+height 둘 다 검사해서 모바일에서 세로 셀 글씨가 사라짐)
+              if (width < 28) return ''
               const pct = d.change_pct ?? 0
               const sign = pct > 0 ? '+' : ''
               const pctStr = `${sign}${pct.toFixed(1)}%`
               const stageStr = d.stage != null ? `S${d.stage} ` : ''
-              // 한글 글자 너비 추정 ~11px @ 11px font
-              const maxChars = Math.floor(Math.min(width, height < width ? width : width) / 11) - 1
+              // 한글 ~11px per char
+              const maxChars = Math.max(1, Math.floor(width / 11) - 1)
               const full = `${stageStr}${d.label}  ${pctStr}`
               if (full.length <= maxChars) return full
               const nameMax = maxChars - pctStr.length - 2
@@ -178,10 +180,10 @@ export default function Heatmap() {
                 const name = d.label.length > nameMax ? d.label.slice(0, nameMax - 1) + '…' : d.label
                 return `${name}  ${pctStr}`
               }
-              return d.label.length > maxChars ? d.label.slice(0, maxChars - 1) + '…' : d.label
+              return maxChars >= 2 ? d.label.slice(0, maxChars - 1) + '…' : d.label.slice(0, 1)
             }}
             orientLabel={false}
-            labelSkipSize={36}
+            labelSkipSize={0}
             labelTextColor="#fff"
             tooltip={({ node }) => {
               const d = node.data as unknown as { item?: HeatmapItem }
