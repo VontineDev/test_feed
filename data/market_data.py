@@ -159,20 +159,21 @@ def _fetch_fundamental(krx_code: str) -> dict:
         r.raise_for_status()
         data = r.json()
         result = dict(empty)
+        # Naver integration API: code 필드는 소문자 camelCase
+        # 예) "eps", "per", "pbr", "dividendYieldRatio", "foreignRate"
         for item in (data.get("totalInfos") or data.get("totalInfoList") or []):
-            code = str(item.get("code") or "").upper()
+            code = str(item.get("code") or "")
             val  = _parse_naver_value(str(item.get("value") or ""))
-            if code == "EPS":
+            if code == "eps":
                 result["eps"] = val
-            elif code == "PER":
+            elif code == "per":
                 result["per"] = val
-            elif code in ("PBR", "PBR배"):
+            elif code == "pbr":
                 result["pbr"] = val
-            elif code in ("DIV", "시가배당률"):
+            elif code == "dividendYieldRatio":
                 result["dividend_yield"] = val
-        fi = data.get("foreignRatioInfo") or {}
-        if fi.get("percent"):
-            result["foreign_rate"] = _parse_naver_value(str(fi["percent"]))
+            elif code == "foreignRate":
+                result["foreign_rate"] = val
         _FUND_CACHE[krx_code] = {**result, "_date": today}
         return result
     except Exception:
