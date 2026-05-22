@@ -61,14 +61,14 @@ class TestSendWeeklyScreenerTargetChatId:
         Regression: ISSUE-003 — /screener 명령어가 채널에 브로드캐스트되는 문제
         target_chat_id 지정 시 채널 발송 없이 해당 chat_id에만 전송해야 함.
         """
-        from telegram_notify import send_weekly_screener
+        from telegram.telegram_notify import send_weekly_screener
 
         mock_post = AsyncMock(return_value=True)
         with (
-            patch("telegram_notify._get_token", return_value="tok"),
-            patch("telegram_notify._get_chat_id", return_value="DEFAULT_DM"),
-            patch("telegram_notify._get_channel_id", return_value="CHANNEL_ID"),
-            patch("telegram_notify._post_message", mock_post),
+            patch("telegram.telegram_notify._get_token", return_value="tok"),
+            patch("telegram.telegram_notify._get_chat_id", return_value="DEFAULT_DM"),
+            patch("telegram.telegram_notify._get_channel_id", return_value="CHANNEL_ID"),
+            patch("telegram.telegram_notify._post_message", mock_post),
         ):
             await send_weekly_screener(_SAMPLE, target_chat_id="USER_123")
 
@@ -81,14 +81,14 @@ class TestSendWeeklyScreenerTargetChatId:
     @pytest.mark.asyncio
     async def test_no_target_chat_id_broadcasts_to_channel(self):
         """target_chat_id 미지정 시 기존대로 DM + 채널 브로드캐스트."""
-        from telegram_notify import send_weekly_screener
+        from telegram.telegram_notify import send_weekly_screener
 
         mock_post = AsyncMock(return_value=True)
         with (
-            patch("telegram_notify._get_token", return_value="tok"),
-            patch("telegram_notify._get_chat_id", return_value="DEFAULT_DM"),
-            patch("telegram_notify._get_channel_id", return_value="CHANNEL_ID"),
-            patch("telegram_notify._post_message", mock_post),
+            patch("telegram.telegram_notify._get_token", return_value="tok"),
+            patch("telegram.telegram_notify._get_chat_id", return_value="DEFAULT_DM"),
+            patch("telegram.telegram_notify._get_channel_id", return_value="CHANNEL_ID"),
+            patch("telegram.telegram_notify._post_message", mock_post),
         ):
             await send_weekly_screener(_SAMPLE)
 
@@ -99,14 +99,14 @@ class TestSendWeeklyScreenerTargetChatId:
     @pytest.mark.asyncio
     async def test_target_chat_id_uses_specified_not_env_dm(self):
         """target_chat_id 지정 시 env var TELEGRAM_CHAT_ID 대신 해당 ID에 전송."""
-        from telegram_notify import send_weekly_screener
+        from telegram.telegram_notify import send_weekly_screener
 
         mock_post = AsyncMock(return_value=True)
         with (
-            patch("telegram_notify._get_token", return_value="tok"),
-            patch("telegram_notify._get_chat_id", return_value="DEFAULT_DM"),
-            patch("telegram_notify._get_channel_id", return_value=""),
-            patch("telegram_notify._post_message", mock_post),
+            patch("telegram.telegram_notify._get_token", return_value="tok"),
+            patch("telegram.telegram_notify._get_chat_id", return_value="DEFAULT_DM"),
+            patch("telegram.telegram_notify._get_channel_id", return_value=""),
+            patch("telegram.telegram_notify._post_message", mock_post),
         ):
             await send_weekly_screener(_SAMPLE, target_chat_id="CMD_USER")
 
@@ -124,8 +124,8 @@ class TestHandleScreenerPassesChatId:
         Regression: ISSUE-003 — _handle_screener가 명령어 발송자의 chat_id를
         target_chat_id로 전달해야 합니다.
         """
-        from telegram_bot import _handle_screener
-        from chart_screener import ScreenResult
+        from telegram.telegram_bot import _handle_screener
+        from analysis.chart_screener import ScreenResult
 
         fake_row = {
             "ticker": "005930.KS",
@@ -144,8 +144,8 @@ class TestHandleScreenerPassesChatId:
 
         mock_send = AsyncMock(return_value=True)
         with (
-            patch("db.load_chart_signals_latest", AsyncMock(return_value=("2026-W15", [fake_row]))),
-            patch("telegram_notify.send_weekly_screener", mock_send),
+            patch("core.db.load_chart_signals_latest", AsyncMock(return_value=("2026-W15", [fake_row]))),
+            patch("telegram.telegram_notify.send_weekly_screener", mock_send),
         ):
             http_mock = AsyncMock()
             pool_mock = AsyncMock()

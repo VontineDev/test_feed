@@ -130,7 +130,7 @@ def get_all_tickers(sector_map: dict[str, str] | None = None) -> list[tuple[str,
     import os
     if os.environ.get("KRX_OPENAPI_KEY"):
         try:
-            from krx_openapi import KRXOpenAPIClient
+            from data.krx_openapi import KRXOpenAPIClient
             bas_dd = (_date.today() - _date.resolution).strftime("%Y%m%d")
             client = KRXOpenAPIClient()
             tickers = client.get_all_tickers(bas_dd)
@@ -349,7 +349,7 @@ def screen_ticker(ticker: str, name: str, sector: str = "") -> Optional[ScreenRe
     krx_code = ticker.split(".")[0]
     if krx_code.isdigit() and len(krx_code) == 6:
         try:
-            from market_data import _fetch_fundamental
+            from data.market_data import _fetch_fundamental
             fund = _fetch_fundamental(krx_code)
             result.per = fund.get("per")
             result.pbr = fund.get("pbr")

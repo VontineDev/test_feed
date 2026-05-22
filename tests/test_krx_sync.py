@@ -254,7 +254,7 @@ class TestSyncKrxListings:
     @pytest.mark.asyncio
     async def test_upsert_returns_row_count(self):
         """Valid KOSPI row → upsert called, count == 1."""
-        from krx_sync import sync_krx_listings
+        from data.krx_sync import sync_krx_listings
 
         sample_row = {
             "ISU_CD": "KR7005930003", "ISU_SRT_CD": "005930",
@@ -264,7 +264,7 @@ class TestSyncKrxListings:
         }
         mock_pool, mock_conn = self._make_mock_pool()
 
-        with patch("krx_openapi.KRXOpenAPIClient") as MockClient:
+        with patch("data.krx_openapi.KRXOpenAPIClient") as MockClient:
             inst = MockClient.return_value
             inst.get_kospi_tickers.return_value = [sample_row]
             inst.get_kosdaq_tickers.return_value = []
@@ -276,11 +276,11 @@ class TestSyncKrxListings:
     @pytest.mark.asyncio
     async def test_no_api_response_raises(self):
         """Both markets returning empty → ValueError mentioning KRX_OPENAPI_KEY."""
-        from krx_sync import sync_krx_listings
+        from data.krx_sync import sync_krx_listings
 
         mock_pool = AsyncMock()
 
-        with patch("krx_openapi.KRXOpenAPIClient") as MockClient:
+        with patch("data.krx_openapi.KRXOpenAPIClient") as MockClient:
             inst = MockClient.return_value
             inst.get_kospi_tickers.return_value = []
             inst.get_kosdaq_tickers.return_value = []
@@ -292,12 +292,12 @@ class TestSyncKrxListings:
     @pytest.mark.asyncio
     async def test_all_invalid_rows_raises_before_delete(self):
         """Rows missing required fields → ValueError before DB is touched."""
-        from krx_sync import sync_krx_listings
+        from data.krx_sync import sync_krx_listings
 
         invalid_row = {"ISU_CD": "", "ISU_SRT_CD": "", "ISU_NM": ""}
         mock_pool = AsyncMock()
 
-        with patch("krx_openapi.KRXOpenAPIClient") as MockClient:
+        with patch("data.krx_openapi.KRXOpenAPIClient") as MockClient:
             inst = MockClient.return_value
             inst.get_kospi_tickers.return_value = [invalid_row]
             inst.get_kosdaq_tickers.return_value = []
@@ -309,13 +309,13 @@ class TestSyncKrxListings:
     @pytest.mark.asyncio
     async def test_kospi_and_kosdaq_both_upserted(self):
         """Rows from KOSPI and KOSDAQ are both processed → count == 2."""
-        from krx_sync import sync_krx_listings
+        from data.krx_sync import sync_krx_listings
 
         kospi_row  = {"ISU_CD": "KR7005930003", "ISU_SRT_CD": "005930", "ISU_NM": "삼성전자",  "LIST_DD": "19750611"}
         kosdaq_row = {"ISU_CD": "KR7086520006", "ISU_SRT_CD": "086520", "ISU_NM": "에코프로비엠", "LIST_DD": "20140425"}
         mock_pool, mock_conn = self._make_mock_pool()
 
-        with patch("krx_openapi.KRXOpenAPIClient") as MockClient:
+        with patch("data.krx_openapi.KRXOpenAPIClient") as MockClient:
             inst = MockClient.return_value
             inst.get_kospi_tickers.return_value  = [kospi_row]
             inst.get_kosdaq_tickers.return_value = [kosdaq_row]

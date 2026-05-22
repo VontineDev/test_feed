@@ -57,9 +57,9 @@ async def test_buy_happy_path_today():
         {"id": 42},                                    # INSERT RETURNING id
     ]
     sent = []
-    import telegram_trade
+    import telegram.telegram_trade as telegram_trade
     with patch.object(telegram_trade, "_send", side_effect=lambda *a, **kw: sent.append(a[3]) or asyncio.coroutine(lambda: None)()):
-        with patch("telegram_trade._send", new_callable=AsyncMock) as mock_send:
+        with patch("telegram.telegram_trade._send", new_callable=AsyncMock) as mock_send:
             await telegram_trade.handle_buy(
                 MagicMock(), "TOKEN", "CHAT", ["005930", "70000", "100"], pool
             )
@@ -78,8 +78,8 @@ async def test_buy_past_date_override():
         None,
         {"id": 10},
     ]
-    import telegram_trade
-    with patch("telegram_trade._send", new_callable=AsyncMock) as mock_send:
+    import telegram.telegram_trade as telegram_trade
+    with patch("telegram.telegram_trade._send", new_callable=AsyncMock) as mock_send:
         await telegram_trade.handle_buy(
             MagicMock(), "TOKEN", "CHAT",
             ["005930", "68000", "50", "20260501"], pool
@@ -96,8 +96,8 @@ async def test_buy_past_date_override():
 async def test_buy_missing_args():
     """args 부족 → 오류 메시지, DB 저장 없음."""
     pool, conn = _make_pool()
-    import telegram_trade
-    with patch("telegram_trade._send", new_callable=AsyncMock) as mock_send:
+    import telegram.telegram_trade as telegram_trade
+    with patch("telegram.telegram_trade._send", new_callable=AsyncMock) as mock_send:
         await telegram_trade.handle_buy(
             MagicMock(), "TOKEN", "CHAT", ["005930"], pool
         )
@@ -110,8 +110,8 @@ async def test_buy_missing_args():
 async def test_buy_invalid_price():
     """가격 비숫자 → 오류 메시지."""
     pool, conn = _make_pool()
-    import telegram_trade
-    with patch("telegram_trade._send", new_callable=AsyncMock) as mock_send:
+    import telegram.telegram_trade as telegram_trade
+    with patch("telegram.telegram_trade._send", new_callable=AsyncMock) as mock_send:
         await telegram_trade.handle_buy(
             MagicMock(), "TOKEN", "CHAT", ["005930", "abc", "100"], pool
         )
@@ -128,8 +128,8 @@ async def test_buy_no_stage_signal():
         None,                               # no aftermarket
         {"id": 99},                         # INSERT OK
     ]
-    import telegram_trade
-    with patch("telegram_trade._send", new_callable=AsyncMock) as mock_send:
+    import telegram.telegram_trade as telegram_trade
+    with patch("telegram.telegram_trade._send", new_callable=AsyncMock) as mock_send:
         await telegram_trade.handle_buy(
             MagicMock(), "TOKEN", "CHAT", ["999999", "5000", "200"], pool
         )
@@ -157,8 +157,8 @@ async def test_sell_fifo_happy_path():
             "pnl": 350000, "pnl_pct": 5.0,
         },
     ]
-    import telegram_trade
-    with patch("telegram_trade._send", new_callable=AsyncMock) as mock_send:
+    import telegram.telegram_trade as telegram_trade
+    with patch("telegram.telegram_trade._send", new_callable=AsyncMock) as mock_send:
         await telegram_trade.handle_sell(
             MagicMock(), "TOKEN", "CHAT", ["005930", "73500"], pool
         )
@@ -173,8 +173,8 @@ async def test_sell_no_open_position():
     """미청산 포지션 없음 → 안내 메시지."""
     pool, conn = _make_pool()
     conn.fetchrow.return_value = None  # FOR UPDATE → None
-    import telegram_trade
-    with patch("telegram_trade._send", new_callable=AsyncMock) as mock_send:
+    import telegram.telegram_trade as telegram_trade
+    with patch("telegram.telegram_trade._send", new_callable=AsyncMock) as mock_send:
         await telegram_trade.handle_sell(
             MagicMock(), "TOKEN", "CHAT", ["005930", "73500"], pool
         )
@@ -186,8 +186,8 @@ async def test_sell_no_open_position():
 async def test_sell_missing_args():
     """args 부족 → 오류 메시지."""
     pool, conn = _make_pool()
-    import telegram_trade
-    with patch("telegram_trade._send", new_callable=AsyncMock) as mock_send:
+    import telegram.telegram_trade as telegram_trade
+    with patch("telegram.telegram_trade._send", new_callable=AsyncMock) as mock_send:
         await telegram_trade.handle_sell(
             MagicMock(), "TOKEN", "CHAT", ["005930"], pool
         )
@@ -200,8 +200,8 @@ async def test_sell_missing_args():
 async def test_port_empty():
     """보유 없음 → 빈 포트폴리오 메시지."""
     pool, conn = _make_pool(fetch_return=[])
-    import telegram_trade
-    with patch("telegram_trade._send", new_callable=AsyncMock) as mock_send:
+    import telegram.telegram_trade as telegram_trade
+    with patch("telegram.telegram_trade._send", new_callable=AsyncMock) as mock_send:
         await telegram_trade.handle_port(
             MagicMock(), "TOKEN", "CHAT", pool
         )
@@ -221,8 +221,7 @@ async def test_port_with_positions_yfinance_ok():
         }
     ]
     import pandas as pd
-    import telegram_trade
-
+    import telegram.telegram_trade as telegram_trade
     mock_df = MagicMock()
     mock_df.__contains__ = MagicMock(return_value=True)
     mock_df.__getitem__ = MagicMock(return_value=pd.Series({"005930.KS": 73500}))
@@ -233,7 +232,7 @@ async def test_port_with_positions_yfinance_ok():
         return {"005930.KS": 73500}
 
     with patch("asyncio.to_thread", new_callable=AsyncMock, return_value={"005930.KS": 73500}):
-        with patch("telegram_trade._send", new_callable=AsyncMock) as mock_send:
+        with patch("telegram.telegram_trade._send", new_callable=AsyncMock) as mock_send:
             await telegram_trade.handle_port(
                 MagicMock(), "TOKEN", "CHAT", pool
             )
@@ -253,10 +252,10 @@ async def test_port_yfinance_failure_fallback():
             "qty": 50, "signal_date": None, "stage_at_entry": None,
         }
     ]
-    import telegram_trade
+    import telegram.telegram_trade as telegram_trade
     with patch("asyncio.to_thread", new_callable=AsyncMock,
                return_value={"005930.KS": None}):
-        with patch("telegram_trade._send", new_callable=AsyncMock) as mock_send:
+        with patch("telegram.telegram_trade._send", new_callable=AsyncMock) as mock_send:
             await telegram_trade.handle_port(
                 MagicMock(), "TOKEN", "CHAT", pool
             )
@@ -270,8 +269,8 @@ async def test_port_yfinance_failure_fallback():
 async def test_pnl_all_no_data():
     """실현 거래 없음 → '없음' 안내."""
     pool, conn = _make_pool(fetch_return=[])
-    import telegram_trade
-    with patch("telegram_trade._send", new_callable=AsyncMock) as mock_send:
+    import telegram.telegram_trade as telegram_trade
+    with patch("telegram.telegram_trade._send", new_callable=AsyncMock) as mock_send:
         await telegram_trade.handle_pnl(
             MagicMock(), "TOKEN", "CHAT", [], pool
         )
@@ -286,8 +285,8 @@ async def test_pnl_week():
         {"pnl": 300000, "pnl_pct": 4.3, "stage_at_entry": 1},
         {"pnl": -150000, "pnl_pct": -2.1, "stage_at_entry": 2},
     ]
-    import telegram_trade
-    with patch("telegram_trade._send", new_callable=AsyncMock) as mock_send:
+    import telegram.telegram_trade as telegram_trade
+    with patch("telegram.telegram_trade._send", new_callable=AsyncMock) as mock_send:
         await telegram_trade.handle_pnl(
             MagicMock(), "TOKEN", "CHAT", ["week"], pool
         )
@@ -302,8 +301,8 @@ async def test_pnl_month():
     conn.fetch.return_value = [
         {"pnl": 500000, "pnl_pct": 7.1, "stage_at_entry": 1},
     ]
-    import telegram_trade
-    with patch("telegram_trade._send", new_callable=AsyncMock) as mock_send:
+    import telegram.telegram_trade as telegram_trade
+    with patch("telegram.telegram_trade._send", new_callable=AsyncMock) as mock_send:
         await telegram_trade.handle_pnl(
             MagicMock(), "TOKEN", "CHAT", ["month"], pool
         )
@@ -319,8 +318,8 @@ async def test_pnl_stage_breakdown():
         {"pnl": 180000, "pnl_pct": 2.6, "stage_at_entry": 1},
         {"pnl": -80000, "pnl_pct": -1.1, "stage_at_entry": 2},
     ]
-    import telegram_trade
-    with patch("telegram_trade._send", new_callable=AsyncMock) as mock_send:
+    import telegram.telegram_trade as telegram_trade
+    with patch("telegram.telegram_trade._send", new_callable=AsyncMock) as mock_send:
         await telegram_trade.handle_pnl(
             MagicMock(), "TOKEN", "CHAT", ["all"], pool
         )
@@ -340,7 +339,7 @@ async def test_save_trade_date_object():
         None,
         {"id": 7},
     ]
-    from db import save_trade
+    from core.db import save_trade
     result = await save_trade(
         pool,
         ticker="005930.KS",
@@ -372,7 +371,7 @@ async def test_close_position_fifo_uses_classified_date():
             "pnl": 300000, "pnl_pct": 4.29,
         },
     ]
-    from db import close_position
+    from core.db import close_position
     result = await close_position(
         pool,
         ticker="005930.KS",
@@ -391,7 +390,7 @@ async def test_close_position_fifo_uses_classified_date():
 async def test_get_pnl_summary_returns_dict():
     """get_pnl_summary — 빈 결과에서도 dict 구조 보장."""
     pool, conn = _make_pool(fetch_return=[])
-    from db import get_pnl_summary
+    from core.db import get_pnl_summary
     result = await get_pnl_summary(pool, period="all")
     assert "trade_cnt" in result
     assert "total_pnl" in result

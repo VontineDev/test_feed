@@ -41,7 +41,7 @@ class TestFetchWeeklyOhlcvUsesTickerInstance:
 
     def test_uses_ticker_history_not_download(self):
         """Verify the implementation calls Ticker.history(), not yf.download()."""
-        import chart_screener
+        import analysis.chart_screener as chart_screener
         import inspect
         src = inspect.getsource(chart_screener.fetch_weekly_ohlcv)
         assert "yf.Ticker(" in src, "fetch_weekly_ohlcv must use yf.Ticker()"
@@ -52,7 +52,7 @@ class TestFetchWeeklyOhlcvUsesTickerInstance:
         Regression: ISSUE-004 — concurrent fetch_weekly_ohlcv() calls must not
         mix data between tickers. Each ticker must get its own price.
         """
-        from chart_screener import fetch_weekly_ohlcv
+        from analysis.chart_screener import fetch_weekly_ohlcv
 
         ticker_prices = {
             "AAA.KS": 10_000.0,
@@ -67,7 +67,7 @@ class TestFetchWeeklyOhlcvUsesTickerInstance:
             return mock
 
         results = {}
-        with patch("chart_screener.yf.Ticker", side_effect=_fake_ticker_cls):
+        with patch("analysis.chart_screener.yf.Ticker", side_effect=_fake_ticker_cls):
             with ThreadPoolExecutor(max_workers=4) as ex:
                 futures = {ex.submit(fetch_weekly_ohlcv, t): t for t in ticker_prices}
                 for f in as_completed(futures):
@@ -84,11 +84,11 @@ class TestFetchWeeklyOhlcvUsesTickerInstance:
 
     def test_returns_flat_columns(self):
         """Verify flat column names after history() call."""
-        from chart_screener import fetch_weekly_ohlcv
+        from analysis.chart_screener import fetch_weekly_ohlcv
 
         mock_ticker = MagicMock()
         mock_ticker.history.return_value = _make_ohlcv_df(50_000.0)
-        with patch("chart_screener.yf.Ticker", return_value=mock_ticker):
+        with patch("analysis.chart_screener.yf.Ticker", return_value=mock_ticker):
             df = fetch_weekly_ohlcv("TEST.KS")
 
         assert df is not None
@@ -97,22 +97,22 @@ class TestFetchWeeklyOhlcvUsesTickerInstance:
 
     def test_returns_none_when_insufficient_rows(self):
         """Fewer than 60 valid Close rows → None."""
-        from chart_screener import fetch_weekly_ohlcv
+        from analysis.chart_screener import fetch_weekly_ohlcv
 
         mock_ticker = MagicMock()
         mock_ticker.history.return_value = _make_ohlcv_df(50_000.0, rows=30)
-        with patch("chart_screener.yf.Ticker", return_value=mock_ticker):
+        with patch("analysis.chart_screener.yf.Ticker", return_value=mock_ticker):
             result = fetch_weekly_ohlcv("SPARSE.KS")
 
         assert result is None
 
     def test_returns_none_on_empty_dataframe(self):
         """Empty DataFrame from history() → None."""
-        from chart_screener import fetch_weekly_ohlcv
+        from analysis.chart_screener import fetch_weekly_ohlcv
 
         mock_ticker = MagicMock()
         mock_ticker.history.return_value = pd.DataFrame()
-        with patch("chart_screener.yf.Ticker", return_value=mock_ticker):
+        with patch("analysis.chart_screener.yf.Ticker", return_value=mock_ticker):
             result = fetch_weekly_ohlcv("EMPTY.KS")
 
         assert result is None

@@ -27,7 +27,7 @@ class TestLmstudioIsAlive:
         Found by /qa on 2026-04-06
         Report: .gstack/qa-reports/qa-report-korean-stock-alert-2026-04-06.md
         """
-        from summarizer import _lmstudio_is_alive
+        from reports.summarizer import _lmstudio_is_alive
 
         models_response = MagicMock()
         models_response.status_code = 200
@@ -49,7 +49,7 @@ class TestLmstudioIsAlive:
 
     @pytest.mark.asyncio
     async def test_returns_true_when_both_endpoints_succeed(self):
-        from summarizer import _lmstudio_is_alive
+        from reports.summarizer import _lmstudio_is_alive
 
         models_response = MagicMock()
         models_response.status_code = 200
@@ -69,7 +69,7 @@ class TestLmstudioIsAlive:
 
     @pytest.mark.asyncio
     async def test_returns_false_when_models_endpoint_fails(self):
-        from summarizer import _lmstudio_is_alive
+        from reports.summarizer import _lmstudio_is_alive
 
         models_response = MagicMock()
         models_response.status_code = 503
@@ -82,7 +82,7 @@ class TestLmstudioIsAlive:
 
     @pytest.mark.asyncio
     async def test_returns_false_on_network_error(self):
-        from summarizer import _lmstudio_is_alive
+        from reports.summarizer import _lmstudio_is_alive
 
         http = AsyncMock(spec=httpx.AsyncClient)
         http.get.side_effect = httpx.ConnectError("connection refused")
@@ -103,7 +103,7 @@ class TestCallOllamaNativeNoThink:
         Found by /qa on 2026-04-06
         Report: .gstack/qa-reports/qa-report-korean-stock-alert-2026-04-06.md
         """
-        from summarizer import _call_ollama_native
+        from reports.summarizer import _call_ollama_native
 
         resp = MagicMock()
         resp.status_code = 200
@@ -128,7 +128,7 @@ class TestCallOllamaNativeNoThink:
 
     @pytest.mark.asyncio
     async def test_no_think_prefix_not_added_when_thinking_enabled(self):
-        from summarizer import _call_ollama_native
+        from reports.summarizer import _call_ollama_native
 
         resp = MagicMock()
         resp.status_code = 200
@@ -153,7 +153,7 @@ class TestCallOllamaNativeNoThink:
 
     @pytest.mark.asyncio
     async def test_think_false_sent_to_api_when_disabled(self):
-        from summarizer import _call_ollama_native
+        from reports.summarizer import _call_ollama_native
 
         resp = MagicMock()
         resp.status_code = 200
@@ -185,7 +185,7 @@ class TestCallOllamaNativeRepeatPenalty:
         many times in the SIGNAL_PROMPT JSON template, causing empty Ollama responses.
         Fix: repeat_penalty set to 1.0 (disabled).
         """
-        from summarizer import _call_ollama_native
+        from reports.summarizer import _call_ollama_native
 
         resp = MagicMock()
         resp.status_code = 200
@@ -214,7 +214,7 @@ class TestSummarizeOllamaMaxTokens:
         Regression: ISSUE-004 — max_tokens=300 was exhausted by ~290-token <think>
         block, leaving no room for the actual Korean summary. Raised to 600.
         """
-        from summarizer import _summarize_ollama
+        from reports.summarizer import _summarize_ollama
 
         resp = MagicMock()
         resp.status_code = 200
@@ -245,7 +245,7 @@ class TestCallOllamaNativeThinkingContent:
         message.content is empty. The error message should include thinking length
         so the operator knows to increase max_tokens.
         """
-        from summarizer import _call_ollama_native
+        from reports.summarizer import _call_ollama_native
 
         resp = MagicMock()
         resp.status_code = 200
@@ -266,7 +266,7 @@ class TestCallOllamaNativeThinkingContent:
     @pytest.mark.asyncio
     async def test_empty_content_without_thinking_raises_generic_error(self):
         """Empty content with no thinking raises the legacy generic error."""
-        from summarizer import _call_ollama_native
+        from reports.summarizer import _call_ollama_native
 
         resp = MagicMock()
         resp.status_code = 200
@@ -286,7 +286,7 @@ class TestCallOllamaNativeThinkingContent:
         Without this check the caller retries twice against a missing model,
         then falls to LM Studio — all with a misleading 'empty response' log.
         """
-        from summarizer import _call_ollama_native
+        from reports.summarizer import _call_ollama_native
 
         resp = MagicMock()
         resp.status_code = 200
@@ -321,7 +321,7 @@ class TestOllamaTimeoutLogging:
     async def test_bare_timeout_error_raises_descriptive_value_error(self):
         """Bare TimeoutError() (no args, str==empty) must NOT reach the caller.
         _call_ollama_native must convert it to ValueError with a useful message."""
-        from summarizer import _call_ollama_native
+        from reports.summarizer import _call_ollama_native
 
         http = AsyncMock(spec=httpx.AsyncClient)
         http.post.side_effect = TimeoutError()  # bare TimeoutError, str == ""
@@ -341,7 +341,7 @@ class TestOllamaTimeoutLogging:
     @pytest.mark.asyncio
     async def test_httpx_timeout_exception_raises_descriptive_value_error(self):
         """httpx.ReadTimeout must also be wrapped with a descriptive message."""
-        from summarizer import _call_ollama_native
+        from reports.summarizer import _call_ollama_native
 
         http = AsyncMock(spec=httpx.AsyncClient)
         http.post.side_effect = httpx.ReadTimeout("")  # httpx timeout, empty str too

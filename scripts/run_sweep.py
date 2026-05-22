@@ -121,7 +121,7 @@ def sweep_backtest(
 
     반환: DataFrame (1행 = 1 파라미터 조합)
     """
-    from backtest_engine import (
+    from analysis.backtest_engine import (
         BacktestConfig,
         _replay_ichimoku,
         _replay_stage,
@@ -131,11 +131,11 @@ def sweep_backtest(
         _build_price_lookup,
         _compute_sell_signals_and_s2,
     )
-    from chart_screener import get_all_tickers, fetch_kind_sector_map
-    from ohlcv_cache import batch_fetch_cached, fetch_index_cached
+    from analysis.chart_screener import get_all_tickers, fetch_kind_sector_map
+    from core.ohlcv_cache import batch_fetch_cached, fetch_index_cached
 
     # ── 1. 티커 목록 ───────────────────────────────────────────────
-    from backtest_engine import TX_COST_DEFAULT, _fetch_single_ohlcv, _fetch_index
+    from analysis.backtest_engine import TX_COST_DEFAULT, _fetch_single_ohlcv, _fetch_index
     from datetime import timedelta
 
     fetch_start = min(train_start, val_start) - timedelta(days=760)
@@ -154,7 +154,7 @@ def sweep_backtest(
         )
         kospi_df = fetch_index_cached("^KS11", "IDX", fetch_start, fetch_end, dsn, _fetch_index)
     else:
-        from backtest_engine import _batch_fetch_ohlcv
+        from analysis.backtest_engine import _batch_fetch_ohlcv
         ticker_syms = [t for t, _, _ in tickers]
         ohlcv_map   = _batch_fetch_ohlcv(ticker_syms, fetch_start, fetch_end, workers)
         kospi_df    = _fetch_index("^KS11", fetch_start, fetch_end)
@@ -166,7 +166,7 @@ def sweep_backtest(
     flow_lookup = None
     if dsn:
         try:
-            from ohlcv_cache import load_flow_data
+            from core.ohlcv_cache import load_flow_data
             ticker_syms = [t for t, _, _ in tickers]
             flow_lookup = load_flow_data(dsn, ticker_syms, min(train_start, val_start), fetch_end)
             logger.info("[sweep] 수급 데이터 %d건 로드", len(flow_lookup))
@@ -178,7 +178,7 @@ def sweep_backtest(
     if dsn:
         try:
             import asyncio as _asyncio
-            from db import get_stage3_peakout_map as _get_peakout
+            from core.db import get_stage3_peakout_map as _get_peakout
             ticker_syms = [t for t, _, _ in tickers]
             stage3_peakout_map = _asyncio.run(
                 _get_peakout(None, ticker_syms,
@@ -343,7 +343,7 @@ def main() -> None:
             from urllib.parse import quote
             dsn = f"postgresql://{db_user}:{quote(db_pass)}@{db_host}:{db_port}/{db_name}"
 
-    from chart_screener import get_all_tickers, fetch_kind_sector_map
+    from analysis.chart_screener import get_all_tickers, fetch_kind_sector_map
     sector_map  = fetch_kind_sector_map()
     all_tickers = get_all_tickers(sector_map=sector_map if sector_map else None)
 

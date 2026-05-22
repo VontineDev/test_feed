@@ -37,7 +37,7 @@ def test_fetch_usd_krw_returns_float():
     """yfinance returns DataFrame with Close=[1470.5] → result == 1470.5"""
     mock_ticker = MagicMock()
     mock_ticker.history.return_value = _make_hist(1470.5)
-    with patch("market_data.yf") as mock_yf, patch("market_data.YFINANCE_OK", True):
+    with patch("data.market_data.yf") as mock_yf, patch("data.market_data.YFINANCE_OK", True):
         mock_yf.Ticker.return_value = mock_ticker
         result = _fetch_usd_krw_sync()
     assert result == 1470.5
@@ -47,7 +47,7 @@ def test_fetch_usd_krw_empty_hist_returns_none():
     """yfinance returns empty DataFrame → result is None"""
     mock_ticker = MagicMock()
     mock_ticker.history.return_value = pd.DataFrame({"Close": []})
-    with patch("market_data.yf") as mock_yf, patch("market_data.YFINANCE_OK", True):
+    with patch("data.market_data.yf") as mock_yf, patch("data.market_data.YFINANCE_OK", True):
         mock_yf.Ticker.return_value = mock_ticker
         result = _fetch_usd_krw_sync()
     assert result is None
@@ -57,7 +57,7 @@ def test_fetch_usd_krw_exception_returns_none():
     """yfinance raises Exception → result is None (no crash)"""
     mock_ticker = MagicMock()
     mock_ticker.history.side_effect = Exception("network error")
-    with patch("market_data.yf") as mock_yf, patch("market_data.YFINANCE_OK", True):
+    with patch("data.market_data.yf") as mock_yf, patch("data.market_data.YFINANCE_OK", True):
         mock_yf.Ticker.return_value = mock_ticker
         result = _fetch_usd_krw_sync()
     assert result is None
@@ -71,7 +71,7 @@ def test_fetch_usd_krw_exception_returns_none():
 async def test_get_macro_context_fresh():
     """USD/KRW fetch succeeds → MacroContext(usd_krw=1470.5, is_fresh=True)"""
     with (
-        patch("market_data._fetch_usd_krw_sync", return_value=1470.5),
+        patch("data.market_data._fetch_usd_krw_sync", return_value=1470.5),
         patch.dict("os.environ", {"KOREA_BASE_RATE": "2.5"}),
     ):
         ctx = await get_macro_context()
@@ -85,7 +85,7 @@ async def test_get_macro_context_fresh():
 async def test_get_macro_context_usd_krw_fails():
     """USD/KRW fetch returns None → is_fresh=False, base_rate still set"""
     with (
-        patch("market_data._fetch_usd_krw_sync", return_value=None),
+        patch("data.market_data._fetch_usd_krw_sync", return_value=None),
         patch.dict("os.environ", {"KOREA_BASE_RATE": "2.5"}),
     ):
         ctx = await get_macro_context()
@@ -99,7 +99,7 @@ async def test_get_macro_context_default_base_rate():
     """No KOREA_BASE_RATE env var → defaults to 2.5"""
     env = {k: v for k, v in __import__("os").environ.items() if k != "KOREA_BASE_RATE"}
     with (
-        patch("market_data._fetch_usd_krw_sync", return_value=1400.0),
+        patch("data.market_data._fetch_usd_krw_sync", return_value=1400.0),
         patch.dict("os.environ", env, clear=True),
     ):
         ctx = await get_macro_context()
@@ -110,7 +110,7 @@ async def test_get_macro_context_default_base_rate():
 async def test_get_macro_context_bad_base_rate():
     """KOREA_BASE_RATE='not_a_number' → korea_base_rate is None (graceful)"""
     with (
-        patch("market_data._fetch_usd_krw_sync", return_value=1400.0),
+        patch("data.market_data._fetch_usd_krw_sync", return_value=1400.0),
         patch.dict("os.environ", {"KOREA_BASE_RATE": "not_a_number"}),
     ):
         ctx = await get_macro_context()
@@ -158,7 +158,7 @@ def test_build_macro_section_full():
 @pytest.mark.asyncio
 async def test_detect_signal_macro_none_no_injection():
     """macro=None → prompt does not contain 'Macro context'"""
-    from signal_detector import detect_signal
+    from analysis.signal_detector import detect_signal
 
     captured_prompt: list[str] = []
 
@@ -166,8 +166,8 @@ async def test_detect_signal_macro_none_no_injection():
         captured_prompt.append(prompt)
         return '{"direction":"NONE","strength":0,"reason":"테스트","tickers":[]}'
 
-    with patch("signal_detector._ollama_is_alive", return_value=True), \
-         patch("signal_detector._call_ollama_native", side_effect=_fake_call):
+    with patch("analysis.signal_detector._ollama_is_alive", return_value=True), \
+         patch("analysis.signal_detector._call_ollama_native", side_effect=_fake_call):
         import httpx
         async with httpx.AsyncClient() as http:
             await detect_signal("test title", "테스트 요약", http=http, macro=None)
@@ -179,7 +179,7 @@ async def test_detect_signal_macro_none_no_injection():
 @pytest.mark.asyncio
 async def test_detect_signal_macro_present_injected():
     """macro provided → 'USD/KRW' appears in prompt"""
-    from signal_detector import detect_signal
+    from analysis.signal_detector import detect_signal
 
     captured_prompt: list[str] = []
 
@@ -189,8 +189,8 @@ async def test_detect_signal_macro_present_injected():
 
     macro = MacroContext(usd_krw=1470.5, korea_base_rate=2.5, fetched_at="ts", is_fresh=True)
 
-    with patch("signal_detector._ollama_is_alive", return_value=True), \
-         patch("signal_detector._call_ollama_native", side_effect=_fake_call):
+    with patch("analysis.signal_detector._ollama_is_alive", return_value=True), \
+         patch("analysis.signal_detector._call_ollama_native", side_effect=_fake_call):
         import httpx
         async with httpx.AsyncClient() as http:
             await detect_signal("test title", "테스트 요약", http=http, macro=macro)
@@ -206,7 +206,7 @@ async def test_detect_signal_macro_present_injected():
 @pytest.mark.asyncio
 async def test_save_signal_with_macro_floats():
     """INSERT receives macro_usd_krw=1470.5, macro_base_rate=2.5"""
-    from db import save_signal
+    from core.db import save_signal
 
     captured: list[tuple] = []
 
@@ -244,7 +244,7 @@ async def test_save_signal_with_macro_floats():
 @pytest.mark.asyncio
 async def test_save_signal_without_macro_floats():
     """No macro args → INSERT succeeds, macro positions are None"""
-    from db import save_signal
+    from core.db import save_signal
 
     captured: list[tuple] = []
 

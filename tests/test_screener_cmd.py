@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 
 
 async def main():
-    from db import create_pool, get_dsn, load_chart_signals_latest
-    from chart_screener import ScreenResult
-    from telegram_notify import send_weekly_screener, _get_token, _get_chat_id, _get_channel_id
+    from core.db import create_pool, get_dsn, load_chart_signals_latest
+    from analysis.chart_screener import ScreenResult
+    from telegram.telegram_notify import send_weekly_screener, _get_token, _get_chat_id, _get_channel_id
 
     # ── 환경변수 확인 ──────────────────────────────────────────
     try:
@@ -45,8 +45,8 @@ async def main():
 
     if not rows:
         logger.info("DB에 결과 없음 — 차트 스크리닝 직접 실행 중 (~14분)...")
-        from chart_screener import run_weekly_screen
-        from db import save_chart_signals
+        from analysis.chart_screener import run_weekly_screen
+        from core.db import save_chart_signals
         loop = asyncio.get_running_loop()
         results_live = await loop.run_in_executor(None, run_weekly_screen)
         saved = await save_chart_signals(pool, results_live)

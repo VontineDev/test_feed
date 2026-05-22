@@ -19,7 +19,7 @@ import pytest
 
 def _captured_message(entries, monkeypatch, target_chat_id=None) -> str:
     """send_watchlist_brief가 _post_message에 넘기는 message 캡처."""
-    import telegram_notify
+    import telegram.telegram_notify as telegram_notify
     captured = {}
 
     async def fake_post(http, token, chat_id, message, label="", parse_mode=""):
@@ -179,19 +179,19 @@ class TestHandleWatchlist:
         mock_send = AsyncMock(return_value=True)
 
         async def run():
-            import telegram_bot
+            import telegram.telegram_bot as telegram_bot
             monkeypatch.setattr(telegram_bot, "_build_watchlist_entries_ref",
                                 mock_build, raising=False)
 
             # patch imports inside _handle_watchlist
-            with patch("telegram_bot._build_watchlist_entries_ref", mock_build, create=True), \
+            with patch("telegram.telegram_bot._build_watchlist_entries_ref", mock_build, create=True), \
                  patch("run_scheduler._build_watchlist_entries", mock_build, create=False):
                 import importlib
                 import run_scheduler
                 original = run_scheduler._build_watchlist_entries
                 run_scheduler._build_watchlist_entries = mock_build
 
-                import telegram_notify
+                import telegram.telegram_notify as telegram_notify
                 original_send = telegram_notify.send_watchlist_brief
                 telegram_notify.send_watchlist_brief = mock_send
 
@@ -212,7 +212,7 @@ class TestHandleWatchlist:
 
     def test_no_pool_sends_error(self, monkeypatch):
         async def run():
-            import telegram_bot
+            import telegram.telegram_bot as telegram_bot
             sent = {}
 
             async def fake_plain(http, chat_id, text):

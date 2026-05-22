@@ -104,8 +104,8 @@ def _ichi_stub(
 @contextmanager
 def _mock_ticker(raw_df: pd.DataFrame, ichi_df: pd.DataFrame):
     """fetch_weekly_ohlcv + calc_ichimoku 동시 패치."""
-    with patch("chart_screener.fetch_weekly_ohlcv", return_value=raw_df):
-        with patch("chart_screener.calc_ichimoku", return_value=ichi_df):
+    with patch("analysis.chart_screener.fetch_weekly_ohlcv", return_value=raw_df):
+        with patch("analysis.chart_screener.calc_ichimoku", return_value=ichi_df):
             yield
 
 
@@ -241,7 +241,7 @@ class TestConditionF:
 
 class TestEdgeCases:
     def test_returns_none_when_fetch_fails(self):
-        with patch("chart_screener.fetch_weekly_ohlcv", return_value=None):
+        with patch("analysis.chart_screener.fetch_weekly_ohlcv", return_value=None):
             assert screen_ticker("INVALID.KS", "없는종목") is None
 
     def test_returns_none_when_data_is_stale(self):
@@ -309,7 +309,7 @@ class TestFetchKindSectorMap:
     def test_happy_path_builds_dict(self):
         """유효한 EUC-KR HTML 반환 시 종목코드 → 업종 dict 반환."""
         from unittest.mock import MagicMock
-        from chart_screener import fetch_kind_sector_map
+        from analysis.chart_screener import fetch_kind_sector_map
 
         # 미니멀 EUC-KR HTML: 종목코드/업종 컬럼 포함
         html = """<html><body><table>
@@ -330,7 +330,7 @@ class TestFetchKindSectorMap:
 
     def test_kind_down_returns_empty_dict(self):
         """httpx.get 예외 발생 시 빈 dict 반환 (서비스 중단 대응)."""
-        from chart_screener import fetch_kind_sector_map
+        from analysis.chart_screener import fetch_kind_sector_map
 
         with patch("httpx.get", side_effect=Exception("connection refused")):
             result = fetch_kind_sector_map()
@@ -340,7 +340,7 @@ class TestFetchKindSectorMap:
     def test_empty_html_returns_empty_dict(self):
         """tr 없는 HTML 반환 시 빈 dict 반환 (파싱 실패 대응)."""
         from unittest.mock import MagicMock
-        from chart_screener import fetch_kind_sector_map
+        from analysis.chart_screener import fetch_kind_sector_map
 
         mock_resp = MagicMock()
         mock_resp.content = b"<html></html>"
@@ -365,8 +365,8 @@ class TestSaveChartSignalsColumns:
     async def test_insert_includes_high_w_and_volume_w(self):
         """Verify conn.execute receives 14 positional parameters ($1..$14)."""
         from unittest.mock import AsyncMock, MagicMock, patch
-        from db import save_chart_signals
-        from chart_screener import ScreenResult
+        from core.db import save_chart_signals
+        from analysis.chart_screener import ScreenResult
         from datetime import datetime, timezone
 
         result = ScreenResult(
@@ -419,7 +419,7 @@ class TestSaveChartSignalsColumns:
     @pytest.mark.asyncio
     async def test_screen_result_high_w_volume_w_default_none(self):
         """New fields default to None — existing ScreenResult() callers are backward-compatible."""
-        from chart_screener import ScreenResult
+        from analysis.chart_screener import ScreenResult
         from datetime import datetime, timezone
 
         r = ScreenResult(

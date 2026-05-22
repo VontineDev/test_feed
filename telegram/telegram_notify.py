@@ -1,4 +1,4 @@
-"""
+﻿"""
 telegram_notify.py  —  Telegram 알림 모듈
 ────────────────────────────────────────────────────────────
 신규 기사 수집 시 Telegram 봇으로 즉시 알림 전송.
@@ -218,7 +218,7 @@ async def send_signal(
         return text
 
     # ticker_symbols: {LLM추출명 → yfinance 심볼} — 심볼이 있으면 한글명+코드 표시
-    from ticker_cache import ticker_cache as _tc
+    from core.ticker_cache import ticker_cache as _tc
     def _fmt_ticker(name: str) -> str:
         sym = getattr(signal, "ticker_symbols", {}).get(name, "")
         ko  = _tc.get_name(sym) if sym else ""
@@ -293,7 +293,7 @@ async def send_weekly_screener(
         """MarkdownV2 인라인 코드 내부 — 백틱과 백슬래시만 이스케이프."""
         return text.replace("\\", "\\\\").replace("`", "\\`")
 
-    from chart_screener import current_week_of
+    from analysis.chart_screener import current_week_of
     week = current_week_of()
 
     if not results:
@@ -315,7 +315,7 @@ async def send_weekly_screener(
         # 종목 수 기준 상위 5개 섹터
         top_sectors = sorted(by_sector.items(), key=lambda x: -len(x[1]))[:5]
 
-        from screener_filters import filter_summary
+        from analysis.screener_filters import filter_summary
         f_sum = filter_summary(results)
         lines = [
             f"📊 *주봉 차트 스크리닝 \\({esc(week)}\\)*",
@@ -477,7 +477,7 @@ async def send_watchlist_brief(
     from datetime import date as _date
     today_str = _date.today().strftime("%Y-%m-%d")
 
-    from ticker_cache import ticker_cache as _tc
+    from core.ticker_cache import ticker_cache as _tc
 
     if not entries:
         message = f"📊 거래대금 워치리스트 ({today_str}, 장 마감)\n\n워치리스트 없음"

@@ -55,7 +55,7 @@ class TestSendPlain:
     async def test_no_parse_mode_in_payload(self):
         """_send_plain must NOT include parse_mode (box-drawing chars break MarkdownV2)."""
         os.environ.setdefault("TELEGRAM_TOKEN", "test_token")
-        from telegram_bot import _send_plain
+        from telegram.telegram_bot import _send_plain
 
         http = AsyncMock()
         http.post = AsyncMock(return_value=MagicMock(json=lambda: {"ok": True}))
@@ -68,7 +68,7 @@ class TestSendPlain:
     async def test_text_sent_verbatim(self):
         """_send_plain sends text exactly as-is."""
         os.environ.setdefault("TELEGRAM_TOKEN", "test_token")
-        from telegram_bot import _send_plain
+        from telegram.telegram_bot import _send_plain
 
         http = AsyncMock()
         http.post = AsyncMock(return_value=MagicMock(json=lambda: {"ok": True}))
@@ -106,13 +106,13 @@ class TestFetchDataTimezone:
         Regression: ISSUE-TZ — /volume MU showed 09:30(20:30) instead of 22:30(09:30)
         Found by /investigate on 2026-04-14
         """
-        from volume_pattern import fetch_data
+        from analysis.volume_pattern import fetch_data
 
         ny_df = self._make_ny_df()
 
-        with patch("volume_pattern.yf.Ticker") as mock_ticker, \
-             patch("volume_pattern._load_from_db", return_value=pd.DataFrame()), \
-             patch("volume_pattern._is_db_fresh", return_value=False):
+        with patch("analysis.volume_pattern.yf.Ticker") as mock_ticker, \
+             patch("analysis.volume_pattern._load_from_db", return_value=pd.DataFrame()), \
+             patch("analysis.volume_pattern._is_db_fresh", return_value=False):
             mock_t = MagicMock()
             mock_t.info = {}
             mock_t.history.return_value = ny_df
@@ -135,7 +135,7 @@ class TestFetchDataTimezone:
         Regression: ISSUE-TZ — /volume MU showed 09:30(20:30) instead of 22:30(09:30)
         Found by /investigate on 2026-04-14
         """
-        from volume_pattern import fetch_data, build_report
+        from analysis.volume_pattern import fetch_data, build_report
 
         # One trading day: only the 9:30 AM ET bar (high volume, NYSE open)
         # In KST: 9:30 AM ET (EDT=UTC-4) = 13:30 UTC = 22:30 KST
@@ -144,9 +144,9 @@ class TestFetchDataTimezone:
             index=pd.date_range("2026-04-07 09:30", periods=1, freq="5min", tz="America/New_York"),
         )
 
-        with patch("volume_pattern.yf.Ticker") as mock_ticker, \
-             patch("volume_pattern._load_from_db", return_value=pd.DataFrame()), \
-             patch("volume_pattern._is_db_fresh", return_value=False):
+        with patch("analysis.volume_pattern.yf.Ticker") as mock_ticker, \
+             patch("analysis.volume_pattern._load_from_db", return_value=pd.DataFrame()), \
+             patch("analysis.volume_pattern._is_db_fresh", return_value=False):
             mock_t = MagicMock()
             mock_t.info = {}
             mock_t.history.return_value = ny_df
@@ -164,16 +164,16 @@ class TestFetchDataTimezone:
 
     def test_kr_market_gets_seoul_timezone(self):
         """fetch_data for KR stocks must convert index to Asia/Seoul."""
-        from volume_pattern import fetch_data
+        from analysis.volume_pattern import fetch_data
 
         kr_df = pd.DataFrame(
             {"Open": 70000.0, "High": 71000.0, "Low": 69000.0, "Close": 70500.0, "Volume": 5000},
             index=pd.date_range("2026-04-07 09:00", periods=3, freq="5min", tz="Asia/Seoul"),
         )
 
-        with patch("volume_pattern.yf.Ticker") as mock_ticker, \
-             patch("volume_pattern._load_from_db", return_value=pd.DataFrame()), \
-             patch("volume_pattern._is_db_fresh", return_value=False):
+        with patch("analysis.volume_pattern.yf.Ticker") as mock_ticker, \
+             patch("analysis.volume_pattern._load_from_db", return_value=pd.DataFrame()), \
+             patch("analysis.volume_pattern._is_db_fresh", return_value=False):
             mock_t = MagicMock()
             mock_t.info = {}
             mock_t.history.return_value = kr_df
@@ -210,13 +210,13 @@ class TestLoadFromDbNoPool:
     def test_load_from_db_does_not_call_create_pool(self):
         """_load_from_db must not create a connection pool.
         Single asyncpg.connect() suffices for a read-only cache check."""
-        from volume_pattern import _load_from_db
+        from analysis.volume_pattern import _load_from_db
 
         mock_conn = self._make_mock_conn()
 
         with patch("asyncpg.connect", new_callable=AsyncMock) as mock_connect, \
-             patch("db.get_dsn", return_value="postgresql://test"), \
-             patch("db.create_pool") as mock_create_pool:
+             patch("core.db.get_dsn", return_value="postgresql://test"), \
+             patch("core.db.create_pool") as mock_create_pool:
             mock_connect.return_value = mock_conn
 
             result = _load_from_db("AAPL")
@@ -226,13 +226,13 @@ class TestLoadFromDbNoPool:
 
     def test_load_from_db_does_not_call_init_db(self):
         """_load_from_db must not run init_db (which executes 8+ DDL statements)."""
-        from volume_pattern import _load_from_db
+        from analysis.volume_pattern import _load_from_db
 
         mock_conn = self._make_mock_conn()
 
         with patch("asyncpg.connect", new_callable=AsyncMock) as mock_connect, \
-             patch("db.get_dsn", return_value="postgresql://test"), \
-             patch("db.init_db") as mock_init_db:
+             patch("core.db.get_dsn", return_value="postgresql://test"), \
+             patch("core.db.init_db") as mock_init_db:
             mock_connect.return_value = mock_conn
 
             _load_from_db("005930.KS")

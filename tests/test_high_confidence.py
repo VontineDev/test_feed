@@ -29,7 +29,7 @@ class TestSendSignalHighConfidence:
 
     def _extract_message(self, signal, monkeypatch) -> str:
         """send_signal()이 _post_message에 넘기는 message 캡처."""
-        import telegram_notify
+        import telegram.telegram_notify as telegram_notify
         captured = {}
 
         async def fake_post(http, token, chat_id, message, label=""):

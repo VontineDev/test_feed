@@ -911,7 +911,7 @@ async def get_chart_signals_this_week(pool: asyncpg.Pool) -> set[str]:
     run_scheduler.py에서 collect_job() 사이클마다 한 번 호출 (v2 HIGH CONFIDENCE용).
     """
     try:
-        from chart_screener import current_week_of
+        from analysis.chart_screener import current_week_of
         week = current_week_of()
         async with pool.acquire() as conn:
             rows = await conn.fetch(

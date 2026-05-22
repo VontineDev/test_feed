@@ -16,7 +16,7 @@ _RESPONSE_KEY = "trde_prica_upper"  # ka10032 응답 배열 키
 
 
 def _make_client(mock_rows: list[dict]) -> "KiwoomClient":
-    from kiwoom_aftermarket_sync import KiwoomClient
+    from data.kiwoom_aftermarket_sync import KiwoomClient
     client = KiwoomClient(use_mock=False)
     client.inject_token("dummy-token-for-tests")
     client._post = MagicMock(return_value=({_RESPONSE_KEY: mock_rows}, {}))
@@ -56,7 +56,7 @@ class TestFetchTopVolume:
 
     def test_api_error_propagates(self):
         """_post() RuntimeError → fetch_top_volume()이 그대로 전파."""
-        from kiwoom_aftermarket_sync import KiwoomClient
+        from data.kiwoom_aftermarket_sync import KiwoomClient
         client = KiwoomClient(use_mock=False)
         client.inject_token("dummy-token-for-tests")
         client._post = MagicMock(side_effect=RuntimeError("API 오류 [ka10032]: 잘못된 요청"))
@@ -117,7 +117,7 @@ class TestFetchTopVolume:
 
     def test_market_param_passed_to_post(self):
         """market 파라미터가 _post()의 mrkt_tp body에 전달되고, stex_tp/mang_stk_incls 포함."""
-        from kiwoom_aftermarket_sync import KiwoomClient
+        from data.kiwoom_aftermarket_sync import KiwoomClient
         client = KiwoomClient(use_mock=False)
         client.inject_token("dummy-token-for-tests")
         client._post = MagicMock(return_value=({_RESPONSE_KEY: []}, {}))

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from chart_screener import ScreenResult
+    from analysis.chart_screener import ScreenResult
 
 
 def _val(x: float | None, fallback: float) -> float:

@@ -246,7 +246,7 @@ def fill_daily_from_krx(
     스케줄러에서 매일 장 마감 후 호출하면 다음 backtest부터 캐시 히트율 급상승.
     반환: 저장된 행 수 (기존 행 upsert 포함).
     """
-    from krx_openapi import KRXOpenAPIClient
+    from data.krx_openapi import KRXOpenAPIClient
     import os
 
     key = appkey or os.environ.get("KRX_OPENAPI_KEY", "")

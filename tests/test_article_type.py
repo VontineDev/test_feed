@@ -24,8 +24,8 @@ class TestTradeSignalDefault:
     """TradeSignal.article_type defaults to 'other'."""
 
     def test_default_article_type(self):
-        from signal_detector import TradeSignal
-        from summarizer import Backend
+        from analysis.signal_detector import TradeSignal
+        from reports.summarizer import Backend
 
         sig = TradeSignal(
             direction="BUY", strength=3, reason="테스트",
@@ -35,8 +35,8 @@ class TestTradeSignalDefault:
         assert sig.article_type == "other"
 
     def test_explicit_article_type(self):
-        from signal_detector import TradeSignal
-        from summarizer import Backend
+        from analysis.signal_detector import TradeSignal
+        from reports.summarizer import Backend
 
         sig = TradeSignal(
             direction="BUY", strength=3, reason="테스트",
@@ -47,7 +47,7 @@ class TestTradeSignalDefault:
         assert sig.article_type == "earnings"
 
     def test_none_signal_article_type(self):
-        from signal_detector import NONE_SIGNAL
+        from analysis.signal_detector import NONE_SIGNAL
         assert NONE_SIGNAL.article_type == "other"
 
 
@@ -66,8 +66,8 @@ class TestParseSignalJsonArticleType:
         return json.dumps(data)
 
     def test_valid_type_returned(self):
-        from signal_detector import _parse_signal_json
-        from summarizer import Backend
+        from analysis.signal_detector import _parse_signal_json
+        from reports.summarizer import Backend
 
         for t in ("earnings", "ma", "management", "analyst",
                   "regulatory", "product", "macro", "other"):
@@ -76,24 +76,24 @@ class TestParseSignalJsonArticleType:
             assert sig.article_type == t, f"expected {t}, got {sig.article_type}"
 
     def test_unknown_type_maps_to_other(self):
-        from signal_detector import _parse_signal_json
-        from summarizer import Backend
+        from analysis.signal_detector import _parse_signal_json
+        from reports.summarizer import Backend
 
         raw = self._make_raw(article_type="politics")
         sig = _parse_signal_json(raw, Backend.OLLAMA)
         assert sig.article_type == "other"
 
     def test_missing_type_defaults_to_other(self):
-        from signal_detector import _parse_signal_json
-        from summarizer import Backend
+        from analysis.signal_detector import _parse_signal_json
+        from reports.summarizer import Backend
 
         data = {"direction": "BUY", "strength": 3, "reason": "테스트", "tickers": []}
         sig = _parse_signal_json(json.dumps(data), Backend.OLLAMA)
         assert sig.article_type == "other"
 
     def test_case_insensitive_normalisation(self):
-        from signal_detector import _parse_signal_json
-        from summarizer import Backend
+        from analysis.signal_detector import _parse_signal_json
+        from reports.summarizer import Backend
 
         for raw_type, expected in [("EARNINGS", "earnings"), ("MA", "ma"), ("Macro", "macro")]:
             raw = self._make_raw(article_type=raw_type)
@@ -101,8 +101,8 @@ class TestParseSignalJsonArticleType:
             assert sig.article_type == expected, f"{raw_type!r} should map to {expected!r}"
 
     def test_parse_failure_returns_other(self):
-        from signal_detector import _parse_signal_json, NONE_SIGNAL
-        from summarizer import Backend
+        from analysis.signal_detector import _parse_signal_json, NONE_SIGNAL
+        from reports.summarizer import Backend
 
         sig = _parse_signal_json("this is not json at all", Backend.OLLAMA)
         assert sig.article_type == "other"
@@ -117,7 +117,7 @@ class TestSaveSignalArticleType:
     @pytest.mark.asyncio
     async def test_article_type_included_in_insert(self):
         """save_signal() includes article_type in the INSERT query."""
-        from db import save_signal
+        from core.db import save_signal
 
         mock_conn = AsyncMock()
         mock_conn.fetchrow = AsyncMock(return_value={"id": 42})
@@ -150,7 +150,7 @@ class TestSaveSignalArticleType:
     @pytest.mark.asyncio
     async def test_default_article_type_is_other(self):
         """save_signal() defaults article_type to 'other' when omitted."""
-        from db import save_signal
+        from core.db import save_signal
 
         mock_conn = AsyncMock()
         mock_conn.fetchrow = AsyncMock(return_value={"id": 1})
@@ -179,7 +179,7 @@ class TestFetchLatestSignalsArticleType:
 
     @pytest.mark.asyncio
     async def test_article_type_in_select(self):
-        from db import fetch_latest_signals
+        from core.db import fetch_latest_signals
 
         mock_conn = AsyncMock()
         mock_conn.fetch = AsyncMock(return_value=[])
@@ -197,7 +197,7 @@ class TestFetchLatestSignalsArticleType:
 
     @pytest.mark.asyncio
     async def test_article_type_in_select_with_direction_filter(self):
-        from db import fetch_latest_signals
+        from core.db import fetch_latest_signals
 
         mock_conn = AsyncMock()
         mock_conn.fetch = AsyncMock(return_value=[])
@@ -254,11 +254,11 @@ async def _capture_signal_message(signal) -> str:
         captured["text"] = text
         return True
 
-    with patch("telegram_notify._get_token", return_value="tok"), \
-         patch("telegram_notify._get_chat_id", return_value="123"), \
-         patch("telegram_notify._get_channel_id", return_value=""), \
-         patch("telegram_notify._post_message", side_effect=_fake_post):
-        from telegram_notify import send_signal
+    with patch("telegram.telegram_notify._get_token", return_value="tok"), \
+         patch("telegram.telegram_notify._get_chat_id", return_value="123"), \
+         patch("telegram.telegram_notify._get_channel_id", return_value=""), \
+         patch("telegram.telegram_notify._post_message", side_effect=_fake_post):
+        from telegram.telegram_notify import send_signal
         await send_signal(_FAKE_ART, "테스트 요약", signal)
 
     return captured.get("text", "")
@@ -289,7 +289,7 @@ class TestSendSignalBadge:
     @pytest.mark.asyncio
     async def test_all_non_other_types_have_badges(self):
         """Every non-'other' type has a badge defined and it appears in the message."""
-        from telegram_notify import TYPE_BADGE
+        from telegram.telegram_notify import TYPE_BADGE
         non_other = {k: v for k, v in TYPE_BADGE.items() if k != "other"}
         for t, badge in non_other.items():
             sig = _FakeSignal(article_type=t)
@@ -299,7 +299,7 @@ class TestSendSignalBadge:
     @pytest.mark.asyncio
     async def test_seven_non_other_types_defined(self):
         """TYPE_BADGE has exactly 7 non-'other' entries."""
-        from telegram_notify import TYPE_BADGE
+        from telegram.telegram_notify import TYPE_BADGE
         non_other = [k for k in TYPE_BADGE if k != "other"]
         assert len(non_other) == 7
 

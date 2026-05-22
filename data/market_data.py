@@ -256,7 +256,7 @@ async def _check_db_freshness(pool, symbol: str, max_age_days: int = 1) -> tuple
         - is_fresh: True면 수집 불필요 (최근 거래일 데이터 존재)
         - last_date_str: DB 최신 날짜 문자열 (없으면 "없음")
     """
-    import db
+    import core.db as db
     from datetime import date, timedelta
 
     rows = await db.fetch_daily_ohlcv(pool, symbol, limit=1)
@@ -363,8 +363,7 @@ async def export_daily_ohlcv(
     """
     import os
     import pandas as pd
-    import db
-
+    import core.db as db
     pool = await db.create_pool()
     await db.init_db(pool)
 
@@ -498,7 +497,7 @@ if __name__ == "__main__":
         symbols = [s for s in rest if not s.startswith("--")] or None
 
         async def _run_daily():
-            import db
+            import core.db as db
             pool = await db.create_pool()
             await db.init_db(pool)
             result = await fetch_and_store_daily_ohlcv(pool, symbols or None, force=force)

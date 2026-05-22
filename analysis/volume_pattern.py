@@ -129,7 +129,7 @@ def _load_from_db(symbol: str) -> pd.DataFrame:
     풀 생성 없이 단일 커넥션으로 조회한다. 봇에서 호출될 때마다
     create_pool(min_size=2)을 생성·파기하는 낭비를 방지한다.
     """
-    import db as _db
+    import core.db as _db
     import asyncpg
 
     async def _query():
@@ -354,8 +354,7 @@ def save_report(report: str, display_name: str, full_name: str):
 
 async def save_to_db(df: pd.DataFrame, symbol: str, market: str):
     """5분봉 데이터를 PostgreSQL에 저장한다."""
-    import db
-
+    import core.db as db
     pool = await db.create_pool()
     await db.init_db(pool)
 

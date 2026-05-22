@@ -83,38 +83,38 @@ class TestParseSignalJsonSymbolResolution:
         })
 
     def test_name_without_symbol_resolved_via_exact_cache(self):
-        from signal_detector import _parse_signal_json
-        from summarizer import Backend
+        from analysis.signal_detector import _parse_signal_json
+        from reports.summarizer import Backend
 
         mock_cache = MagicMock()
         mock_cache.resolve.return_value = "005930.KS"
         mock_cache.resolve_fuzzy.return_value = None
 
         raw = self._make_raw([{"name": "삼성전자", "symbol": ""}])
-        with patch("signal_detector._tc", mock_cache):
+        with patch("analysis.signal_detector._tc", mock_cache):
             sig = _parse_signal_json(raw, Backend.OLLAMA)
 
         assert sig.ticker_symbols.get("삼성전자") == "005930.KS"
         mock_cache.resolve.assert_called_once_with("삼성전자")
 
     def test_name_without_symbol_resolved_via_fuzzy_when_exact_fails(self):
-        from signal_detector import _parse_signal_json
-        from summarizer import Backend
+        from analysis.signal_detector import _parse_signal_json
+        from reports.summarizer import Backend
 
         mock_cache = MagicMock()
         mock_cache.resolve.return_value = None
         mock_cache.resolve_fuzzy.return_value = "091990.KS"
 
         raw = self._make_raw([{"name": "셀트리온헬스케어", "symbol": ""}])
-        with patch("signal_detector._tc", mock_cache):
+        with patch("analysis.signal_detector._tc", mock_cache):
             sig = _parse_signal_json(raw, Backend.OLLAMA)
 
         assert sig.ticker_symbols.get("셀트리온헬스케어") == "091990.KS"
 
     def test_resolution_miss_recorded_when_both_fail(self):
-        import market_data
-        from signal_detector import _parse_signal_json
-        from summarizer import Backend
+        import data.market_data as market_data
+        from analysis.signal_detector import _parse_signal_json
+        from reports.summarizer import Backend
 
         market_data._resolution_misses.clear()
         mock_cache = MagicMock()
@@ -122,7 +122,7 @@ class TestParseSignalJsonSymbolResolution:
         mock_cache.resolve_fuzzy.return_value = None
 
         raw = self._make_raw([{"name": "알수없는종목", "symbol": ""}])
-        with patch("signal_detector._tc", mock_cache):
+        with patch("analysis.signal_detector._tc", mock_cache):
             sig = _parse_signal_json(raw, Backend.OLLAMA)
 
         assert market_data._resolution_misses["알수없는종목"] == 1
@@ -130,12 +130,12 @@ class TestParseSignalJsonSymbolResolution:
 
     def test_existing_symbol_not_overwritten(self):
         """LLM이 정확한 심볼을 제공한 경우 캐시를 건드리지 않음."""
-        from signal_detector import _parse_signal_json
-        from summarizer import Backend
+        from analysis.signal_detector import _parse_signal_json
+        from reports.summarizer import Backend
 
         mock_cache = MagicMock()
         raw = self._make_raw([{"name": "삼성전자", "symbol": "005930.KS"}])
-        with patch("signal_detector._tc", mock_cache):
+        with patch("analysis.signal_detector._tc", mock_cache):
             sig = _parse_signal_json(raw, Backend.OLLAMA)
 
         assert sig.ticker_symbols["삼성전자"] == "005930.KS"
@@ -146,8 +146,8 @@ class TestParseSignalJsonSymbolResolution:
 
 class TestTradeSignalConfidence:
     def test_default_confidence_is_normal(self):
-        from signal_detector import TradeSignal, NONE_SIGNAL
-        from summarizer import Backend
+        from analysis.signal_detector import TradeSignal, NONE_SIGNAL
+        from reports.summarizer import Backend
         sig = TradeSignal(
             direction="BUY", strength=3, reason="test",
             tickers=[], ticker_symbols={}, backend=Backend.OLLAMA, success=True,
@@ -155,5 +155,5 @@ class TestTradeSignalConfidence:
         assert sig.confidence == "NORMAL"
 
     def test_none_signal_confidence_is_normal(self):
-        from signal_detector import NONE_SIGNAL
+        from analysis.signal_detector import NONE_SIGNAL
         assert NONE_SIGNAL.confidence == "NORMAL"

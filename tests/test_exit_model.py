@@ -279,7 +279,7 @@ class TestGetStage3PeakoutMap:
     @pytest.mark.asyncio
     async def test_returns_dates_when_found(self):
         from unittest.mock import AsyncMock, MagicMock
-        from db import get_stage3_peakout_map
+        from core.db import get_stage3_peakout_map
 
         mock_row1 = {"ticker": "005930.KS", "classified_date": date(2024, 3, 5)}
         mock_row2 = {"ticker": "005930.KS", "classified_date": date(2024, 3, 12)}
@@ -301,7 +301,7 @@ class TestGetStage3PeakoutMap:
     @pytest.mark.asyncio
     async def test_returns_empty_when_no_rows(self):
         from unittest.mock import AsyncMock, MagicMock
-        from db import get_stage3_peakout_map
+        from core.db import get_stage3_peakout_map
 
         conn = AsyncMock()
         conn.fetch = AsyncMock(return_value=[])
@@ -319,7 +319,7 @@ class TestGetStage3PeakoutMap:
     @pytest.mark.asyncio
     async def test_returns_empty_on_db_error(self):
         from unittest.mock import AsyncMock, MagicMock
-        from db import get_stage3_peakout_map
+        from core.db import get_stage3_peakout_map
 
         conn = AsyncMock()
         conn.fetch = AsyncMock(side_effect=Exception("column peakout_flag does not exist"))

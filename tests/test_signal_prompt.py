@@ -79,7 +79,7 @@ class TestIsActionableThreshold:
     """is_actionable must require strength>=3 for WATCH to reduce notification noise."""
 
     def _make_signal(self, direction, strength):
-        from signal_detector import TradeSignal, Backend
+        from analysis.signal_detector import TradeSignal, Backend
         return TradeSignal(
             direction=direction, strength=strength, reason="테스트",
             tickers=[], ticker_symbols={}, backend=Backend.OLLAMA,

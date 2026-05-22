@@ -613,7 +613,7 @@ def _compute_streaks(records: list[FlowRecord]) -> list[FlowRecord]:
 
 async def _save_batch(pool, records: list[FlowRecord]) -> int:
     """FlowRecord 목록을 daily_flow에 upsert. 저장 건수 반환."""
-    from db import save_daily_flow
+    from core.db import save_daily_flow
 
     saved = 0
     for rec in records:
@@ -719,8 +719,8 @@ async def run_pykrx(
     max_tickers: int,
 ) -> None:
     """pykrx 백엔드: 전 종목 순차 수집 후 저장."""
-    from chart_screener import get_all_tickers
-    from db import get_prev_streak
+    from analysis.chart_screener import get_all_tickers
+    from core.db import get_prev_streak
 
     tickers = _filter_tickers(get_all_tickers(), market, max_tickers)
     logger.info("[flow] 대상 %d개 종목  %s ~ %s", len(tickers), start, end)
@@ -767,8 +767,8 @@ async def run_krx_direct(
     krx_visitor: Optional[str] = None,
 ) -> None:
     """krx-direct 백엔드: pykrx 없이 data.krx.co.kr 직접 호출."""
-    from chart_screener import get_all_tickers
-    from db import get_prev_streak
+    from analysis.chart_screener import get_all_tickers
+    from core.db import get_prev_streak
 
     fetcher = _make_krx_direct(krx_id, krx_pw, krx_session, krx_visitor)
 
@@ -935,7 +935,7 @@ async def main() -> None:
         sys.exit(1)
 
     # DB 풀 생성
-    import db as _db
+    import core.db as _db
     pool = await _db.create_pool()
     await _db.init_db(pool)
 

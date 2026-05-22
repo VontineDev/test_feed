@@ -1760,7 +1760,7 @@ def _fill_returns(
 
 def run_backtest(config: BacktestConfig) -> BacktestResult:
     """백테스트 메인 함수. CLI 및 Telegram 봇에서 동기 호출."""
-    from chart_screener import get_all_tickers
+    from analysis.chart_screener import get_all_tickers
 
     logger.info(
         "[백테스트] 모드=%s 기간=%s~%s 시장=%s 최대티커=%s",
@@ -1768,7 +1768,7 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
     )
 
     # 1. 업종 매핑 + 티커 목록
-    from chart_screener import fetch_kind_sector_map
+    from analysis.chart_screener import fetch_kind_sector_map
     sector_map  = fetch_kind_sector_map()
     all_tickers = get_all_tickers(sector_map=sector_map if sector_map else None)
     if config.market == "KOSPI":
@@ -1792,7 +1792,7 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
 
     # 3. OHLCV 병렬 수집
     if config.dsn:
-        from ohlcv_cache import batch_fetch_cached, fetch_index_cached
+        from core.ohlcv_cache import batch_fetch_cached, fetch_index_cached
         ticker_pairs = [
             (t, "KOSDAQ" if t.endswith(".KQ") else "KOSPI")
             for t, _, _ in tickers
@@ -1818,7 +1818,7 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
     flow_lookup: Optional[dict] = None
     if config.dsn:
         try:
-            from ohlcv_cache import load_flow_data
+            from core.ohlcv_cache import load_flow_data
             ticker_syms = [t for t, _, _ in tickers]
             flow_lookup = load_flow_data(config.dsn, ticker_syms, config.start, fetch_end)
             logger.info("[백테스트] 수급 데이터 로드: %d건", len(flow_lookup))
@@ -1866,7 +1866,7 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
     if config.dsn and config.use_stage3_peak and (config.tp1_pct > 0 or config.trail_pct > 0):
         try:
             import asyncio as _asyncio
-            from db import get_stage3_peakout_map as _get_peakout
+            from core.db import get_stage3_peakout_map as _get_peakout
             ticker_syms = [t for t, _, _ in tickers]
             stage3_peakout_map = _asyncio.run(
                 _get_peakout(None, ticker_syms, config.start, fetch_end, dsn=config.dsn)

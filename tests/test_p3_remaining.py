@@ -110,7 +110,7 @@ class TestEnhancedIchimoku:
         try:
             import pandas as pd
             import numpy as np
-            from chart_screener import calc_ichimoku
+            from analysis.chart_screener import calc_ichimoku
 
             n = 60
             idx = pd.date_range("2024-01-01", periods=n, freq="W")

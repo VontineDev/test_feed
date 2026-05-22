@@ -55,7 +55,7 @@ async def _capture_message(entries) -> str:
         sent["text"] = text
         return True
 
-    import telegram_notify as tn
+    import telegram.telegram_notify as tn
     with (
         patch.object(tn, "_get_token", return_value="tok"),
         patch.object(tn, "_get_chat_id", return_value="cid"),
@@ -204,7 +204,7 @@ async def test_no_markdownv2_escaping_in_plain_text():
 
 @pytest.mark.asyncio
 async def test_get_stage1_watchlist_returns_list():
-    from db import get_stage1_watchlist
+    from core.db import get_stage1_watchlist
 
     fake_row = {
         "ticker": "005930.KS",
@@ -227,7 +227,7 @@ async def test_get_stage1_watchlist_returns_list():
 
 @pytest.mark.asyncio
 async def test_get_stage1_watchlist_empty():
-    from db import get_stage1_watchlist
+    from core.db import get_stage1_watchlist
 
     async def fake_fetch(query, cutoff):
         return []
@@ -239,7 +239,7 @@ async def test_get_stage1_watchlist_empty():
 
 @pytest.mark.asyncio
 async def test_get_stage1_watchlist_db_error_returns_empty():
-    from db import get_stage1_watchlist
+    from core.db import get_stage1_watchlist
 
     async def fake_fetch(query, cutoff):
         raise Exception("DB unavailable")

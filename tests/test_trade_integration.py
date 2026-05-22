@@ -32,7 +32,7 @@ pytestmark = pytest.mark.skipif(
 @pytest_asyncio.fixture
 async def pool():
     import asyncpg
-    from db import get_dsn, _CREATE_TRADE_LOG
+    from core.db import get_dsn, _CREATE_TRADE_LOG
     dsn = get_dsn()
     p = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
     # trade_log 테이블 생성 (없으면)

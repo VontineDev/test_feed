@@ -379,10 +379,10 @@ async def _handle_backtest(
                 pass
         i += 1
 
-    from backtest_engine import BacktestConfig, TX_COST_DEFAULT, MODE_KOR, run_backtest
+    from analysis.backtest_engine import BacktestConfig, TX_COST_DEFAULT, MODE_KOR, run_backtest
 
     try:
-        from db import get_dsn as _get_dsn
+        from core.db import get_dsn as _get_dsn
         _dsn: str | None = _get_dsn()
     except Exception:
         _dsn = None
@@ -497,8 +497,8 @@ async def _handle_screener(http: httpx.AsyncClient, chat_id: str, pool) -> None:
         await _send(http, chat_id, "DB 미연결 상태입니다\\.")
         return
 
-    from db import load_chart_signals_latest
-    from chart_screener import ScreenResult
+    from core.db import load_chart_signals_latest
+    from analysis.chart_screener import ScreenResult
 
     week, rows = await load_chart_signals_latest(pool)
     if not rows:
@@ -524,7 +524,7 @@ async def _handle_screener(http: httpx.AsyncClient, chat_id: str, pool) -> None:
         for r in rows
     ]
 
-    from telegram_notify import send_weekly_screener
+    from telegram.telegram_notify import send_weekly_screener
     await send_weekly_screener(results, http=http, target_chat_id=chat_id)
 
 
@@ -542,13 +542,13 @@ async def _handle_scan(http: httpx.AsyncClient, chat_id: str, pool) -> None:
         await _send(http, chat_id,
             "🔍 주봉 스크리닝 시작\\.\\.\\.\n전 종목 실시간 스캔 중 \\(약 10\\~20분 소요\\)\\.")
         try:
-            from chart_screener import run_weekly_screen
-            from db import save_chart_signals
+            from analysis.chart_screener import run_weekly_screen
+            from core.db import save_chart_signals
             loop = asyncio.get_running_loop()
             results = await loop.run_in_executor(None, run_weekly_screen)
             saved = await save_chart_signals(pool, results)
             logger.info("[봇/scan] 완료 — 통과:%d 저장:%d", len(results), saved)
-            from telegram_notify import send_weekly_screener
+            from telegram.telegram_notify import send_weekly_screener
             await send_weekly_screener(results, http=http, target_chat_id=chat_id)
         except Exception as e:
             logger.warning("[봇/scan] 실행 실패: %s", e)
@@ -584,7 +584,7 @@ async def _handle_paper(http: httpx.AsyncClient, chat_id: str, pool) -> None:
     price_map: dict[str, int] = {}
 
     try:
-        from kiwoom_paper_trader import KiwoomPaperTrader
+        from data.kiwoom_paper_trader import KiwoomPaperTrader
         _trader = KiwoomPaperTrader()
         loop = _asyncio.get_running_loop()
         for _t in tickers:
@@ -769,7 +769,7 @@ async def _handle_paper_exit(http: httpx.AsyncClient, chat_id: str, pool, args: 
     sell_ord = ""
 
     try:
-        from kiwoom_paper_trader import KiwoomPaperTrader, update_to_closed
+        from data.kiwoom_paper_trader import KiwoomPaperTrader, update_to_closed
         _trader = KiwoomPaperTrader()
         qty = row["qty"] or 1
         sell_ord = await loop.run_in_executor(None, _trader.place_sell, row["ticker"], qty)
@@ -791,7 +791,7 @@ async def _handle_paper_exit(http: httpx.AsyncClient, chat_id: str, pool, args: 
     entry = row["entry_actual"] or 0
     blended = (cur_price - entry) / entry if (cur_price and entry) else None
 
-    from kiwoom_paper_trader import update_to_closed as _utc
+    from data.kiwoom_paper_trader import update_to_closed as _utc
     await _utc(pool, row["id"], cur_price or entry, "manual", sell_ord, blended)
 
     ret_str = f"{blended*100:+.2f}%" if blended is not None else "N/A"
@@ -809,7 +809,7 @@ async def _handle_watchlist(http: httpx.AsyncClient, chat_id: str, pool) -> None
         return
     try:
         from run_scheduler import _build_watchlist_entries
-        from telegram_notify import send_watchlist_brief as _send_brief
+        from telegram.telegram_notify import send_watchlist_brief as _send_brief
         data = await _build_watchlist_entries(pool)
         await _send_brief(data["entries"], http=http, target_chat_id=chat_id)
     except Exception as e:
@@ -897,16 +897,16 @@ async def _process_update(http: httpx.AsyncClient, update: dict, pool) -> None:
     elif cmd == "/scan":
         await _handle_scan(http, chat_id, pool)
     elif cmd == "/buy":
-        from telegram_trade import handle_buy
+        from telegram.telegram_trade import handle_buy
         await handle_buy(http, _get_token(), chat_id, args, pool)
     elif cmd == "/sell":
-        from telegram_trade import handle_sell
+        from telegram.telegram_trade import handle_sell
         await handle_sell(http, _get_token(), chat_id, args, pool)
     elif cmd == "/port":
-        from telegram_trade import handle_port
+        from telegram.telegram_trade import handle_port
         await handle_port(http, _get_token(), chat_id, pool)
     elif cmd == "/pnl":
-        from telegram_trade import handle_pnl
+        from telegram.telegram_trade import handle_pnl
         await handle_pnl(http, _get_token(), chat_id, args, pool)
     elif cmd == "/paper":
         await _handle_paper(http, chat_id, pool)

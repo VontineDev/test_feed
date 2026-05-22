@@ -107,7 +107,7 @@ async def sync_krx_listings(pool: asyncpg.Pool) -> int:
     반환값: upsert된 행 수.
     전제: init_db()가 먼저 호출되어 krx_listings 테이블이 생성돼 있어야 합니다.
     """
-    from krx_openapi import KRXOpenAPIClient
+    from data.krx_openapi import KRXOpenAPIClient
 
     client = KRXOpenAPIClient()
     # 오늘 또는 가장 최근 영업일 기준

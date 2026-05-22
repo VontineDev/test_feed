@@ -70,12 +70,12 @@ async def _capture_message(results):
         captured["text"] = text
         return True
 
-    with patch("telegram_notify._get_token", return_value="tok"), \
-         patch("telegram_notify._get_chat_id", return_value="123"), \
-         patch("telegram_notify._get_channel_id", return_value=""), \
-         patch("telegram_notify._post_message", side_effect=_fake_post), \
-         patch("chart_screener.current_week_of", return_value="2026-W16"):
-        from telegram_notify import send_weekly_screener
+    with patch("telegram.telegram_notify._get_token", return_value="tok"), \
+         patch("telegram.telegram_notify._get_chat_id", return_value="123"), \
+         patch("telegram.telegram_notify._get_channel_id", return_value=""), \
+         patch("telegram.telegram_notify._post_message", side_effect=_fake_post), \
+         patch("analysis.chart_screener.current_week_of", return_value="2026-W16"):
+        from telegram.telegram_notify import send_weekly_screener
         await send_weekly_screener(results)
 
     return captured.get("text", "")

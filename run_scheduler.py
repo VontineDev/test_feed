@@ -497,7 +497,7 @@ async def _daily_stage_job() -> None:
     logger.info("[3단계] Ichimoku 비교 풀: %d종목 (week_of=%s)", len(ichimoku_rows), _week)
 
     # 2. 전 종목 티커 목록 (KOSPI + KOSDAQ, ~2770개)
-    from chart_screener import get_all_tickers as _get_all_tickers
+    from analysis.chart_screener import get_all_tickers as _get_all_tickers
     all_tickers: list[tuple[str, str, str]] = await loop.run_in_executor(
         None, _get_all_tickers, None
     )
@@ -589,7 +589,7 @@ async def _daily_stage_job() -> None:
     logger.info("[3단계] s1_history: %d종목 이력", len(s1_history))
 
     # 5. classify_stage() 병렬 실행
-    from stage_classifier import classify_stage as _classify, check_peakout as _peakout
+    from analysis.stage_classifier import classify_stage as _classify, check_peakout as _peakout
 
     market_map = {t: ("KOSDAQ" if s.endswith(".KQ") else "KOSPI") for t, _, s in all_tickers}
 
@@ -652,7 +652,7 @@ async def _daily_stage_job() -> None:
 
     # 6b. 분류된 종목 이름 캐시 갱신 (ticker_names)
     try:
-        from db import upsert_ticker_names as _upsert_tn
+        from core.db import upsert_ticker_names as _upsert_tn
         stage_tickers = list(stage_results.keys())
         await _upsert_tn(_db_pool, stage_tickers)
     except Exception as e:
@@ -671,7 +671,7 @@ async def _daily_stage_job() -> None:
     # 8. 활성 Stage 캐시 갱신 (뉴스 게이팅용, 7일 이내 분류 종목)
     global _active_stage_tickers
     try:
-        from db import get_active_stage_tickers as _get_active
+        from core.db import get_active_stage_tickers as _get_active
         _active_stage_tickers = await _get_active(_db_pool, days=7)
         logger.info("[3단계] 활성 Stage 캐시 갱신 — %d종목", len(_active_stage_tickers))
     except Exception as e:
@@ -913,7 +913,7 @@ async def _watchlist_brief_job() -> None:
     if stage2_alerts:
         try:
             today_str = today.strftime("%Y-%m-%d")
-            from ticker_cache import ticker_cache as _tc
+            from core.ticker_cache import ticker_cache as _tc
             alert_lines = [f"🟢 Stage 2 전환 확인 ({today_str})", ""]
             for t in stage2_alerts:
                 code  = t.split(".")[0]
@@ -923,7 +923,7 @@ async def _watchlist_brief_job() -> None:
                 alert_lines.append(f"  {label} — D+{days_d} → Stage 2 진입")
             alert_msg = "\n".join(alert_lines)
             async with httpx.AsyncClient() as http:
-                from telegram_notify import _get_token, _get_chat_id, _post_message
+                from telegram.telegram_notify import _get_token, _get_chat_id, _post_message
                 await _post_message(http, _get_token(), _get_chat_id(), alert_msg, label="Stage2알림", parse_mode=None)
             logger.info("[워치리스트] Stage 2 전환 알림 — %d종목", len(stage2_alerts))
         except Exception as e:
@@ -942,7 +942,7 @@ async def _watchlist_brief_job() -> None:
     if rally_death_alerts:
         try:
             today_str = today.strftime("%Y-%m-%d")
-            from ticker_cache import ticker_cache as _tc
+            from core.ticker_cache import ticker_cache as _tc
             death_lines = [f"❌ 랠리 소멸 경고 ({today_str})", "3거래일 연속 진입비 -40% 이상", ""]
             for t in rally_death_alerts:
                 code  = t.split(".")[0]
@@ -953,7 +953,7 @@ async def _watchlist_brief_job() -> None:
                 death_lines.append(f"  {label} 오늘 비율 {pct}")
             death_msg = "\n".join(death_lines)
             async with httpx.AsyncClient() as http:
-                from telegram_notify import _get_token, _get_chat_id, _post_message
+                from telegram.telegram_notify import _get_token, _get_chat_id, _post_message
                 await _post_message(http, _get_token(), _get_chat_id(), death_msg, label="랠리소멸알림", parse_mode=None)
             logger.info("[워치리스트] 랠리 소멸 경고 — %d종목", len(rally_death_alerts))
         except Exception as e:
@@ -1008,8 +1008,8 @@ async def main(interval: int, enable_summary: bool) -> None:
 
     # ── KRX 종목 캐시 초기화 ─────────────────────────────────────
     if _db_pool:
-        from krx_sync import sync_krx_listings
-        from ticker_cache import ticker_cache as _ticker_cache
+        from data.krx_sync import sync_krx_listings
+        from core.ticker_cache import ticker_cache as _ticker_cache
         try:
             await sync_krx_listings(_db_pool)
         except Exception as _krx_e:
@@ -1025,13 +1025,13 @@ async def main(interval: int, enable_summary: bool) -> None:
     # ── 스크리너 게이팅 캐시 초기화 (DB에서 이번 주 종목 로드) ──
     if _db_pool:
         try:
-            from db import get_chart_signals_this_week
+            from core.db import get_chart_signals_this_week
             _screener_tickers = await get_chart_signals_this_week(_db_pool)
             logger.info("[게이팅] 스크리너 캐시 로드 — %d종목", len(_screener_tickers))
         except Exception as _gt_e:
             logger.warning("[게이팅] 스크리너 캐시 로드 실패: %s", _gt_e)
         try:
-            from db import get_active_stage_tickers as _get_active_stage
+            from core.db import get_active_stage_tickers as _get_active_stage
             _active_stage_tickers = await _get_active_stage(_db_pool, days=7)
             logger.info("[게이팅] 활성 Stage 캐시 로드 — %d종목", len(_active_stage_tickers))
         except Exception as _st_e:
@@ -1046,7 +1046,7 @@ async def main(interval: int, enable_summary: bool) -> None:
     global _paper_trader
     if _db_pool and os.environ.get("KIWOOM_MOCK_APPKEY"):
         try:
-            from kiwoom_paper_trader import KiwoomPaperTrader, init_paper_positions
+            from data.kiwoom_paper_trader import KiwoomPaperTrader, init_paper_positions
             _paper_trader = KiwoomPaperTrader()
             await init_paper_positions(_db_pool)
             logger.info("[paper] 모의투자 클라이언트 초기화 완료")
@@ -1092,8 +1092,8 @@ async def main(interval: int, enable_summary: bool) -> None:
     async def _daily_krx_refresh_job():
         if not _db_pool:
             return
-        from krx_sync import sync_krx_listings
-        from ticker_cache import ticker_cache as _ticker_cache
+        from data.krx_sync import sync_krx_listings
+        from core.ticker_cache import ticker_cache as _ticker_cache
         try:
             n = await sync_krx_listings(_db_pool)
             logger.info("[krx_sync] 일일 갱신 완료: %d행", n)
@@ -1122,7 +1122,7 @@ async def main(interval: int, enable_summary: bool) -> None:
             logger.warning("[차트스크리너] DB 풀 없음 — 스크리닝 건너뜀")
             return
         try:
-            from chart_screener import run_weekly_screen
+            from analysis.chart_screener import run_weekly_screen
             results = await loop.run_in_executor(None, run_weekly_screen)
             saved = await save_chart_signals(_db_pool, results)
             logger.info("[차트스크리너] 완료 — 통과:%d 저장:%d", len(results), saved)
@@ -1136,7 +1136,7 @@ async def main(interval: int, enable_summary: bool) -> None:
             return
 
         try:
-            from generate_html_report import generate_html
+            from reports.generate_html_report import generate_html
             from pathlib import Path as _Path
             html_str = generate_html(results)
             _html_dir = _Path("reports/screener")
@@ -1220,7 +1220,7 @@ async def main(interval: int, enable_summary: bool) -> None:
             return
 
         from datetime import date as _date, timedelta as _td
-        from kiwoom_paper_trader import get_open_positions, update_to_closed
+        from data.kiwoom_paper_trader import get_open_positions, update_to_closed
 
         today = _date.today()
         _loop = asyncio.get_running_loop()
@@ -1338,7 +1338,7 @@ async def main(interval: int, enable_summary: bool) -> None:
 
         if _closed > 0:
             try:
-                from telegram_notify import _get_token, _get_chat_id, _post_message
+                from telegram.telegram_notify import _get_token, _get_chat_id, _post_message
                 import httpx as _hx
                 _msg = (
                     f"📤 모의투자 청산 완료 ({today})\n"
@@ -1370,10 +1370,10 @@ async def main(interval: int, enable_summary: bool) -> None:
 
         import random as _random
         from datetime import date as _date
-        from kiwoom_paper_trader import (
+        from data.kiwoom_paper_trader import (
             MODEL_CONFIG, insert_pending, get_open_slot_count,
         )
-        from backtest_engine import (
+        from analysis.backtest_engine import (
             OPTIMAL_EXIT_PARAMS           as _KOSPI_P,
             OPTIMAL_EXIT_PARAMS_KOSDAQ    as _KOSDAQ_P,
             OPTIMAL_EXIT_PARAMS_CROSS     as _CROSS_P,
@@ -1461,7 +1461,7 @@ async def main(interval: int, enable_summary: bool) -> None:
 
         if total_inserted > 0:
             try:
-                from telegram_notify import _get_token, _get_chat_id, _post_message
+                from telegram.telegram_notify import _get_token, _get_chat_id, _post_message
                 import httpx as _hx
                 _msg = (
                     f"📋 모의투자 EOD 샘플링 ({today})\n"
@@ -1493,7 +1493,7 @@ async def main(interval: int, enable_summary: bool) -> None:
             return
 
         from datetime import date as _date, timedelta as _td
-        from kiwoom_paper_trader import (
+        from data.kiwoom_paper_trader import (
             get_pending_positions, update_to_open,
             _qty_from_price, MODEL_CONFIG,
         )
@@ -1669,8 +1669,8 @@ async def _run_once_stage() -> None:
         logger.error("DB 연결 실패: %s", e)
         return
     try:
-        from krx_sync import sync_krx_listings
-        from ticker_cache import ticker_cache as _ticker_cache
+        from data.krx_sync import sync_krx_listings
+        from core.ticker_cache import ticker_cache as _ticker_cache
         try:
             await sync_krx_listings(_db_pool)
         except Exception as _e:

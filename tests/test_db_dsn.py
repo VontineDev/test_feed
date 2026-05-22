@@ -31,7 +31,7 @@ def _get_dsn_with_password(password: str, user: str = "news_user") -> str:
         # DATABASE_URL이 있으면 안 됨
         os.environ.pop("DATABASE_URL", None)
         from importlib import reload
-        import db
+        import core.db as db
         reload(db)
         return db.get_dsn()
 
@@ -98,7 +98,7 @@ class TestGetDsnUrlEncoding:
             os.environ.pop("DB_PASSWORD", None)
             os.environ.pop("DATABASE_URL", None)
             from importlib import reload
-            import db
+            import core.db as db
             reload(db)
             with pytest.raises(RuntimeError, match="DB_PASSWORD"):
                 db.get_dsn()

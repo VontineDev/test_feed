@@ -368,7 +368,7 @@ if __name__ == "__main__":
         level=logging.INFO,
         format="%(asctime)s  %(levelname)-7s  %(message)s",
     )
-    from chart_screener import run_weekly_screen
+    from analysis.chart_screener import run_weekly_screen
 
     results = run_weekly_screen()
     html_str = generate_html(results)
