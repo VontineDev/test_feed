@@ -144,7 +144,9 @@ def _fetch_fundamental(krx_code: str) -> dict:
     인증 불필요. 결과는 날짜 키로 당일 캐시.
     """
     empty: dict = {"per": None, "pbr": None, "eps": None, "dividend_yield": None, "foreign_rate": None}
-    if not HTTPX_OK or not str(krx_code).isdigit():
+    # "005930_AL" → "005930" (Kiwoom 거래대금 API가 시장 구분자를 붙임)
+    krx_code = str(krx_code).split("_")[0].split(".")[0]
+    if not HTTPX_OK or not krx_code.isdigit():
         return empty
     import datetime as _dt
     today = _dt.date.today().isoformat()
