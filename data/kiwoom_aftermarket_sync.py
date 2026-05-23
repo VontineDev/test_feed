@@ -162,6 +162,8 @@ class KiwoomClient:
             timeout=15,
         )
         resp.raise_for_status()
+        if "text/html" in resp.headers.get("Content-Type", ""):
+            raise RuntimeError("키움 API 점검 중 (HTML 응답) — 시스템작업알림 페이지 수신")
         data = resp.json()
         if data.get("return_code", -1) != 0:
             raise RuntimeError(f"토큰 발급 실패: {data.get('return_msg')}")
@@ -218,6 +220,8 @@ class KiwoomClient:
             timeout=30,
         )
         resp.raise_for_status()
+        if "text/html" in resp.headers.get("Content-Type", ""):
+            raise RuntimeError("키움 API 점검 중 (HTML 응답) — 시스템작업알림 페이지 수신")
         data = resp.json()
         if data.get("return_code", -1) != 0:
             raise RuntimeError(
@@ -426,6 +430,16 @@ def ensure_table(dsn: str) -> None:
                 if stmt:
                     cur.execute(stmt)
             cur.execute("ALTER TABLE aftermarket_snap ENABLE ROW LEVEL SECURITY;")
+            cur.execute("""
+                DO $$ BEGIN
+                  IF NOT EXISTS (
+                    SELECT 1 FROM pg_policies
+                    WHERE schemaname='public' AND tablename='aftermarket_snap' AND policyname='backend_all'
+                  ) THEN
+                    CREATE POLICY backend_all ON aftermarket_snap FOR ALL USING (true) WITH CHECK (true);
+                  END IF;
+                END $$;
+            """)
         conn.commit()
     finally:
         conn.close()

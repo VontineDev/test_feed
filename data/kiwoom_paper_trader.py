@@ -258,6 +258,16 @@ async def init_paper_positions(pool) -> None:
         await conn.execute(
             "ALTER TABLE paper_positions ENABLE ROW LEVEL SECURITY;"
         )
+        await conn.execute("""
+            DO $$ BEGIN
+              IF NOT EXISTS (
+                SELECT 1 FROM pg_policies
+                WHERE schemaname='public' AND tablename='paper_positions' AND policyname='backend_all'
+              ) THEN
+                CREATE POLICY backend_all ON paper_positions FOR ALL USING (true) WITH CHECK (true);
+              END IF;
+            END $$;
+        """)
     logger.info("[paper] paper_positions 테이블 준비 완료")
 
 

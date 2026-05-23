@@ -347,6 +347,16 @@ async def init_db(pool: asyncpg.Pool) -> None:
             await conn.execute(
                 f"ALTER TABLE {_tbl} ENABLE ROW LEVEL SECURITY;"
             )
+            await conn.execute(f"""
+                DO $$ BEGIN
+                  IF NOT EXISTS (
+                    SELECT 1 FROM pg_policies
+                    WHERE schemaname='public' AND tablename='{_tbl}' AND policyname='backend_all'
+                  ) THEN
+                    CREATE POLICY backend_all ON {_tbl} FOR ALL USING (true) WITH CHECK (true);
+                  END IF;
+                END $$;
+            """)
         # RLS: init_db 시점에 아직 없을 수 있는 테이블 — IF EXISTS 가드
         for _tbl in _RLS_IF_EXISTS:
             await conn.execute(
@@ -357,6 +367,12 @@ async def init_db(pool: asyncpg.Pool) -> None:
                     WHERE table_schema = 'public' AND table_name = '{_tbl}'
                   ) THEN
                     ALTER TABLE {_tbl} ENABLE ROW LEVEL SECURITY;
+                    IF NOT EXISTS (
+                      SELECT 1 FROM pg_policies
+                      WHERE schemaname='public' AND tablename='{_tbl}' AND policyname='backend_all'
+                    ) THEN
+                      CREATE POLICY backend_all ON {_tbl} FOR ALL USING (true) WITH CHECK (true);
+                    END IF;
                   END IF;
                 END $$;
                 """
