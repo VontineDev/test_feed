@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.7.0] - 2026-05-23
+
+### Added
+- **모의투자 성과분석** (`dashboard/backend/main.py`, `dashboard/frontend/src/components/PaperAnalytics.tsx`): 모델별 누적 P&L 커브 + 미실현 손익 연장선 차트. 4개 모델(Stage/KOSDAQ/Cross/Ichimoku) 동시 비교 가능.
+- **`GET /api/paper/curve`** (`dashboard/backend/main.py`): 모델별 누적 시계열(window function), 집계 통계(n_trades/n_wins/win_rate/avg_win/avg_loss/total_realized), ticker_name_map, open 포지션 미실현 수익률을 단일 응답으로 반환.
+- **`GET /api/paper/export`** (`dashboard/backend/main.py`): paper_positions 전체를 utf-8-sig BOM CSV로 다운로드. Excel 한글 호환.
+- **`PaperAnalytics` 컴포넌트** (`dashboard/frontend/src/components/PaperAnalytics.tsx`): 모델 통계 테이블 + Recharts 커브 + 미실현 포지션 리더보드 + CSV 다운로드 버튼. `PaperPortfolio` 하단에 임베드.
+- **`pivotSeries` 순수 함수** (`PaperAnalytics.tsx`): 모델별 날짜 시계열을 Recharts 호환 피벗 배열로 변환. 날짜 공백 구간은 null fill(connectNulls 대응).
+
+### Tests
+- **백엔드 단위 테스트** (`tests/test_paper_analytics.py`): pytest-asyncio 기반 5개 테스트. curve happy path(closed+open), closed 없음, open 없음(yfinance 미호출), export happy path(BOM+헤더+데이터), export 빈 테이블.
+- **프론트엔드 단위 테스트** (`dashboard/frontend/src/components/PaperAnalytics.test.ts`): Vitest 기반 5개 테스트. pivotSeries 빈 입력, 단일 모델, 날짜 분리 null fill, 동일 날짜 복수 모델, 정렬 보장.
+
 ## [0.9.6.1] - 2026-05-23
 
 ### Changed
