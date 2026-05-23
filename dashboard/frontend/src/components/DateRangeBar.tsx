@@ -84,9 +84,9 @@ const s: Record<string, React.CSSProperties> = {
   },
   btns: { display: 'flex', gap: 5, flexWrap: 'wrap' as const },
   btn: {
-    borderRadius: 5, padding: '5px 10px', cursor: 'pointer',
+    borderRadius: 4, padding: '5px 10px', cursor: 'pointer',
     fontSize: 11, fontWeight: 600, outline: 'none',
-    minHeight: 32, whiteSpace: 'nowrap' as const,
+    minHeight: 36, whiteSpace: 'nowrap' as const,
   },
   rangeLabel: { fontSize: 10, color: tokens.tx.subtle, marginLeft: 4 },
 }

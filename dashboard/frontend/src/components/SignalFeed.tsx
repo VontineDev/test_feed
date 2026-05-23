@@ -59,7 +59,7 @@ export default function SignalFeed() {
 const styles: Record<string, React.CSSProperties> = {
   wrap: { padding: '8px 12px', overflowY: 'auto', height: '100%' },
   hdr: { fontWeight: 700, fontSize: 13, color: tokens.tx.secondary, marginBottom: 8 },
-  card: { background: tokens.bg.panel, border: `1px solid ${tokens.bd.default}`, borderRadius: 6, padding: '8px 10px', marginBottom: 8 },
+  card: { background: tokens.bg.panel, border: `1px solid ${tokens.bd.default}`, borderRadius: 6, padding: '8px 10px', marginBottom: 8, boxShadow: tokens.shadow.tooltip },
   cardTop: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 },
   strength: { display: 'flex', gap: 1 },
   type: { fontSize: 10, color: tokens.tx.muted, marginLeft: 'auto' },

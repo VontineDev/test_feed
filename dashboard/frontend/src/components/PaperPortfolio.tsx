@@ -150,7 +150,7 @@ export default function PaperPortfolio() {
                     return (
                       <tr
                         key={i}
-                        style={{ background: isSelected ? '#0f2849' : undefined, cursor: 'pointer' }}
+                        style={{ background: isSelected ? tokens.bg.active : undefined, cursor: 'pointer' }}
                         onClick={() => handleSelect(r.ticker, r.name)}
                       >
                         <td style={s.td}>

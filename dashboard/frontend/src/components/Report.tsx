@@ -309,7 +309,7 @@ const s: Record<string, React.CSSProperties> = {
   hdr: { display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderBottom: `1px solid ${tokens.bd.default}`, flexShrink: 0 },
   hdrTitle: { fontWeight: 700, fontSize: 13, flex: 1 },
   hdrTime: { color: tokens.tx.subtle, fontSize: 11 },
-  refreshBtn: { background: tokens.bg.raised, color: tokens.tx.secondary, border: `1px solid ${tokens.bd.emphasis}`, borderRadius: 5, padding: '4px 10px', cursor: 'pointer', fontSize: 11 },
+  refreshBtn: { background: tokens.bg.raised, color: tokens.tx.secondary, border: `1px solid ${tokens.bd.emphasis}`, borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: 11, minHeight: 36 },
 
   section: { borderBottom: `1px solid ${tokens.bd.default}` },
   sectionHdr: { width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '9px 14px', background: 'none', border: 'none', color: tokens.tx.secondary, cursor: 'pointer', textAlign: 'left' as const },
@@ -325,7 +325,7 @@ const s: Record<string, React.CSSProperties> = {
 
   filterRow: { display: 'flex', gap: 6, marginBottom: 8 },
   filterBtn: { background: tokens.bg.raised, color: tokens.tx.muted, border: `1px solid ${tokens.bd.emphasis}`, borderRadius: 4, padding: '3px 9px', cursor: 'pointer', fontSize: 11 },
-  filterBtnActive: { background: tokens.bg.active, color: tokens.accent.blueLight, borderColor: '#1d4ed8' },
+  filterBtnActive: { background: tokens.bg.active, color: tokens.accent.blueLight, borderColor: tokens.accent.blue },
 
   tableLabel: { fontSize: 11, color: tokens.tx.subtle, marginBottom: 5, marginTop: 8 },
   tableWrap: { overflowX: 'auto', maxHeight: 280, overflowY: 'auto' as const },

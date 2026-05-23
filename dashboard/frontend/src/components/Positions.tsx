@@ -72,7 +72,7 @@ export default function Positions({ onSelect, selectedTicker, filterModel }: Pro
                 key={r.id}
                 style={{
                   ...styles.tr,
-                  background: isSelected ? '#0f2849' : undefined,
+                  background: isSelected ? tokens.bg.active : undefined,
                   cursor: onSelect ? 'pointer' : 'default',
                 }}
                 onClick={() => onSelect?.(r.ticker, r.name)}
@@ -83,9 +83,9 @@ export default function Positions({ onSelect, selectedTicker, filterModel }: Pro
                 </td>
                 <td style={styles.td}><span style={styles.badge}>{r.model}</span></td>
                 <td style={styles.td}>{r.signal_date?.slice(0, 10)}</td>
-                <td style={styles.td}>{r.entry_actual?.toLocaleString() ?? '—'}</td>
-                <td style={styles.td}>{r.current_price?.toLocaleString() ?? '—'}</td>
-                <td style={{ ...styles.td, color: pctColor(r.unrealized_pct), fontWeight: 600 }}>
+                <td style={{ ...styles.td, fontVariantNumeric: 'tabular-nums' }}>{r.entry_actual?.toLocaleString() ?? '—'}</td>
+                <td style={{ ...styles.td, fontVariantNumeric: 'tabular-nums' }}>{r.current_price?.toLocaleString() ?? '—'}</td>
+                <td style={{ ...styles.td, color: pctColor(r.unrealized_pct), fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
                   {r.unrealized_pct !== null ? `${r.unrealized_pct > 0 ? '+' : ''}${r.unrealized_pct.toFixed(2)}%` : '—'}
                 </td>
                 <td style={styles.td}>{r.status}</td>
@@ -103,9 +103,9 @@ const styles: Record<string, React.CSSProperties> = {
   hdr: { fontWeight: 700, fontSize: 13, marginBottom: 8, color: tokens.tx.secondary },
   table: { width: '100%', borderCollapse: 'collapse', fontSize: 12 },
   theadRow: { background: tokens.bg.raised },
-  th: { padding: '6px 10px', textAlign: 'left', color: tokens.tx.muted, fontWeight: 600, borderBottom: `1px solid ${tokens.bd.emphasis}`, borderRight: `1px solid ${tokens.bd.default}` },
+  th: { padding: '5px 8px', textAlign: 'left', color: tokens.tx.muted, fontWeight: 600, borderBottom: `1px solid ${tokens.bd.emphasis}`, borderRight: `1px solid ${tokens.bd.default}` },
   tr: { borderBottom: `1px solid ${tokens.bd.default}` },
-  td: { padding: '6px 10px', color: tokens.tx.secondary, borderRight: `1px solid ${tokens.bd.default}` },
+  td: { padding: '5px 8px', color: tokens.tx.secondary, borderRight: `1px solid ${tokens.bd.default}` },
   badge: { background: tokens.bg.active, color: tokens.accent.blueLight, padding: '2px 6px', borderRadius: 4, fontSize: 11 },
   empty: { padding: 24, color: tokens.tx.muted, textAlign: 'center' },
 }

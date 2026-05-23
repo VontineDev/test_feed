@@ -81,7 +81,7 @@ const styles: Record<string, React.CSSProperties> = {
   leftPane: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', borderRight: `1px solid ${tokens.bd.default}` },
   tabBar: { display: 'flex', borderBottom: `1px solid ${tokens.bd.default}`, background: tokens.bg.panel, flexShrink: 0 },
   tab: {
-    padding: '8px 20px', border: 'none', background: 'transparent',
+    padding: '10px 22px', border: 'none', background: 'transparent',
     color: tokens.tx.muted, cursor: 'pointer', fontSize: 13, fontWeight: 600,
     borderBottom: '2px solid transparent',
   },

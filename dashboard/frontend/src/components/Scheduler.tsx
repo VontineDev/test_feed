@@ -185,12 +185,12 @@ const s: Record<string, React.CSSProperties> = {
 
   btnRow: { display: 'flex', gap: 8, flexWrap: 'wrap' as const, marginBottom: 12 },
   btn: {
-    background: tokens.bg.active, color: tokens.accent.blueLight, border: '1px solid #1d4ed8',
-    borderRadius: 6, padding: '7px 12px', cursor: 'pointer', fontSize: 12,
-    fontWeight: 600, transition: 'opacity 0.15s',
+    background: tokens.bg.active, color: tokens.accent.blueLight, border: `1px solid ${tokens.accent.blue}`,
+    borderRadius: 4, padding: '7px 12px', cursor: 'pointer', fontSize: 12,
+    fontWeight: 600, transition: 'opacity 0.15s', minHeight: 36,
   },
 
-  activeWrap:    { background: '#0f1e30', borderRadius: 8, padding: '8px 10px', marginBottom: 12 },
+  activeWrap:    { background: tokens.bg.panel, borderRadius: 8, padding: '8px 10px', marginBottom: 12 },
   activeRow:     { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', fontSize: 12 },
   activeDot:     { width: 8, height: 8, borderRadius: '50%', flexShrink: 0 },
   activeJob:     { color: tokens.tx.secondary, flex: 1 },

@@ -220,15 +220,15 @@ export default function Macro() {
           <div style={{ fontSize: 11, fontWeight: 700, color: tokens.tx.secondary, marginBottom: 6 }}>
             종목별 매크로 영향 점수 (현재 매크로 기준, 최근 5일)
           </div>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ color: tokens.tx.subtle, borderBottom: `1px solid ${tokens.bd.default}` }}>
-                <th style={{ padding: '3px 6px', textAlign: 'left',  fontWeight: 600 }}>#</th>
-                <th style={{ padding: '3px 6px', textAlign: 'left',  fontWeight: 600 }}>종목</th>
-                <th style={{ padding: '3px 6px', textAlign: 'right', fontWeight: 600 }}>점수</th>
-                <th style={{ padding: '3px 6px' }}>바</th>
-                <th style={{ padding: '3px 6px', textAlign: 'left',  fontWeight: 600 }}>판결</th>
-                <th style={{ padding: '3px 6px', textAlign: 'right', fontWeight: 600 }}>민감도</th>
+                <th style={{ padding: '4px 8px', textAlign: 'left',  fontWeight: 600 }}>#</th>
+                <th style={{ padding: '4px 8px', textAlign: 'left',  fontWeight: 600 }}>종목</th>
+                <th style={{ padding: '4px 8px', textAlign: 'right', fontWeight: 600 }}>점수</th>
+                <th style={{ padding: '4px 8px' }}>바</th>
+                <th style={{ padding: '4px 8px', textAlign: 'left',  fontWeight: 600 }}>판결</th>
+                <th style={{ padding: '4px 8px', textAlign: 'right', fontWeight: 600 }}>민감도</th>
               </tr>
             </thead>
             <tbody>
@@ -249,23 +249,23 @@ export default function Macro() {
                       tabIndex={0}
                       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') setExpanded(isExpanded ? null : s.ticker) }}
                     >
-                      <td style={{ padding: '4px 6px', color: tokens.tx.subtle }}>{i + 1}</td>
-                      <td style={{ padding: '4px 6px' }}>
+                      <td style={{ padding: '4px 8px', color: tokens.tx.subtle }}>{i + 1}</td>
+                      <td style={{ padding: '4px 8px' }}>
                         <span style={{ fontWeight: 600 }}>{s.name}</span>
                         <span style={{ color: tokens.tx.subtle, marginLeft: 4, fontSize: 10 }}>
                           {s.ticker.replace(/\.KS$|\.KQ$/, '')}
                         </span>
                       </td>
-                      <td style={{ padding: '4px 6px', textAlign: 'right', color: scoreColor(s.macro_score), fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                      <td style={{ padding: '4px 8px', textAlign: 'right', color: scoreColor(s.macro_score), fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
                         {s.macro_score > 0 ? '+' : ''}{s.macro_score.toFixed(0)}
                       </td>
-                      <td style={{ padding: '4px 6px' }}>
+                      <td style={{ padding: '4px 8px' }}>
                         <ScoreBar score={s.macro_score} />
                       </td>
-                      <td style={{ padding: '4px 6px', color: tokens.tx.secondary, fontSize: 10 }}>
+                      <td style={{ padding: '4px 8px', color: tokens.tx.secondary, fontSize: 10 }}>
                         {verdict}
                       </td>
-                      <td style={{ padding: '4px 6px', textAlign: 'right' }}>
+                      <td style={{ padding: '4px 8px', textAlign: 'right' }}>
                         <span style={{
                           fontSize: 9, color: sensitivity.color,
                           border: `1px solid ${sensitivity.color}`,

@@ -139,7 +139,7 @@ button:focus:not(:focus-visible) {
 /* Touch target minimums */
 .app-tab-btn {
   min-height: 44px !important;
-  padding: 10px 20px !important;
+  padding: 10px 22px !important;
 }
 
 .app-refresh-btn {
