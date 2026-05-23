@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import Positions from './Positions'
 import Scheduler from './Scheduler'
 import TickerHistory from './TickerHistory'
+import PaperAnalytics from './PaperAnalytics'
 
 interface PaperData {
   model_summary: Record<string, Record<string, { count: number; avg_return: number | null }>>
@@ -164,6 +165,11 @@ export default function PaperPortfolio() {
           </table>
         </div>
       )}
+
+      {/* 성과 분석 */}
+      <div style={{ flexShrink: 0 }}>
+        <PaperAnalytics onSelect={handleSelect} />
+      </div>
 
       {/* 스케줄러 */}
       <div style={{ flexShrink: 0 }}>
