@@ -23,6 +23,7 @@
 > v0.7.3.0부터 **거래대금 워치리스트 일보**(Layer 6)가 추가되었습니다. Stage 1 진입 종목을 14캘린더일 동안 매일 17:00 KST에 추적합니다. 거래대금 건강도(vol_ratio = 오늘거래량/진입거래량), 외국인·기관 스트릭, Ichimoku 주봉 통과 여부를 통합하여 Telegram 일보를 발송합니다. Stage 1→2 전환 시 즉시 알림, vol_ratio < 0.6 3거래일 연속 시 랠리 소멸 경고. `watchlist_vol_log` 테이블로 일별 vol_ratio 이력 유지. `python run_scheduler.py --once watchlist|stage`로 즉시 실행 가능.
 > v0.9.3.0부터 **거래대금 기반 스테이지 분류**·**뉴스 게이팅 강화**·**Fuzzy 티커 해석**이 추가되었습니다. Stage 1/2/3 거래량 조건이 거래대금(`Volume × Close`)으로 전면 교체되어 소형주 과잉 선정을 방지합니다. 뉴스 게이팅은 Ichimoku 스크리너 OR 최근 7일 이내 Stage 활성 종목(이중 레이어)으로 확장되고, Ichimoku 교차 시 🔥 HIGH CONFIDENCE 배지를 부여합니다. `resolve_fuzzy(threshold=0.82)` 추가(`ticker_cache.py`). `/watchlist` 온디맨드 봇 명령어, vol_ratio 전일 대비 델타 표시, D+10 마지막 추적일 배지. Enhanced Ichimoku(전환선 > 기준선·둘 다 우상향)·조건 G NaN 보정 토글(`SCREENER_G_NAN_STRICT`)·일봉 분류기 티커 캡(`DAILY_CLASSIFIER_TICKERS`)도 포함.
 > v0.9.4.0부터 **웹 대시보드 이력 트래킹**이 추가되었습니다. Report 탭에 날짜 범위 선택 바(오늘/-3일/-1주/-2주/-1달)가 추가되어 기간별 Stage·스크리너 등장 종목을 횟수 순으로 조회할 수 있습니다. 종목 클릭 시 Stage 일별 이력(분류일/스테이지/진입고가/피크아웃)·스크리너 주차 이력 팝업 표시. 이력 API 3개(`/api/history/stage`, `/api/history/screener`, `/api/history/ticker/{ticker}`) 추가. 모의투자 모델 카드 클릭으로 포지션 테이블 필터링.
+> v0.9.7.0부터 **모의투자 성과분석**이 추가되었습니다. `GET /api/paper/curve`(모델별 누적 P&L 시계열·집계 통계·미실현 현재가), `GET /api/paper/export`(paper_positions CSV, utf-8-sig BOM) 2개 엔드포인트 추가. `PaperAnalytics.tsx` 컴포넌트(누적 P&L 커브 Recharts, 미실현 포지션 리더보드, CSV 다운로드)가 `PaperPortfolio` 하단에 임베드됩니다.
 > v0.9.5.0부터 **웹 대시보드 히트맵 재설계**가 적용되었습니다. 데이터 소스를 Stage 분류 종목(10~50개)에서 Kiwoom 당일 거래대금 상위 50종목으로 교체. 셀 크기=당일 실제 거래대금, 등락률=Kiwoom 일중 change_pct. Stage 분류된 종목은 컬러 테두리(S1 파랑·S2 보라·S3 주황)로 오버레이. Stage 분류 잡 미실행 시에도 항상 50종목이 표시됨. Kiwoom 응답 실패 시 Stage 분류 데이터로 폴백.
 
 ---
@@ -834,7 +835,7 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 
 ---
 
-*현재 코드베이스 v0.9.3.0 (2026-05-20) 기준*
+*현재 코드베이스 v0.9.7.0 (2026-05-23) 기준*
 
 ---
 

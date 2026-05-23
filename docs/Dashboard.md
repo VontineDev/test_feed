@@ -33,7 +33,8 @@ PostgreSQL (Supabase)
 | 히트맵 | `Heatmap.tsx` | 당일 거래대금 상위 50종목(Kiwoom ka10032). 셀 크기=실제 거래대금, 색상=등락률. Stage 분류 종목은 컬러 테두리 오버레이. 5분 자동갱신 |
 | 레포트 | `Report.tsx` | Stage 분류 결과 + 차트 스크리닝 결과. 날짜 범위 선택(오늘/-3일/-1주/-2주/-1달)으로 이력 조회 가능. 종목 클릭 시 Stage·스크리너 이력 팝업 |
 | Top | `Top.tsx` | 당일 거래대금 상위 20종목. Kiwoom ka10032 API, 5분 캐시 |
-| 모의투자 | `PaperPortfolio.tsx` | 모델별 요약 + 실시간 포지션(60s 갱신) + 청산 이력 + 스케줄러 컨트롤. 모델 카드 클릭으로 포지션 필터링 |
+| 모의투자 | `PaperPortfolio.tsx` | 모델별 요약 + 실시간 포지션(60s 갱신) + 청산 이력 + 스케줄러 컨트롤 + 성과분석(누적 P&L 커브·미실현 리더보드·CSV 다운로드). 모델 카드 클릭으로 포지션 필터링 |
+| 매크로 | `Macro.tsx` | OLS 팩터 모델 6개 매크로 팩터(USD/KRW·기준금리·KOSPI 52주 고저비·VIX·구리/금 비율·10Y-2Y 스프레드) 추적. `--scenario` CLI로 시나리오별 시뮬레이션 가능 |
 | 시그널 (우측 패널/모바일) | `SignalFeed.tsx` | 실시간 매매 신호 SSE 스트림. 15초 폴링 |
 
 모바일(≤768px)에서는 하단 탭바(`MobileNav.tsx`)로 전환됩니다.
@@ -308,6 +309,55 @@ data: [{"id": 123, "direction": "BUY", "strength": 4, ...}]
   }
 }
 ```
+
+---
+
+### GET /api/paper/curve
+
+모델별 누적 P&L 시계열, 집계 통계, ticker_name_map, 미실현 포지션 현재가를 단일 응답으로 반환합니다. `PaperAnalytics` 컴포넌트가 호출합니다.
+
+**응답:**
+```json
+{
+  "data": {
+    "series": {
+      "stage": [{"date": "2026-04-15", "cumulative": 0.05}, ...]
+    },
+    "model_stats": {
+      "stage": {
+        "n_trades": 12,
+        "n_wins": 8,
+        "win_rate": 0.667,
+        "avg_win": 0.082,
+        "avg_loss": -0.045,
+        "total_realized": 0.31,
+        "total_unrealized": 0.06
+      }
+    },
+    "ticker_name_map": {"005930.KS": "삼성전자"},
+    "open_positions": [
+      {
+        "ticker": "000660.KS",
+        "name": "SK하이닉스",
+        "model": "stage",
+        "unrealized_pct": 0.067
+      }
+    ]
+  }
+}
+```
+
+`series`는 closed 포지션의 `blended_return` Window Function 누계. `total_unrealized`는 open 포지션의 `(current_price / entry_actual) - 1` 합산. 현재가는 yfinance 5분 캐시에서 조회합니다.
+
+---
+
+### GET /api/paper/export
+
+`paper_positions` 테이블 전체를 CSV로 다운로드합니다. Excel 한글 호환을 위해 utf-8-sig BOM 인코딩을 사용합니다.
+
+**응답:** `text/csv; charset=utf-8`, `Content-Disposition: attachment; filename="paper_positions_YYYYMMDD.csv"`
+
+컬럼: `model, ticker, name, signal_date, entry_theory, entry_actual, slippage_pct, qty, status, tp1_pct, tp1_ratio, tp1_date, tp1_price, trail_pct, hard_stop_pct, watermark, exit_date, exit_price, exit_type, blended_return, created_at`
 
 ---
 
