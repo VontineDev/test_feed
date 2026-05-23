@@ -33,20 +33,14 @@ for /f "tokens=5" %%i in ('netstat -ano 2^>nul ^| findstr ":%PORT% "^| findstr "
         set PARENT_PID=%%i
         echo   포트 점유 PID: %%i
 
-        :: 프로세스 트리 전체 종료 (uvicorn multiprocessing 자식 포함)
+        :: 프로세스 트리 전체 종료 (/T 플래그가 자식까지 포함)
         taskkill /T /F /PID %%i >nul 2>&1
-
-        :: taskkill 실패 시 — 자식 프로세스 직접 종료
-        :: (uvicorn spawn_main 자식: parent_pid=%%i 패턴으로 찾아 종료)
-        for /f "tokens=2" %%j in ('wmic process where "commandline like '%%parent_pid=%%i%%'" get processid 2^>nul ^| findstr /r "[0-9]"') do (
-            taskkill /F /PID %%j >nul 2>&1
-        )
         set KILLED=1
     )
 )
 
-:: python.exe 중 uvicorn main:app 실행 중인 것도 추가 정리
-taskkill /F /FI "IMAGENAME eq python.exe" /FI "WINDOWTITLE eq *uvicorn*" >nul 2>&1
+:: python.exe 중 uvicorn 실행 중인 것도 추가 정리 (for/f 더블쿼트 이슈 → PowerShell 사용)
+powershell -NoProfile -Command "Get-WmiObject Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*uvicorn*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 
 if "!KILLED!"=="0" (
     echo   실행 중인 서버 없음.
