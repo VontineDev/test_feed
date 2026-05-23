@@ -28,6 +28,8 @@ export default function PaperPortfolio() {
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null)
   const [selectedName, setSelectedName] = useState<string>('')
   const [filterModel, setFilterModel] = useState<string | null>(null)
+  const [posOpen, setPosOpen] = useState(true)
+  const [analyticsOpen, setAnalyticsOpen] = useState(true)
 
   useEffect(() => {
     fetch('/api/report/paper')
@@ -94,81 +96,94 @@ export default function PaperPortfolio() {
         </div>
       )}
 
-      {/* 포지션 + 이력 패널 (수평 분할) */}
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
-
-        {/* 왼쪽: 현재 포지션 목록 */}
-        <div style={{
-          flex: selectedTicker ? '0 0 55%' : 1,
-          minWidth: 0,
-          overflowY: 'auto',
-          borderRight: selectedTicker ? '1px solid #1e293b' : undefined,
-          transition: 'flex 0.15s',
-        }}>
-          <Positions onSelect={handleSelect} selectedTicker={selectedTicker} filterModel={filterModel} />
-        </div>
-
-        {/* 오른쪽: 종목 이력 패널 */}
-        {selectedTicker && (
-          <div style={{ flex: '0 0 45%', minWidth: 0, overflowY: 'auto' }}>
-            <TickerHistory
-              ticker={selectedTicker}
-              name={selectedName}
-              onClose={() => { setSelectedTicker(null); setSelectedName('') }}
-            />
-          </div>
+      {/* 포지션 섹션 헤더 */}
+      <button style={s.collapseHdr} onClick={() => setPosOpen(o => !o)}>
+        <span style={s.collapseTitle}>포지션</span>
+        {data && (
+          <span style={s.collapseBadge}>{data.open.length}건</span>
         )}
-      </div>
+        <span style={s.chevron}>{posOpen ? '▲' : '▼'}</span>
+      </button>
 
-      {/* 최근 청산 이력 */}
-      {data && data.closed.length > 0 && (
-        <div style={{ borderTop: '1px solid #1e293b', flexShrink: 0, maxHeight: 220, overflowY: 'auto' }}>
-          <div style={{ padding: '7px 12px 0', fontWeight: 700, fontSize: 11, color: '#475569', position: 'sticky', top: 0, background: '#0f172a' }}>
-            최근 청산 이력
+      {/* 포지션 + 이력 패널 */}
+      {posOpen && (
+        <>
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
+            <div style={{
+              flex: selectedTicker ? '0 0 55%' : 1,
+              minWidth: 0,
+              overflowY: 'auto',
+              borderRight: selectedTicker ? '1px solid #1e293b' : undefined,
+              transition: 'flex 0.15s',
+            }}>
+              <Positions onSelect={handleSelect} selectedTicker={selectedTicker} filterModel={filterModel} />
+            </div>
+            {selectedTicker && (
+              <div style={{ flex: '0 0 45%', minWidth: 0, overflowY: 'auto' }}>
+                <TickerHistory
+                  ticker={selectedTicker}
+                  name={selectedName}
+                  onClose={() => { setSelectedTicker(null); setSelectedName('') }}
+                />
+              </div>
+            )}
           </div>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
-            <thead>
-              <tr>
-                {['종목', '모델', '청산일', '청산유형', 'blended수익'].map(h => (
-                  <th key={h} style={s.th}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {data.closed.map((r, i) => {
-                const isSelected = r.ticker === selectedTicker
-                return (
-                  <tr
-                    key={i}
-                    style={{ background: isSelected ? '#0f2849' : undefined, cursor: 'pointer' }}
-                    onClick={() => handleSelect(r.ticker, r.name)}
-                  >
-                    <td style={s.td}>
-                      <div style={{ color: isSelected ? '#93c5fd' : '#cbd5e1', fontWeight: 600 }}>{r.name}</div>
-                      <div style={{ color: '#475569', fontSize: 10 }}>{r.signal_date}</div>
-                    </td>
-                    <td style={{ ...s.td, color: '#94a3b8' }}>{MODEL_LABEL[r.model] ?? r.model}</td>
-                    <td style={{ ...s.td, color: '#64748b' }}>{r.exit_date ?? '—'}</td>
-                    <td style={{ ...s.td, color: '#94a3b8' }}>
-                      {r.exit_type ? (EXIT_LABEL[r.exit_type] ?? r.exit_type) : '—'}
-                      {r.tp1_date && <span style={{ color: '#a78bfa', marginLeft: 4 }}>TP1</span>}
-                    </td>
-                    <td style={{ ...s.td, textAlign: 'right', color: pctColor(r.blended_return ? r.blended_return * 100 : null), fontWeight: 600 }}>
-                      {r.blended_return != null
-                        ? `${r.blended_return > 0 ? '+' : ''}${(r.blended_return * 100).toFixed(1)}%`
-                        : '—'}
-                    </td>
+
+          {/* 최근 청산 이력 */}
+          {data && data.closed.length > 0 && (
+            <div style={{ borderTop: '1px solid #1e293b', flexShrink: 0, maxHeight: 220, overflowY: 'auto' }}>
+              <div style={{ padding: '7px 12px 0', fontWeight: 700, fontSize: 11, color: '#475569', position: 'sticky', top: 0, background: '#0f172a' }}>
+                최근 청산 이력
+              </div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                <thead>
+                  <tr>
+                    {['종목', '모델', '청산일', '청산유형', 'blended수익'].map(h => (
+                      <th key={h} style={s.th}>{h}</th>
+                    ))}
                   </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+                </thead>
+                <tbody>
+                  {data.closed.map((r, i) => {
+                    const isSelected = r.ticker === selectedTicker
+                    return (
+                      <tr
+                        key={i}
+                        style={{ background: isSelected ? '#0f2849' : undefined, cursor: 'pointer' }}
+                        onClick={() => handleSelect(r.ticker, r.name)}
+                      >
+                        <td style={s.td}>
+                          <div style={{ color: isSelected ? '#93c5fd' : '#cbd5e1', fontWeight: 600 }}>{r.name}</div>
+                          <div style={{ color: '#475569', fontSize: 10 }}>{r.signal_date}</div>
+                        </td>
+                        <td style={{ ...s.td, color: '#94a3b8' }}>{MODEL_LABEL[r.model] ?? r.model}</td>
+                        <td style={{ ...s.td, color: '#64748b' }}>{r.exit_date ?? '—'}</td>
+                        <td style={{ ...s.td, color: '#94a3b8' }}>
+                          {r.exit_type ? (EXIT_LABEL[r.exit_type] ?? r.exit_type) : '—'}
+                          {r.tp1_date && <span style={{ color: '#a78bfa', marginLeft: 4 }}>TP1</span>}
+                        </td>
+                        <td style={{ ...s.td, textAlign: 'right', color: pctColor(r.blended_return ? r.blended_return * 100 : null), fontWeight: 600 }}>
+                          {r.blended_return != null
+                            ? `${r.blended_return > 0 ? '+' : ''}${(r.blended_return * 100).toFixed(1)}%`
+                            : '—'}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       )}
 
       {/* 성과 분석 */}
-      <div style={{ flexShrink: 0 }}>
-        <PaperAnalytics onSelect={handleSelect} />
+      <div style={analyticsOpen ? { flexShrink: 0, maxHeight: 420, overflowY: 'auto' } : { flexShrink: 0 }}>
+        <PaperAnalytics
+          onSelect={handleSelect}
+          collapsed={!analyticsOpen}
+          onToggle={() => setAnalyticsOpen(o => !o)}
+        />
       </div>
 
       {/* 스케줄러 */}
@@ -182,6 +197,15 @@ export default function PaperPortfolio() {
 const s: Record<string, React.CSSProperties> = {
   modelRow: { display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#94a3b8', marginBottom: 2 },
   lbl: { color: '#475569' },
+  collapseHdr: {
+    width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+    padding: '7px 12px', background: 'none', border: 'none',
+    borderTop: '1px solid #1e293b', borderBottom: '1px solid #1e293b',
+    color: '#94a3b8', cursor: 'pointer', textAlign: 'left', flexShrink: 0,
+  },
+  collapseTitle: { fontWeight: 700, fontSize: 11, flex: 1 },
+  collapseBadge: { background: '#1e293b', color: '#64748b', fontSize: 10, padding: '2px 7px', borderRadius: 10 },
+  chevron: { fontSize: 10, color: '#475569' },
   th: { position: 'sticky', top: 0, background: '#0f172a', color: '#475569', padding: '5px 8px', textAlign: 'left', fontWeight: 600, whiteSpace: 'nowrap', borderRight: '1px solid #1e293b', borderBottom: '1px solid #1e293b' },
   td: { padding: '5px 8px', borderBottom: '1px solid #1e293b', borderRight: '1px solid #1e293b', verticalAlign: 'middle' },
 }

@@ -37,6 +37,8 @@ interface CurveData {
 
 interface PaperAnalyticsProps {
   onSelect: (ticker: string, name: string) => void
+  collapsed?: boolean
+  onToggle?: () => void
 }
 
 // ── 상수 ─────────────────────────────────────────────────────
@@ -96,7 +98,7 @@ function fmt(v: number | null, digits = 1): string {
 
 // ── PaperAnalytics ────────────────────────────────────────────
 
-export default function PaperAnalytics({ onSelect }: PaperAnalyticsProps) {
+export default function PaperAnalytics({ onSelect, collapsed = false, onToggle }: PaperAnalyticsProps) {
   const [data, setData] = useState<CurveData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
@@ -115,11 +117,34 @@ export default function PaperAnalytics({ onSelect }: PaperAnalyticsProps) {
 
   useEffect(() => { load() }, [])
 
+  const header = (
+    <div
+      style={{ ...S.header, cursor: onToggle ? 'pointer' : undefined }}
+      onClick={onToggle}
+    >
+      <span style={S.title}>성과 분석</span>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        {!collapsed && (
+          <button style={S.btn} onClick={(e) => { e.stopPropagation(); load() }}>갱신</button>
+        )}
+        {onToggle && <span style={S.chevron}>{collapsed ? '▼' : '▲'}</span>}
+      </div>
+    </div>
+  )
+
+  if (collapsed) return <div style={S.wrap}>{header}</div>
+
   if (loading) return (
-    <div style={S.empty}>성과분석 불러오는 중…</div>
+    <div style={S.wrap}>
+      {header}
+      <div style={S.empty}>성과분석 불러오는 중…</div>
+    </div>
   )
   if (error) return (
-    <div style={S.empty}>데이터 조회 실패 <button style={S.btn} onClick={load}>재시도</button></div>
+    <div style={S.wrap}>
+      {header}
+      <div style={S.empty}>데이터 조회 실패 <button style={S.btn} onClick={(e) => { e.stopPropagation(); load() }}>재시도</button></div>
+    </div>
   )
   if (!data) return null
 
@@ -184,11 +209,7 @@ export default function PaperAnalytics({ onSelect }: PaperAnalyticsProps) {
 
   return (
     <div style={S.wrap}>
-      {/* 헤더 + 갱신 버튼 */}
-      <div style={S.header}>
-        <span style={S.title}>성과 분석</span>
-        <button style={S.btn} onClick={load}>갱신</button>
-      </div>
+      {header}
 
       {/* 섹션 1: 모델 통계 테이블 */}
       {Object.keys(data.model_stats).length > 0 && (
@@ -393,4 +414,5 @@ const S: Record<string, React.CSSProperties> = {
     fontSize: 11,
     padding: '2px 8px',
   },
+  chevron: { fontSize: 10, color: '#475569' },
 }
