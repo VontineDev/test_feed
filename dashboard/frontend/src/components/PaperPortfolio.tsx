@@ -162,7 +162,7 @@ export default function PaperPortfolio() {
                           {r.exit_type ? (EXIT_LABEL[r.exit_type] ?? r.exit_type) : '—'}
                           {r.tp1_date && <span style={{ color: '#a78bfa', marginLeft: 4 }}>TP1</span>}
                         </td>
-                        <td style={{ ...s.td, textAlign: 'right', color: pctColor(r.blended_return ? r.blended_return * 100 : null), fontWeight: 600 }}>
+                        <td style={{ ...s.td, textAlign: 'right', color: pctColor(r.blended_return != null ? r.blended_return * 100 : null), fontWeight: 600 }}>
                           {r.blended_return != null
                             ? `${r.blended_return > 0 ? '+' : ''}${(r.blended_return * 100).toFixed(1)}%`
                             : '—'}

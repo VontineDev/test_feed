@@ -167,20 +167,10 @@ export default function PaperAnalytics({ onSelect, collapsed = false, onToggle }
   }
   const chartData = [...pivot, unrealizedPoint]
 
-  // 리더보드: closed 종목 (blended_return 기준) + open 종목 (unrealized_pct 기준)
+  // 리더보드: open 포지션 (unrealized_pct 기준)
   type LeaderRow = {
     ticker: string; name: string; model: string
-    pct: number | null; isOpen: boolean; exitType?: string
-  }
-  const closedRows: LeaderRow[] = []
-  for (const [ticker, name] of Object.entries(data.ticker_name_map)) {
-    // closed rows는 API에 개별 blended_return이 없으므로
-    // model_stats에서 모델별 마지막값 추적은 불가 → 리더보드는 open_positions만 표시하되
-    // closed는 model_stats 없이 ticker_name_map에서 이름만 씀.
-    // 실제로는 /api/report/paper의 closed[]에서 blended_return이 있음.
-    // 여기서는 simple하게: open_positions에 없는 ticker = closed로 표시
-    const isOpen = data.open_positions.some((p) => p.ticker === ticker)
-    if (!isOpen) closedRows.push({ ticker, name, model: '—', pct: null, isOpen: false })
+    pct: number | null; isOpen: boolean
   }
   const openRows: LeaderRow[] = data.open_positions.map((p) => ({
     ticker: p.ticker,
@@ -201,7 +191,7 @@ export default function PaperAnalytics({ onSelect, collapsed = false, onToggle }
       a.href = url
       a.download = `paper_positions_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.csv`
       a.click()
-      URL.revokeObjectURL(url)
+      setTimeout(() => URL.revokeObjectURL(url), 100)
     } catch {
       alert('CSV 다운로드 실패')
     }

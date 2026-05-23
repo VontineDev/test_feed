@@ -932,8 +932,6 @@ async def get_paper_ticker_history(ticker: str):
 @app.get("/api/paper/curve")
 async def get_paper_curve():
     """모델별 누적 P&L 시계열 + 모델 통계 + open 포지션 미실현 반환."""
-    import csv, io
-    from datetime import date as _date
     pool = await get_pool()
     try:
         async with pool.acquire() as conn:
@@ -961,7 +959,7 @@ async def get_paper_curve():
                     COUNT(*)                                                   AS n_trades,
                     COUNT(*) FILTER (WHERE blended_return > 0)                 AS n_wins,
                     AVG(blended_return) FILTER (WHERE blended_return > 0)      AS avg_win,
-                    AVG(blended_return) FILTER (WHERE blended_return <= 0)     AS avg_loss,
+                    AVG(blended_return) FILTER (WHERE blended_return < 0)      AS avg_loss,
                     SUM(blended_return)                                         AS total_realized
                 FROM   paper_positions
                 WHERE  status = 'closed' AND blended_return IS NOT NULL
