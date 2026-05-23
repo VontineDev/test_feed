@@ -103,7 +103,7 @@ dashboard/                # 웹 대시보드 (FastAPI + React)
   backend/                # FastAPI 서버 (포트 8000)
   frontend/               # React + Vite (dist/ 정적 빌드)
 
-tests/                    # pytest 테스트 (591개)
+tests/                    # pytest 테스트 (596개)
 docs/                     # 문서
 scripts/                  # 운영 스크립트
   restart_dashboard.bat   # 대시보드 서버 재시작
