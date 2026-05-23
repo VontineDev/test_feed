@@ -675,10 +675,13 @@ test_feed/
 │   └── test_watchlist_brief.py    # pytest — 워치리스트 일보 포맷 + DB 헬퍼 (v0.7.3.0~)
 │
 ├── scripts/
-│   ├── register_task.ps1          # Windows 작업 스케줄러 등록 (NewsCrawler)
-│   ├── register_aftermarket_task.ps1 # 시간외 단일가 수집 태스크 등록
+│   ├── register_tasks.ps1         # Windows 작업 스케줄러 통합 등록 (-Task all|crawler|aftermarket|dashboard)
 │   ├── restart_scheduler.bat      # NewsCrawler 재시작 (DB 스키마 변경 후 사용)
-│   ├── check_aftermarket_log.ps1  # 시간외 수집 로그 확인
+│   ├── restart_dashboard.bat      # 대시보드 서버 재시작
+│   ├── start_dashboard_hidden.vbs # 창 없는 대시보드 시작 (VBScript)
+│   ├── start_dashboard_service.bat# 대시보드 서비스 래퍼
+│   ├── start_crawler.bat          # NewsCrawler 배치 실행
+│   ├── run_aftermarket_sync.bat   # 장후 동기화 실행
 │   └── run_sweep.py               # 파라미터 그리드서치 스위프 (288 조합)
 │
 ├── VERSION                        # 현재 버전 (SemVer 4자리)
@@ -690,8 +693,9 @@ test_feed/
 ├── requirements.txt               # 의존성
 ├── pytest.ini                     # testpaths = tests
 │
-├── sql/pgadmin_queries.sql        # DB 관리 쿼리
-└── start_crawler.bat              # NewsCrawler 배치 실행 (Task Scheduler 연결)
+├── sql/
+│   ├── pgadmin_queries.sql        # DB 관리 쿼리
+│   └── rls_policies.sql           # RLS 정책 마이그레이션 (14 테이블 backend_all)
 ```
 
 ---
@@ -813,6 +817,7 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 | 신호는 참고용임을 메시지에 항상 명시 | ✅ |
 | 실거래 자동 주문 기능 없음 | ✅ |
 | Supabase RLS 활성화 — 전 테이블 PostgREST anon 노출 차단 | ✅ (v0.9.0.0~) |
+| RLS `backend_all` 정책 — 14개 테이블 명시적 allow-all 정책, Security Advisor 경고 해소 | ✅ (v0.9.7.0~) |
 | asyncpg `statement_cache_size=0` — Supabase PgBouncer 호환 | ✅ (v0.9.0.0~) |
 | 모의투자는 키움 가상 계좌 전용 (실자산 영향 없음) | ✅ |
 

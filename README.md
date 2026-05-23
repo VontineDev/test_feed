@@ -103,7 +103,7 @@ dashboard/                # 웹 대시보드 (FastAPI + React)
   backend/                # FastAPI 서버 (포트 8000)
   frontend/               # React + Vite (dist/ 정적 빌드)
 
-tests/                    # pytest 테스트 (596개)
+tests/                    # pytest 테스트 (601개)
 docs/                     # 문서
 scripts/                  # 운영 스크립트
   restart_dashboard.bat   # 대시보드 서버 재시작
@@ -112,8 +112,11 @@ scripts/                  # 운영 스크립트
   duckdns_update.bat      # DuckDNS IP 업데이트
   restart_scheduler.bat   # Windows 작업 스케줄러 NewsCrawler 재시작
   run_sweep.py            # 백테스트 파라미터 그리드서치
-  register_task.ps1       # Windows 작업 스케줄러 등록
+  register_tasks.ps1      # Windows 작업 스케줄러 통합 등록 (-Task all|crawler|aftermarket|dashboard)
+  start_dashboard_hidden.vbs   # 창 없는 대시보드 시작 (VBScript)
+  start_dashboard_service.bat  # 대시보드 서비스 래퍼
 sql/                      # DB 스키마 마이그레이션
+  rls_policies.sql        # RLS 정책 마이그레이션 (14 테이블 backend_all, pgAdmin/Supabase SQL 에디터 실행)
 logs/                     # 로그 파일
 ```
 

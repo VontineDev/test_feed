@@ -15,6 +15,12 @@ All notable changes to this project will be documented in this file.
 - **백엔드 단위 테스트** (`tests/test_paper_analytics.py`): pytest-asyncio 기반 5개 테스트. curve happy path(closed+open), closed 없음, open 없음(yfinance 미호출), export happy path(BOM+헤더+데이터), export 빈 테이블.
 - **프론트엔드 단위 테스트** (`dashboard/frontend/src/components/PaperAnalytics.test.ts`): Vitest 기반 5개 테스트. pivotSeries 빈 입력, 단일 모델, 날짜 분리 null fill, 동일 날짜 복수 모델, 정렬 보장.
 
+### Fixed
+- **Supabase RLS 정책 누락** (`core/db.py`, `data/kiwoom_paper_trader.py`, `data/kiwoom_aftermarket_sync.py`): `ENABLE ROW LEVEL SECURITY`만 설정하고 `CREATE POLICY`를 생성하지 않아 Supabase Security Advisor `rls_enabled_no_policy` 경고 14건 발생. 모든 대상 테이블에 `CREATE POLICY backend_all FOR ALL USING (true) WITH CHECK (true)` 멱등 DO 블록 추가. 기존 DB 즉시 적용용 `sql/rls_policies.sql` 추가 — Supabase SQL 에디터 또는 pgAdmin에서 실행.
+
+### Changed
+- **스크립트 통합** (`scripts/`): `register_task.ps1` + `register_aftermarket_task.ps1` → `register_tasks.ps1` 단일 스크립트로 통합(`-Task all|crawler|aftermarket|dashboard` 파라미터 지원). `start_dashboard_hidden.vbs`·`start_dashboard_service.bat` 추가 — 창 없는 백그라운드 대시보드 실행. `run_aftermarket_sync.bat` 경로 수정(`kiwoom_aftermarket_sync.py`→`data/kiwoom_aftermarket_sync.py`). `start_crawler.bat` `.env` 파싱 수정. Docker 파일(`Dockerfile`·`docker-compose.yml`) 및 미사용 스크립트 3개 제거.
+
 ## [0.9.6.1] - 2026-05-23
 
 ### Changed
