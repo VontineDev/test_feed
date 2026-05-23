@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { tokens } from '../tokens'
 import StageHistoryPopup from './StageHistoryPopup'
 
 interface ScreenerItem {
@@ -17,7 +18,7 @@ interface Props {
   end: string
 }
 
-const CHIP_COLOR = { all: '#60a5fa', enhanced: '#a78bfa', gapjum: '#34d399' } as const
+const CHIP_COLOR = { all: tokens.accent.blueSoft, enhanced: tokens.stage[2], gapjum: tokens.chart.cat.ichimoku } as const
 
 export default function HistoryScreenerView({ items, start, end }: Props) {
   const [filter, setFilter] = useState<'all' | 'enhanced' | 'gapjum'>('all')
@@ -48,7 +49,7 @@ export default function HistoryScreenerView({ items, start, end }: Props) {
             style={{
               ...s.chip,
               border: filter === f ? `1px solid ${CHIP_COLOR[f]}` : '1px solid transparent',
-              background: filter === f ? '#1e3a5f' : '#1e293b',
+              background: filter === f ? tokens.bg.active : tokens.bg.raised,
             }}
             onClick={() => setFilter(f)}
           >
@@ -78,16 +79,16 @@ export default function HistoryScreenerView({ items, start, end }: Props) {
                   <div style={s.tickerName}>{it.name}</div>
                   <div style={s.tickerCode}>{it.ticker}</div>
                 </td>
-                <td style={{ ...s.td, textAlign: 'right', fontWeight: 700, color: '#60a5fa' }}>
+                <td style={{ ...s.td, textAlign: 'right', fontWeight: 700, color: tokens.accent.blueSoft }}>
                   {it.week_count}주
                 </td>
-                <td style={{ ...s.td, color: '#64748b' }}>{it.first_week}</td>
-                <td style={{ ...s.td, color: '#64748b' }}>{it.last_week}</td>
+                <td style={{ ...s.td, color: tokens.tx.muted }}>{it.first_week}</td>
+                <td style={{ ...s.td, color: tokens.tx.muted }}>{it.last_week}</td>
                 <td style={{ ...s.td, textAlign: 'center' }}>
-                  {it.any_enhanced && <span style={{ color: '#a78bfa' }}>강화</span>}
+                  {it.any_enhanced && <span style={{ color: tokens.stage[2] }}>강화</span>}
                 </td>
                 <td style={{ ...s.td, textAlign: 'center' }}>
-                  {it.any_gapjum && <span style={{ color: '#34d399' }}>갭</span>}
+                  {it.any_gapjum && <span style={{ color: tokens.chart.cat.ichimoku }}>갭</span>}
                 </td>
               </tr>
             ))}
@@ -109,20 +110,20 @@ export default function HistoryScreenerView({ items, start, end }: Props) {
 }
 
 const s: Record<string, React.CSSProperties> = {
-  empty: { color: '#475569', textAlign: 'center', padding: '24px 0', fontSize: 12 },
+  empty: { color: tokens.tx.subtle, textAlign: 'center', padding: '24px 0', fontSize: 12 },
   chips: { display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' },
-  chip: { background: '#1e293b', borderRadius: 6, padding: '6px 12px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, outline: 'none', cursor: 'pointer' },
-  chipLabel: { fontSize: 10, color: '#64748b' },
+  chip: { background: tokens.bg.raised, borderRadius: 6, padding: '6px 12px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, outline: 'none', cursor: 'pointer' },
+  chipLabel: { fontSize: 10, color: tokens.tx.muted },
   chipVal: { fontSize: 18, fontWeight: 700 },
   tableWrap: { overflowX: 'auto', maxHeight: 280, overflowY: 'auto' },
   table: { width: '100%', borderCollapse: 'collapse', fontSize: 11 },
   th: {
-    position: 'sticky', top: 0, background: '#0f172a',
-    color: '#475569', padding: '5px 8px', textAlign: 'left',
+    position: 'sticky', top: 0, background: tokens.bg.row,
+    color: tokens.tx.subtle, padding: '5px 8px', textAlign: 'left',
     fontWeight: 600, whiteSpace: 'nowrap',
-    borderRight: '1px solid #1e293b', borderBottom: '1px solid #1e293b',
+    borderRight: `1px solid ${tokens.bd.default}`, borderBottom: `1px solid ${tokens.bd.default}`,
   },
-  td: { padding: '5px 8px', borderBottom: '1px solid #1e293b', borderRight: '1px solid #1e293b', verticalAlign: 'middle' },
-  tickerName: { color: '#cbd5e1', fontWeight: 600 },
-  tickerCode: { color: '#475569', fontSize: 10 },
+  td: { padding: '5px 8px', borderBottom: `1px solid ${tokens.bd.default}`, borderRight: `1px solid ${tokens.bd.default}`, verticalAlign: 'middle' },
+  tickerName: { color: tokens.tx.secondary, fontWeight: 600 },
+  tickerCode: { color: tokens.tx.subtle, fontSize: 10 },
 }

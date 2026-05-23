@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { tokens } from '../tokens'
 
 interface Position {
   id: number
@@ -16,10 +17,10 @@ interface Position {
 }
 
 const pctColor = (v: number | null) => {
-  if (v === null) return '#94a3b8'
-  if (v > 0) return '#4ade80'
-  if (v < 0) return '#f87171'
-  return '#94a3b8'
+  if (v === null) return tokens.tx.secondary
+  if (v > 0) return tokens.chart.cat.ichimoku
+  if (v < 0) return tokens.semantic.up
+  return tokens.tx.secondary
 }
 
 interface Props {
@@ -77,8 +78,8 @@ export default function Positions({ onSelect, selectedTicker, filterModel }: Pro
                 onClick={() => onSelect?.(r.ticker, r.name)}
               >
                 <td style={styles.td}>
-                  <div style={{ fontWeight: 600, color: isSelected ? '#93c5fd' : '#e2e8f0' }}>{r.name}</div>
-                  <div style={{ fontSize: 10, color: '#475569' }}>{r.ticker}</div>
+                  <div style={{ fontWeight: 600, color: isSelected ? tokens.accent.blueLight : tokens.tx.secondary }}>{r.name}</div>
+                  <div style={{ fontSize: 10, color: tokens.tx.subtle }}>{r.ticker}</div>
                 </td>
                 <td style={styles.td}><span style={styles.badge}>{r.model}</span></td>
                 <td style={styles.td}>{r.signal_date?.slice(0, 10)}</td>
@@ -99,12 +100,12 @@ export default function Positions({ onSelect, selectedTicker, filterModel }: Pro
 
 const styles: Record<string, React.CSSProperties> = {
   wrap: { padding: 12, overflowX: 'auto' },
-  hdr: { fontWeight: 700, fontSize: 13, marginBottom: 8, color: '#94a3b8' },
+  hdr: { fontWeight: 700, fontSize: 13, marginBottom: 8, color: tokens.tx.secondary },
   table: { width: '100%', borderCollapse: 'collapse', fontSize: 12 },
-  theadRow: { background: '#1e293b' },
-  th: { padding: '6px 10px', textAlign: 'left', color: '#64748b', fontWeight: 600, borderBottom: '1px solid #334155', borderRight: '1px solid #1e293b' },
-  tr: { borderBottom: '1px solid #1e293b' },
-  td: { padding: '6px 10px', color: '#e2e8f0', borderRight: '1px solid #1e293b' },
-  badge: { background: '#1e3a5f', color: '#93c5fd', padding: '2px 6px', borderRadius: 4, fontSize: 11 },
-  empty: { padding: 24, color: '#64748b', textAlign: 'center' },
+  theadRow: { background: tokens.bg.raised },
+  th: { padding: '6px 10px', textAlign: 'left', color: tokens.tx.muted, fontWeight: 600, borderBottom: `1px solid ${tokens.bd.emphasis}`, borderRight: `1px solid ${tokens.bd.default}` },
+  tr: { borderBottom: `1px solid ${tokens.bd.default}` },
+  td: { padding: '6px 10px', color: tokens.tx.secondary, borderRight: `1px solid ${tokens.bd.default}` },
+  badge: { background: tokens.bg.active, color: tokens.accent.blueLight, padding: '2px 6px', borderRadius: 4, fontSize: 11 },
+  empty: { padding: 24, color: tokens.tx.muted, textAlign: 'center' },
 }

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { tokens } from '../tokens'
 import Positions from './Positions'
 import Scheduler from './Scheduler'
 import TickerHistory from './TickerHistory'
@@ -19,8 +20,8 @@ const EXIT_LABEL: Record<string, string> = {
 }
 
 const pctColor = (v: number | null | undefined) => {
-  if (v == null) return '#64748b'
-  return v > 0 ? '#4ade80' : v < 0 ? '#f87171' : '#94a3b8'
+  if (v == null) return tokens.tx.muted
+  return v > 0 ? tokens.chart.cat.ichimoku : v < 0 ? tokens.semantic.up : tokens.tx.secondary
 }
 
 export default function PaperPortfolio() {
@@ -51,12 +52,12 @@ export default function PaperPortfolio() {
   const models = data ? Object.keys(data.model_summary) : []
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', fontSize: 12, color: '#e2e8f0' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', fontSize: 12, color: tokens.tx.secondary }}>
 
       {/* 모델별 요약 */}
       {data && models.length > 0 && (
-        <div style={{ padding: '10px 12px', borderBottom: '1px solid #1e293b', flexShrink: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 11, color: '#475569', marginBottom: 8 }}>모델별 요약</div>
+        <div style={{ padding: '10px 12px', borderBottom: `1px solid ${tokens.bd.default}`, flexShrink: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 11, color: tokens.tx.subtle, marginBottom: 8 }}>모델별 요약</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: 8 }}>
             {models.map(m => {
               const info = data.model_summary[m]
@@ -68,14 +69,14 @@ export default function PaperPortfolio() {
                 key={m}
                 onClick={() => setFilterModel(prev => prev === m ? null : m)}
                 style={{
-                  background: filterModel === m ? '#1e3a5f' : '#1e293b',
+                  background: filterModel === m ? tokens.bg.active : tokens.bg.raised,
                   borderRadius: 8,
                   padding: '10px 12px',
                   cursor: 'pointer',
-                  outline: filterModel === m ? '1px solid #3b82f6' : undefined,
+                  outline: filterModel === m ? `1px solid ${tokens.accent.blue}` : undefined,
                 }}
               >
-                  <div style={{ fontWeight: 700, color: '#93c5fd', marginBottom: 6 }}>{MODEL_LABEL[m] ?? m}</div>
+                  <div style={{ fontWeight: 700, color: tokens.accent.blueLight, marginBottom: 6 }}>{MODEL_LABEL[m] ?? m}</div>
                   <div style={s.modelRow}><span style={s.lbl}>오픈</span><span>{open.count}</span></div>
                   <div style={s.modelRow}><span style={s.lbl}>대기</span><span>{pending.count}</span></div>
                   {closed.count > 0 && (
@@ -113,7 +114,7 @@ export default function PaperPortfolio() {
               flex: selectedTicker ? '0 0 55%' : 1,
               minWidth: 0,
               overflowY: 'auto',
-              borderRight: selectedTicker ? '1px solid #1e293b' : undefined,
+              borderRight: selectedTicker ? `1px solid ${tokens.bd.default}` : undefined,
               transition: 'flex 0.15s',
             }}>
               <Positions onSelect={handleSelect} selectedTicker={selectedTicker} filterModel={filterModel} />
@@ -131,8 +132,8 @@ export default function PaperPortfolio() {
 
           {/* 최근 청산 이력 */}
           {data && data.closed.length > 0 && (
-            <div style={{ borderTop: '1px solid #1e293b', flexShrink: 0, maxHeight: 220, overflowY: 'auto' }}>
-              <div style={{ padding: '7px 12px 0', fontWeight: 700, fontSize: 11, color: '#475569', position: 'sticky', top: 0, background: '#0f172a' }}>
+            <div style={{ borderTop: `1px solid ${tokens.bd.default}`, flexShrink: 0, maxHeight: 220, overflowY: 'auto' }}>
+              <div style={{ padding: '7px 12px 0', fontWeight: 700, fontSize: 11, color: tokens.tx.subtle, position: 'sticky', top: 0, background: tokens.bg.row }}>
                 최근 청산 이력
               </div>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
@@ -153,14 +154,14 @@ export default function PaperPortfolio() {
                         onClick={() => handleSelect(r.ticker, r.name)}
                       >
                         <td style={s.td}>
-                          <div style={{ color: isSelected ? '#93c5fd' : '#cbd5e1', fontWeight: 600 }}>{r.name}</div>
-                          <div style={{ color: '#475569', fontSize: 10 }}>{r.signal_date}</div>
+                          <div style={{ color: isSelected ? tokens.accent.blueLight : tokens.tx.secondary, fontWeight: 600 }}>{r.name}</div>
+                          <div style={{ color: tokens.tx.subtle, fontSize: 10 }}>{r.signal_date}</div>
                         </td>
-                        <td style={{ ...s.td, color: '#94a3b8' }}>{MODEL_LABEL[r.model] ?? r.model}</td>
-                        <td style={{ ...s.td, color: '#64748b' }}>{r.exit_date ?? '—'}</td>
-                        <td style={{ ...s.td, color: '#94a3b8' }}>
+                        <td style={{ ...s.td, color: tokens.tx.secondary }}>{MODEL_LABEL[r.model] ?? r.model}</td>
+                        <td style={{ ...s.td, color: tokens.tx.muted }}>{r.exit_date ?? '—'}</td>
+                        <td style={{ ...s.td, color: tokens.tx.secondary }}>
                           {r.exit_type ? (EXIT_LABEL[r.exit_type] ?? r.exit_type) : '—'}
-                          {r.tp1_date && <span style={{ color: '#a78bfa', marginLeft: 4 }}>TP1</span>}
+                          {r.tp1_date && <span style={{ color: tokens.stage[2], marginLeft: 4 }}>TP1</span>}
                         </td>
                         <td style={{ ...s.td, textAlign: 'right', color: pctColor(r.blended_return != null ? r.blended_return * 100 : null), fontWeight: 600 }}>
                           {r.blended_return != null
@@ -195,17 +196,17 @@ export default function PaperPortfolio() {
 }
 
 const s: Record<string, React.CSSProperties> = {
-  modelRow: { display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#94a3b8', marginBottom: 2 },
-  lbl: { color: '#475569' },
+  modelRow: { display: 'flex', justifyContent: 'space-between', fontSize: 11, color: tokens.tx.secondary, marginBottom: 2 },
+  lbl: { color: tokens.tx.subtle },
   collapseHdr: {
     width: '100%', display: 'flex', alignItems: 'center', gap: 8,
     padding: '7px 12px', background: 'none', border: 'none',
-    borderTop: '1px solid #1e293b', borderBottom: '1px solid #1e293b',
-    color: '#94a3b8', cursor: 'pointer', textAlign: 'left', flexShrink: 0,
+    borderTop: `1px solid ${tokens.bd.default}`, borderBottom: `1px solid ${tokens.bd.default}`,
+    color: tokens.tx.secondary, cursor: 'pointer', textAlign: 'left', flexShrink: 0,
   },
   collapseTitle: { fontWeight: 700, fontSize: 11, flex: 1 },
-  collapseBadge: { background: '#1e293b', color: '#64748b', fontSize: 10, padding: '2px 7px', borderRadius: 10 },
-  chevron: { fontSize: 10, color: '#475569' },
-  th: { position: 'sticky', top: 0, background: '#0f172a', color: '#475569', padding: '5px 8px', textAlign: 'left', fontWeight: 600, whiteSpace: 'nowrap', borderRight: '1px solid #1e293b', borderBottom: '1px solid #1e293b' },
-  td: { padding: '5px 8px', borderBottom: '1px solid #1e293b', borderRight: '1px solid #1e293b', verticalAlign: 'middle' },
+  collapseBadge: { background: tokens.bg.raised, color: tokens.tx.muted, fontSize: 10, padding: '2px 7px', borderRadius: 10 },
+  chevron: { fontSize: 10, color: tokens.tx.subtle },
+  th: { position: 'sticky', top: 0, background: tokens.bg.row, color: tokens.tx.subtle, padding: '5px 8px', textAlign: 'left', fontWeight: 600, whiteSpace: 'nowrap', borderRight: `1px solid ${tokens.bd.default}`, borderBottom: `1px solid ${tokens.bd.default}` },
+  td: { padding: '5px 8px', borderBottom: `1px solid ${tokens.bd.default}`, borderRight: `1px solid ${tokens.bd.default}`, verticalAlign: 'middle' },
 }

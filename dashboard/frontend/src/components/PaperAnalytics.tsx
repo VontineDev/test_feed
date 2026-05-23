@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { tokens } from '../tokens'
 import {
   ResponsiveContainer,
   LineChart,
@@ -44,10 +45,10 @@ interface PaperAnalyticsProps {
 // ── 상수 ─────────────────────────────────────────────────────
 
 const MODEL_COLOR: Record<string, string> = {
-  stage: '#3b82f6',
-  kosdaq: '#a78bfa',
-  cross: '#f97316',
-  ichimoku: '#4ade80',
+  stage: tokens.chart.cat.stage,
+  kosdaq: tokens.chart.cat.kosdaq,
+  cross: tokens.chart.cat.cross,
+  ichimoku: tokens.chart.cat.ichimoku,
 }
 
 const MODEL_LABEL: Record<string, string> = {
@@ -86,8 +87,8 @@ export function pivotSeries(
 // ── pctColor ─────────────────────────────────────────────────
 
 function pctColor(v: number | null | undefined): string {
-  if (v == null) return '#64748b'
-  return v > 0 ? '#4ade80' : v < 0 ? '#f87171' : '#94a3b8'
+  if (v == null) return tokens.tx.muted
+  return v > 0 ? tokens.chart.cat.ichimoku : v < 0 ? tokens.semantic.up : tokens.tx.secondary
 }
 
 function fmt(v: number | null, digits = 1): string {
@@ -215,7 +216,7 @@ export default function PaperAnalytics({ onSelect, collapsed = false, onToggle }
             <tbody>
               {Object.entries(data.model_stats).map(([m, st]) => (
                 <tr key={m}>
-                  <td style={{ ...S.td, color: MODEL_COLOR[m] ?? '#e2e8f0', fontWeight: 700 }}>
+                  <td style={{ ...S.td, color: MODEL_COLOR[m] ?? tokens.tx.secondary, fontWeight: 700 }}>
                     {MODEL_LABEL[m] ?? m}
                   </td>
                   <td style={S.td}>{st.n_trades}</td>
@@ -247,15 +248,15 @@ export default function PaperAnalytics({ onSelect, collapsed = false, onToggle }
         <div style={{ ...S.section, paddingTop: 8 }}>
           <ResponsiveContainer width="100%" height={180}>
             <LineChart data={chartData}>
-              <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#475569' }} interval="preserveStartEnd" />
+              <XAxis dataKey="date" tick={tokens.chart.axis.tick} interval="preserveStartEnd" />
               <YAxis
                 tickFormatter={(v) => `${(v * 100).toFixed(0)}%`}
-                tick={{ fontSize: 9, fill: '#475569' }}
+                tick={tokens.chart.axis.tick}
                 width={42}
               />
               <Tooltip
                 formatter={(v: number) => [`${(v * 100).toFixed(1)}%`]}
-                contentStyle={{ background: '#1e293b', border: '1px solid #334155', fontSize: 11 }}
+                contentStyle={{ background: tokens.chart.tooltip.background, border: tokens.chart.tooltip.border, fontSize: tokens.chart.tooltip.fontSize }}
               />
               <Legend wrapperStyle={{ fontSize: 11 }} formatter={(v) => MODEL_LABEL[v] ?? v} />
               {models.map((m) => (
@@ -307,11 +308,11 @@ export default function PaperAnalytics({ onSelect, collapsed = false, onToggle }
                 >
                   <td style={S.td}>
                     <div style={{ fontWeight: 600 }}>{r.name}</div>
-                    <div style={{ fontSize: 10, color: '#475569' }}>{r.ticker}</div>
+                    <div style={{ fontSize: 10, color: tokens.tx.subtle }}>{r.ticker}</div>
                   </td>
-                  <td style={{ ...S.td, color: MODEL_COLOR[r.model] ?? '#94a3b8' }}>
+                  <td style={{ ...S.td, color: MODEL_COLOR[r.model] ?? tokens.tx.secondary }}>
                     {MODEL_LABEL[r.model] ?? r.model}
-                    <span style={{ fontSize: 10, color: '#64748b', marginLeft: 4 }}>(미)</span>
+                    <span style={{ fontSize: 10, color: tokens.tx.muted, marginLeft: 4 }}>(미)</span>
                   </td>
                   <td style={{ ...S.td, color: pctColor(r.pct), fontWeight: 600 }}>
                     {fmt(r.pct)}
@@ -341,9 +342,9 @@ function round4(v: number): number {
 
 const S: Record<string, React.CSSProperties> = {
   wrap: {
-    borderTop: '1px solid #1e293b',
+    borderTop: `1px solid ${tokens.bd.default}`,
     fontSize: 11,
-    color: '#e2e8f0',
+    color: tokens.tx.secondary,
   },
   header: {
     display: 'flex',
@@ -354,7 +355,7 @@ const S: Record<string, React.CSSProperties> = {
   title: {
     fontWeight: 700,
     fontSize: 11,
-    color: '#475569',
+    color: tokens.tx.subtle,
   },
   section: {
     padding: '4px 12px 8px',
@@ -363,7 +364,7 @@ const S: Record<string, React.CSSProperties> = {
   sectionTitle: {
     fontWeight: 700,
     fontSize: 11,
-    color: '#475569',
+    color: tokens.tx.subtle,
     marginBottom: 4,
   },
   table: {
@@ -374,35 +375,35 @@ const S: Record<string, React.CSSProperties> = {
   th: {
     position: 'sticky' as const,
     top: 0,
-    background: '#0f172a',
-    color: '#475569',
+    background: tokens.bg.row,
+    color: tokens.tx.subtle,
     padding: '4px 8px',
     textAlign: 'left' as const,
     fontWeight: 600,
     whiteSpace: 'nowrap' as const,
-    borderRight: '1px solid #1e293b',
-    borderBottom: '1px solid #1e293b',
+    borderRight: `1px solid ${tokens.bd.default}`,
+    borderBottom: `1px solid ${tokens.bd.default}`,
   },
   td: {
     padding: '4px 8px',
-    borderBottom: '1px solid #1e293b',
-    borderRight: '1px solid #1e293b',
+    borderBottom: `1px solid ${tokens.bd.default}`,
+    borderRight: `1px solid ${tokens.bd.default}`,
     verticalAlign: 'middle' as const,
   },
   empty: {
     padding: 16,
-    color: '#64748b',
+    color: tokens.tx.muted,
     textAlign: 'center' as const,
     fontSize: 11,
   },
   btn: {
-    background: '#1e293b',
-    border: '1px solid #334155',
+    background: tokens.bg.raised,
+    border: `1px solid ${tokens.bd.emphasis}`,
     borderRadius: 4,
-    color: '#94a3b8',
+    color: tokens.tx.secondary,
     cursor: 'pointer',
     fontSize: 11,
     padding: '2px 8px',
   },
-  chevron: { fontSize: 10, color: '#475569' },
+  chevron: { fontSize: 10, color: tokens.tx.subtle },
 }

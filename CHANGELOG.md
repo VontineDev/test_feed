@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.8.0] - 2026-05-24
+
+### Added
+- **디자인 토큰 시스템** (`dashboard/frontend/src/tokens.ts`): 프론트엔드 전체 색상·간격·타이포그래피·그림자를 단일 SSOT(Single Source of Truth)로 통합. `bg`, `bd`, `tx`, `accent`, `stage`, `semantic`, `heat`, `chart`, `space`, `radius`, `type`, `shadow` 12개 네임스페이스 + 헬퍼 함수 4개(`pctTextColor`, `heatCellColor`, `stageColor`, `scoreColor`) 제공.
+- **`tokens.bg.active`** (`tokens.ts`): 선택 칩·활성 행 배경색 `#1e3a5f` 공통 토큰 추가. Report, PaperPortfolio, Positions, DateRangeBar 등 6개 이상 컴포넌트에서 참조.
+
+### Changed
+- **디자인 토큰 마이그레이션** (15개 컴포넌트 파일): 모든 인라인 hex 색상 문자열을 `tokens.*` 참조로 교체. 변경 파일: `App.tsx`, `Heatmap.tsx`, `Top.tsx`, `Macro.tsx`, `PaperAnalytics.tsx`, `PaperPortfolio.tsx`, `Positions.tsx`, `SignalFeed.tsx`, `Scheduler.tsx`, `Report.tsx`, `DateRangeBar.tsx`, `HistoryStageView.tsx`, `HistoryScreenerView.tsx`, `StageHistoryPopup.tsx`, `TickerHistory.tsx`.
+- **한국 색상 관례 명시적 분리**: 등락률 컬러(`pctTextColor`)는 한국 관례(빨강=상승, 파랑=하락)를 `tokens.semantic.up/down`으로 통일. PaperAnalytics·Positions·PaperPortfolio·TickerHistory의 손익 컬러(`pctColor`)는 서양 관례(초록=수익, 빨강=손실) 유지 — 의도적 분리, 혼용 없음.
+
+### Fixed
+- **Stage 1 색상 버그** (`Report.tsx`, `HistoryStageView.tsx`, `StageHistoryPopup.tsx`, `HistoryScreenerView.tsx`): Stage 1 색상이 `#60a5fa`(sky-400)로 잘못 하드코딩되어 있던 문제 수정. 올바른 값 `tokens.stage[1]` = `#3b82f6`(blue-500)으로 교체. Stage 2(`#a78bfa` 보라)·Stage 3(`#f59e0b` 주황)은 정상이었으므로 변경 없음.
+
 ## [0.9.7.0] - 2026-05-23
 
 ### Added

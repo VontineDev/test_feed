@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { tokens } from '../tokens'
 
 interface TriggerRecord {
   id: number
@@ -15,10 +16,10 @@ const JOB_LABELS: Record<string, string> = {
 }
 
 const STATUS_META: Record<string, { label: string; color: string; pulse: boolean }> = {
-  pending:  { label: '대기 중',  color: '#94a3b8', pulse: false },
-  running:  { label: '실행 중',  color: '#facc15', pulse: true  },
-  done:     { label: '완료',    color: '#4ade80', pulse: false },
-  error:    { label: '오류',    color: '#f87171', pulse: false },
+  pending:  { label: '대기 중',  color: tokens.tx.secondary,          pulse: false },
+  running:  { label: '실행 중',  color: tokens.chart.significance,    pulse: true  },
+  done:     { label: '완료',    color: tokens.chart.cat.ichimoku,    pulse: false },
+  error:    { label: '오류',    color: tokens.semantic.up,           pulse: false },
 }
 
 function elapsed(from: string): string {
@@ -107,7 +108,7 @@ export default function Scheduler() {
       {/* 헤더 */}
       <div style={s.hdr}>
         <span style={s.title}>스케줄러 컨트롤</span>
-        <span style={{ ...s.dot, background: connected ? '#4ade80' : '#f87171' }}
+        <span style={{ ...s.dot, background: connected ? tokens.chart.cat.ichimoku : tokens.semantic.up }}
               title={connected ? '실시간 연결됨' : '연결 끊김 — 재연결 중…'} />
       </div>
 
@@ -179,12 +180,12 @@ export default function Scheduler() {
 const s: Record<string, React.CSSProperties> = {
   wrap:  { padding: 12 },
   hdr:   { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 },
-  title: { fontWeight: 700, fontSize: 13, color: '#94a3b8', flex: 1 },
+  title: { fontWeight: 700, fontSize: 13, color: tokens.tx.secondary, flex: 1 },
   dot:   { width: 7, height: 7, borderRadius: '50%', flexShrink: 0 },
 
   btnRow: { display: 'flex', gap: 8, flexWrap: 'wrap' as const, marginBottom: 12 },
   btn: {
-    background: '#1e3a5f', color: '#93c5fd', border: '1px solid #1d4ed8',
+    background: tokens.bg.active, color: tokens.accent.blueLight, border: '1px solid #1d4ed8',
     borderRadius: 6, padding: '7px 12px', cursor: 'pointer', fontSize: 12,
     fontWeight: 600, transition: 'opacity 0.15s',
   },
@@ -192,14 +193,14 @@ const s: Record<string, React.CSSProperties> = {
   activeWrap:    { background: '#0f1e30', borderRadius: 8, padding: '8px 10px', marginBottom: 12 },
   activeRow:     { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', fontSize: 12 },
   activeDot:     { width: 8, height: 8, borderRadius: '50%', flexShrink: 0 },
-  activeJob:     { color: '#e2e8f0', flex: 1 },
+  activeJob:     { color: tokens.tx.secondary, flex: 1 },
   activeStatus:  { fontWeight: 700, fontSize: 11 },
-  activeElapsed: { color: '#64748b', fontSize: 11, fontVariantNumeric: 'tabular-nums' as const },
+  activeElapsed: { color: tokens.tx.muted, fontSize: 11, fontVariantNumeric: 'tabular-nums' as const },
 
-  historyWrap:   { borderTop: '1px solid #1e293b', paddingTop: 8 },
-  historyHdr:    { fontSize: 11, color: '#334155', marginBottom: 6 },
+  historyWrap:   { borderTop: `1px solid ${tokens.bd.default}`, paddingTop: 8 },
+  historyHdr:    { fontSize: 11, color: tokens.tx.separator, marginBottom: 6 },
   historyRow:    { display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0', fontSize: 12 },
-  historyJob:    { color: '#64748b', flex: 1 },
+  historyJob:    { color: tokens.tx.muted, flex: 1 },
   historyStatus: { fontWeight: 600, fontSize: 11 },
-  historyTime:   { color: '#334155', fontSize: 11 },
+  historyTime:   { color: tokens.tx.separator, fontSize: 11 },
 }

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { tokens, pctTextColor } from '../tokens'
 
 interface TopItem {
   rank: number
@@ -53,7 +54,7 @@ export default function Top() {
     <div style={{ padding: 12, overflow: 'auto', height: '100%' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
         <span style={{ fontSize: 13, fontWeight: 700 }}>거래대금 상위 {items.length || 50}</span>
-        <span style={{ fontSize: 11, color: '#64748b' }}>
+        <span style={{ fontSize: 11, color: tokens.tx.muted }}>
           {fetchedAt && `갱신: ${fetchedAt}`}
           <button
             onClick={() => load(true)}
@@ -61,8 +62,8 @@ export default function Top() {
             className="app-refresh-btn"
             style={{
               marginLeft: 8, padding: '4px 10px', fontSize: 13,
-              background: '#1e293b', border: '1px solid #334155',
-              color: '#94a3b8', cursor: 'pointer', borderRadius: 4,
+              background: tokens.bg.raised, border: `1px solid ${tokens.bd.emphasis}`,
+              color: tokens.tx.secondary, cursor: 'pointer', borderRadius: tokens.radius.sm,
               minWidth: 36, minHeight: 36,
             }}
           >
@@ -72,14 +73,14 @@ export default function Top() {
       </div>
 
       {error && (
-        <div style={{ color: '#f87171', fontSize: 11, marginBottom: 8 }}>
+        <div style={{ color: tokens.semantic.up, fontSize: 11, marginBottom: 8 }}>
           {error}
         </div>
       )}
 
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
         <thead>
-          <tr style={{ color: '#64748b', borderBottom: '1px solid #1e293b' }}>
+          <tr style={{ color: tokens.tx.muted, borderBottom: `1px solid ${tokens.bd.default}` }}>
             <th style={th}>#</th>
             <th style={th}>종목명</th>
             <th style={{ ...th, textAlign: 'right' }}>현재가</th>
@@ -90,25 +91,23 @@ export default function Top() {
         </thead>
         <tbody>
           {items.map(it => (
-            <tr key={it.ticker} style={{ borderBottom: '1px solid #0f172a' }}>
+            <tr key={it.ticker} style={{ borderBottom: `1px solid ${tokens.bg.row}` }}>
               <td style={td}>{it.rank}</td>
               <td style={td}>
                 {it.name}
-                <span style={{ color: '#475569', marginLeft: 4, fontSize: 10 }}>
+                <span style={{ color: tokens.tx.subtle, marginLeft: 4, fontSize: 10 }}>
                   {it.ticker.replace(/_[A-Z]+$/, '')}
                 </span>
               </td>
               <td style={tdNum}>
                 {it.price.toLocaleString()}
               </td>
-              <td style={{
-                ...tdNum,
-                color: it.change_pct > 0 ? '#f87171' : it.change_pct < 0 ? '#60a5fa' : '#64748b',
-              }}>
+              {/* 한국식 등락 — pctTextColor 헬퍼 사용 */}
+              <td style={{ ...tdNum, color: pctTextColor(it.change_pct) }}>
                 {it.change_pct > 0 ? '+' : ''}{it.change_pct.toFixed(2)}%
               </td>
               <td style={tdNum}>{fmtAmt(it.amount)}</td>
-              <td style={{ ...tdNum, color: it.eps != null && it.eps < 0 ? '#f87171' : undefined }}>
+              <td style={{ ...tdNum, color: it.eps != null && it.eps < 0 ? tokens.semantic.up : undefined }}>
                 {it.eps != null ? it.eps.toLocaleString() : '—'}
               </td>
             </tr>
@@ -117,14 +116,14 @@ export default function Top() {
       </table>
 
       {items.length === 0 && !loading && !error && (
-        <div style={{ textAlign: 'center', color: '#64748b', marginTop: 40, fontSize: 12 }}>
+        <div style={{ textAlign: 'center', color: tokens.tx.muted, marginTop: 40, fontSize: 12 }}>
           <div>개장 시간(09:00~15:30)에 데이터가 갱신됩니다</div>
           <button
             onClick={() => load(true)}
             style={{
               marginTop: 12, padding: '8px 16px', fontSize: 12,
-              background: '#1e293b', border: '1px solid #334155',
-              color: '#94a3b8', cursor: 'pointer', borderRadius: 4,
+              background: tokens.bg.raised, border: `1px solid ${tokens.bd.emphasis}`,
+              color: tokens.tx.secondary, cursor: 'pointer', borderRadius: tokens.radius.sm,
             }}
           >
             ↻ 새로고침

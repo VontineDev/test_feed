@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { tokens } from '../tokens'
 import DateRangeBar, { DatePreset, computeRange } from './DateRangeBar'
 import HistoryStageView from './HistoryStageView'
 import HistoryScreenerView from './HistoryScreenerView'
@@ -53,9 +54,9 @@ function StageReport({ data }: { data: StageData }) {
   const peakout = data.summary.reduce((acc, x) => acc + (x.peakout ?? 0), 0)
 
   const STAGE_META: { stage: 1 | 2 | 3; label: string; color: string; rows: StageRow[]; cnt: number }[] = [
-    { stage: 1, label: 'Stage 1', color: '#60a5fa', rows: data.stage1, cnt: summary1?.count ?? 0 },
-    { stage: 2, label: 'Stage 2', color: '#a78bfa', rows: data.stage2, cnt: summary2?.count ?? 0 },
-    { stage: 3, label: 'Stage 3', color: '#f59e0b', rows: data.stage3, cnt: summary3?.count ?? 0 },
+    { stage: 1, label: 'Stage 1', color: tokens.stage[1], rows: data.stage1, cnt: summary1?.count ?? 0 },
+    { stage: 2, label: 'Stage 2', color: tokens.stage[2], rows: data.stage2, cnt: summary2?.count ?? 0 },
+    { stage: 3, label: 'Stage 3', color: tokens.stage[3], rows: data.stage3, cnt: summary3?.count ?? 0 },
   ]
 
   const activeRows = STAGE_META.find(m => m.stage === activeStage)?.rows ?? []
@@ -70,7 +71,7 @@ function StageReport({ data }: { data: StageData }) {
               ...s.chip,
               cursor: 'pointer',
               border: activeStage === stage ? `1px solid ${color}` : '1px solid transparent',
-              background: activeStage === stage ? '#1e3a5f' : '#1e293b',
+              background: activeStage === stage ? tokens.bg.active : tokens.bg.raised,
             }}
             onClick={() => setActiveStage(stage)}
           >
@@ -81,7 +82,7 @@ function StageReport({ data }: { data: StageData }) {
         {peakout > 0 && (
           <div style={s.chip}>
             <span style={s.chipLabel}>피크아웃</span>
-            <span style={{ ...s.chipVal, color: '#f87171' }}>{peakout}</span>
+            <span style={{ ...s.chipVal, color: tokens.semantic.up }}>{peakout}</span>
           </div>
         )}
       </div>
@@ -105,9 +106,9 @@ function StageReport({ data }: { data: StageData }) {
                       <div style={s.tickerName}>{r.name}</div>
                       <div style={s.tickerCode}>{r.ticker}{r.peakout_flag && ' ⚠️'}</div>
                     </td>
-                    <td style={{ ...s.td, color: '#64748b', fontSize: 11 }}>{r.sector ?? '—'}</td>
+                    <td style={{ ...s.td, color: tokens.tx.muted, fontSize: 11 }}>{r.sector ?? '—'}</td>
                     <td style={{ ...s.td, textAlign: 'right' as const }}>{fmt(r.s1_high)}</td>
-                    <td style={{ ...s.td, textAlign: 'right' as const, color: '#94a3b8' }}>
+                    <td style={{ ...s.td, textAlign: 'right' as const, color: tokens.tx.secondary }}>
                       {r.s1_volume ? (r.s1_volume / 1000).toFixed(0) + 'K' : '—'}
                     </td>
                   </tr>
@@ -134,9 +135,9 @@ function ScreenerReport({ data }: { data: ScreenerData }) {
     <>
       <div style={s.chips}>
         {([
-          { f: 'all',      label: '통과',  val: data.total,    color: '#60a5fa' },
-          { f: 'enhanced', label: '강화',  val: data.enhanced, color: '#a78bfa' },
-          { f: 'gapjum',   label: '갭점프', val: data.gapjum,   color: '#34d399' },
+          { f: 'all',      label: '통과',  val: data.total,    color: tokens.accent.blueSoft },
+          { f: 'enhanced', label: '강화',  val: data.enhanced, color: tokens.stage[2] },
+          { f: 'gapjum',   label: '갭점프', val: data.gapjum,   color: tokens.chart.cat.ichimoku },
         ] as const).map(({ f, label, val, color }) => (
           <button
             key={f}
@@ -144,7 +145,7 @@ function ScreenerReport({ data }: { data: ScreenerData }) {
               ...s.chip,
               cursor: 'pointer',
               border: filter === f ? `1px solid ${color}` : '1px solid transparent',
-              background: filter === f ? '#1e3a5f' : '#1e293b',
+              background: filter === f ? tokens.bg.active : tokens.bg.raised,
             }}
             onClick={() => setFilter(f)}
           >
@@ -170,13 +171,13 @@ function ScreenerReport({ data }: { data: ScreenerData }) {
                   <div style={s.tickerName}>{r.name}</div>
                   <div style={s.tickerCode}>{r.ticker}</div>
                 </td>
-                <td style={{ ...s.td, color: '#64748b', fontSize: 11 }}>{r.sector ?? '—'}</td>
+                <td style={{ ...s.td, color: tokens.tx.muted, fontSize: 11 }}>{r.sector ?? '—'}</td>
                 <td style={{ ...s.td, textAlign: 'right' as const }}>{fmt(r.close)}</td>
-                <td style={{ ...s.td, textAlign: 'right' as const, color: '#64748b' }}>{fmt(r.ma_20w)}</td>
-                <td style={{ ...s.td, textAlign: 'right' as const, color: '#64748b' }}>{fmt(r.cloud_top)}</td>
+                <td style={{ ...s.td, textAlign: 'right' as const, color: tokens.tx.muted }}>{fmt(r.ma_20w)}</td>
+                <td style={{ ...s.td, textAlign: 'right' as const, color: tokens.tx.muted }}>{fmt(r.cloud_top)}</td>
                 <td style={{ ...s.td, textAlign: 'center' as const, fontSize: 11 }}>
-                  {r.is_enhanced && <span style={{ color: '#a78bfa' }}>강화</span>}
-                  {r.has_gapjum && <span style={{ color: '#34d399', marginLeft: 4 }}>갭</span>}
+                  {r.is_enhanced && <span style={{ color: tokens.stage[2] }}>강화</span>}
+                  {r.has_gapjum && <span style={{ color: tokens.chart.cat.ichimoku, marginLeft: 4 }}>갭</span>}
                 </td>
               </tr>
             ))}
@@ -303,36 +304,36 @@ export default function Report() {
 
 // ── 스타일 ───────────────────────────────────────────────────
 const s: Record<string, React.CSSProperties> = {
-  wrap: { height: '100%', overflowY: 'auto', fontSize: 12, color: '#e2e8f0', boxSizing: 'border-box' },
+  wrap: { height: '100%', overflowY: 'auto', fontSize: 12, color: tokens.tx.secondary, boxSizing: 'border-box' },
 
-  hdr: { display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderBottom: '1px solid #1e293b', flexShrink: 0 },
+  hdr: { display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderBottom: `1px solid ${tokens.bd.default}`, flexShrink: 0 },
   hdrTitle: { fontWeight: 700, fontSize: 13, flex: 1 },
-  hdrTime: { color: '#475569', fontSize: 11 },
-  refreshBtn: { background: '#1e293b', color: '#94a3b8', border: '1px solid #334155', borderRadius: 5, padding: '4px 10px', cursor: 'pointer', fontSize: 11 },
+  hdrTime: { color: tokens.tx.subtle, fontSize: 11 },
+  refreshBtn: { background: tokens.bg.raised, color: tokens.tx.secondary, border: `1px solid ${tokens.bd.emphasis}`, borderRadius: 5, padding: '4px 10px', cursor: 'pointer', fontSize: 11 },
 
-  section: { borderBottom: '1px solid #1e293b' },
-  sectionHdr: { width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '9px 14px', background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', textAlign: 'left' as const },
+  section: { borderBottom: `1px solid ${tokens.bd.default}` },
+  sectionHdr: { width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '9px 14px', background: 'none', border: 'none', color: tokens.tx.secondary, cursor: 'pointer', textAlign: 'left' as const },
   sectionTitle: { fontWeight: 700, fontSize: 12, flex: 1 },
-  badge: { background: '#1e293b', color: '#64748b', fontSize: 10, padding: '2px 7px', borderRadius: 10 },
-  chevron: { fontSize: 10, color: '#475569' },
+  badge: { background: tokens.bg.raised, color: tokens.tx.muted, fontSize: 10, padding: '2px 7px', borderRadius: 10 },
+  chevron: { fontSize: 10, color: tokens.tx.subtle },
   sectionBody: { padding: '0 14px 12px' },
 
   chips: { display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' as const },
-  chip: { background: '#1e293b', borderRadius: 6, padding: '6px 12px', display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 2, border: '1px solid transparent', outline: 'none' },
-  chipLabel: { fontSize: 10, color: '#64748b' },
+  chip: { background: tokens.bg.raised, borderRadius: 6, padding: '6px 12px', display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 2, border: '1px solid transparent', outline: 'none' },
+  chipLabel: { fontSize: 10, color: tokens.tx.muted },
   chipVal: { fontSize: 18, fontWeight: 700 },
 
   filterRow: { display: 'flex', gap: 6, marginBottom: 8 },
-  filterBtn: { background: '#1e293b', color: '#64748b', border: '1px solid #334155', borderRadius: 4, padding: '3px 9px', cursor: 'pointer', fontSize: 11 },
-  filterBtnActive: { background: '#1e3a5f', color: '#93c5fd', borderColor: '#1d4ed8' },
+  filterBtn: { background: tokens.bg.raised, color: tokens.tx.muted, border: `1px solid ${tokens.bd.emphasis}`, borderRadius: 4, padding: '3px 9px', cursor: 'pointer', fontSize: 11 },
+  filterBtnActive: { background: tokens.bg.active, color: tokens.accent.blueLight, borderColor: '#1d4ed8' },
 
-  tableLabel: { fontSize: 11, color: '#475569', marginBottom: 5, marginTop: 8 },
+  tableLabel: { fontSize: 11, color: tokens.tx.subtle, marginBottom: 5, marginTop: 8 },
   tableWrap: { overflowX: 'auto', maxHeight: 280, overflowY: 'auto' as const },
   table: { width: '100%', borderCollapse: 'collapse' as const, fontSize: 11 },
-  th: { position: 'sticky' as const, top: 0, background: '#0f172a', color: '#475569', padding: '5px 8px', textAlign: 'left' as const, fontWeight: 600, whiteSpace: 'nowrap' as const, borderRight: '1px solid #1e293b', borderBottom: '1px solid #1e293b' },
-  td: { padding: '5px 8px', borderBottom: '1px solid #1e293b', borderRight: '1px solid #1e293b', verticalAlign: 'middle' as const },
-  tickerName: { color: '#cbd5e1', fontWeight: 600 },
-  tickerCode: { color: '#475569', fontSize: 10 },
+  th: { position: 'sticky' as const, top: 0, background: tokens.bg.row, color: tokens.tx.subtle, padding: '5px 8px', textAlign: 'left' as const, fontWeight: 600, whiteSpace: 'nowrap' as const, borderRight: `1px solid ${tokens.bd.default}`, borderBottom: `1px solid ${tokens.bd.default}` },
+  td: { padding: '5px 8px', borderBottom: `1px solid ${tokens.bd.default}`, borderRight: `1px solid ${tokens.bd.default}`, verticalAlign: 'middle' as const },
+  tickerName: { color: tokens.tx.secondary, fontWeight: 600 },
+  tickerCode: { color: tokens.tx.subtle, fontSize: 10 },
 
-  empty: { color: '#475569', textAlign: 'center' as const, padding: '24px 0', fontSize: 12 },
+  empty: { color: tokens.tx.subtle, textAlign: 'center' as const, padding: '24px 0', fontSize: 12 },
 }

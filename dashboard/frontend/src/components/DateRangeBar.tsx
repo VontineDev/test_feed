@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { tokens } from '../tokens'
 
 export type DatePreset = 'today' | '3d' | '1w' | '2w' | '1m'
 
@@ -58,9 +59,9 @@ export default function DateRangeBar({ preset, onChange }: Props) {
             key={key}
             style={{
               ...s.btn,
-              background: preset === key ? '#1e3a5f' : '#1e293b',
-              border: preset === key ? '1px solid #3b82f6' : '1px solid #334155',
-              color: preset === key ? '#93c5fd' : '#64748b',
+              background: preset === key ? tokens.bg.active : tokens.bg.raised,
+              border: preset === key ? `1px solid ${tokens.accent.blue}` : `1px solid ${tokens.bd.emphasis}`,
+              color: preset === key ? tokens.accent.blueLight : tokens.tx.muted,
             }}
             onClick={() => onChange(key)}
           >
@@ -78,7 +79,7 @@ export default function DateRangeBar({ preset, onChange }: Props) {
 const s: Record<string, React.CSSProperties> = {
   wrap: {
     display: 'flex', alignItems: 'center', gap: 10,
-    padding: '8px 14px', borderBottom: '1px solid #1e293b',
+    padding: '8px 14px', borderBottom: `1px solid ${tokens.bd.default}`,
     background: '#0a0f1a', flexShrink: 0,
   },
   btns: { display: 'flex', gap: 5, flexWrap: 'wrap' as const },
@@ -87,5 +88,5 @@ const s: Record<string, React.CSSProperties> = {
     fontSize: 11, fontWeight: 600, outline: 'none',
     minHeight: 32, whiteSpace: 'nowrap' as const,
   },
-  rangeLabel: { fontSize: 10, color: '#475569', marginLeft: 4 },
+  rangeLabel: { fontSize: 10, color: tokens.tx.subtle, marginLeft: 4 },
 }

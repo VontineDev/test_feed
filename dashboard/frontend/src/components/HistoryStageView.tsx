@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { tokens } from '../tokens'
 import StageHistoryPopup from './StageHistoryPopup'
 
 interface StageItem {
@@ -19,9 +20,9 @@ interface Props {
 }
 
 const STAGE_COLOR: Record<number, string> = {
-  1: '#60a5fa',
-  2: '#a78bfa',
-  3: '#f59e0b',
+  1: tokens.stage[1],
+  2: tokens.stage[2],
+  3: tokens.stage[3],
 }
 
 export default function HistoryStageView({ items, start, end }: Props) {
@@ -49,7 +50,7 @@ export default function HistoryStageView({ items, start, end }: Props) {
             style={{
               ...s.chip,
               border: activeStage === sg ? `1px solid ${STAGE_COLOR[sg]}` : '1px solid transparent',
-              background: activeStage === sg ? '#1e3a5f' : '#1e293b',
+              background: activeStage === sg ? tokens.bg.active : tokens.bg.raised,
             }}
             onClick={() => setActiveStage(sg)}
           >
@@ -87,16 +88,16 @@ export default function HistoryStageView({ items, start, end }: Props) {
                       <div style={s.tickerName}>{it.name}</div>
                       <div style={s.tickerCode}>{it.ticker}</div>
                     </td>
-                    <td style={{ ...s.td, color: '#64748b', fontSize: 10 }}>—</td>
-                    <td style={{ ...s.td, textAlign: 'right', fontWeight: 700, color: '#60a5fa' }}>
+                    <td style={{ ...s.td, color: tokens.tx.muted, fontSize: 10 }}>—</td>
+                    <td style={{ ...s.td, textAlign: 'right', fontWeight: 700, color: tokens.stage[1] }}>
                       {it.appearance_count}회
                     </td>
-                    <td style={{ ...s.td, color: '#64748b' }}>{it.first_seen ?? '—'}</td>
-                    <td style={{ ...s.td, color: '#64748b' }}>{it.last_seen ?? '—'}</td>
+                    <td style={{ ...s.td, color: tokens.tx.muted }}>{it.first_seen ?? '—'}</td>
+                    <td style={{ ...s.td, color: tokens.tx.muted }}>{it.last_seen ?? '—'}</td>
                     <td style={s.td}>
                       {it.latest_stage != null ? (
                         <span style={{
-                          color: STAGE_COLOR[it.latest_stage] ?? '#94a3b8',
+                          color: STAGE_COLOR[it.latest_stage] ?? tokens.tx.secondary,
                           fontWeight: progressed ? 700 : 400,
                         }}>
                           S{it.latest_stage}
@@ -105,7 +106,7 @@ export default function HistoryStageView({ items, start, end }: Props) {
                       ) : '—'}
                     </td>
                     <td style={{ ...s.td, textAlign: 'center' }}>
-                      {it.any_peakout && <span style={{ color: '#f87171' }}>⚠</span>}
+                      {it.any_peakout && <span style={{ color: tokens.semantic.up }}>⚠</span>}
                     </td>
                   </tr>
                 )
@@ -132,22 +133,22 @@ export default function HistoryStageView({ items, start, end }: Props) {
 const s: Record<string, React.CSSProperties> = {
   chips: { display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' },
   chip: {
-    background: '#1e293b', borderRadius: 6, padding: '6px 12px',
+    background: tokens.bg.raised, borderRadius: 6, padding: '6px 12px',
     display: 'flex', flexDirection: 'column', alignItems: 'center',
     gap: 2, outline: 'none', cursor: 'pointer',
   },
-  chipLabel: { fontSize: 10, color: '#64748b' },
+  chipLabel: { fontSize: 10, color: tokens.tx.muted },
   chipVal: { fontSize: 18, fontWeight: 700 },
-  empty: { color: '#475569', textAlign: 'center', padding: '24px 0', fontSize: 12 },
+  empty: { color: tokens.tx.subtle, textAlign: 'center', padding: '24px 0', fontSize: 12 },
   tableWrap: { overflowX: 'auto', maxHeight: 320, overflowY: 'auto' },
   table: { width: '100%', borderCollapse: 'collapse', fontSize: 11 },
   th: {
-    position: 'sticky', top: 0, background: '#0f172a',
-    color: '#475569', padding: '5px 8px', textAlign: 'left',
+    position: 'sticky', top: 0, background: tokens.bg.row,
+    color: tokens.tx.subtle, padding: '5px 8px', textAlign: 'left',
     fontWeight: 600, whiteSpace: 'nowrap',
-    borderRight: '1px solid #1e293b', borderBottom: '1px solid #1e293b',
+    borderRight: `1px solid ${tokens.bd.default}`, borderBottom: `1px solid ${tokens.bd.default}`,
   },
-  td: { padding: '5px 8px', borderBottom: '1px solid #1e293b', borderRight: '1px solid #1e293b', verticalAlign: 'middle' },
-  tickerName: { color: '#cbd5e1', fontWeight: 600 },
-  tickerCode: { color: '#475569', fontSize: 10 },
+  td: { padding: '5px 8px', borderBottom: `1px solid ${tokens.bd.default}`, borderRight: `1px solid ${tokens.bd.default}`, verticalAlign: 'middle' },
+  tickerName: { color: tokens.tx.secondary, fontWeight: 600 },
+  tickerCode: { color: tokens.tx.subtle, fontSize: 10 },
 }

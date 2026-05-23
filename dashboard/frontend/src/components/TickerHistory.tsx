@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { tokens } from '../tokens'
 
 interface HistoryRow {
   id: number
@@ -27,8 +28,8 @@ interface HistoryRow {
 }
 
 const MODEL_COLORS: Record<string, string> = {
-  stage: '#3b82f6',
-  kosdaq: '#f59e0b',
+  stage: tokens.chart.cat.stage,
+  kosdaq: tokens.chart.score.neutral,
   cross: '#8b5cf6',
   ichimoku: '#10b981',
 }
@@ -41,8 +42,8 @@ const EXIT_LABEL: Record<string, string> = {
 }
 
 const pctColor = (v: number | null) => {
-  if (v == null) return '#94a3b8'
-  return v > 0 ? '#4ade80' : v < 0 ? '#f87171' : '#94a3b8'
+  if (v == null) return tokens.tx.secondary
+  return v > 0 ? tokens.chart.cat.ichimoku : v < 0 ? tokens.semantic.up : tokens.tx.secondary
 }
 
 const fmtPct = (v: number | null) =>
@@ -85,21 +86,21 @@ export default function TickerHistory({ ticker, name, onClose }: Props) {
   const closedCount = rows.filter(r => r.status === 'closed').length
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', fontSize: 12, color: '#e2e8f0' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', fontSize: 12, color: tokens.tx.secondary }}>
 
       {/* 헤더 */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,
-        padding: '8px 12px', borderBottom: '1px solid #1e293b',
-        background: '#1a1d2e', flexShrink: 0,
+        padding: '8px 12px', borderBottom: `1px solid ${tokens.bd.default}`,
+        background: tokens.bg.panel, flexShrink: 0,
       }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <span style={{ fontWeight: 700, color: '#e2e8f0', fontSize: 13 }}>{name}</span>
-          <span style={{ color: '#475569', fontSize: 10, marginLeft: 6 }}>{ticker}</span>
+          <span style={{ fontWeight: 700, color: tokens.tx.secondary, fontSize: 13 }}>{name}</span>
+          <span style={{ color: tokens.tx.subtle, fontSize: 10, marginLeft: 6 }}>{ticker}</span>
           {hasActive && (
             <span style={{
               marginLeft: 6, fontSize: 9, background: '#052e16',
-              color: '#4ade80', padding: '1px 5px', borderRadius: 4,
+              color: tokens.chart.cat.ichimoku, padding: '1px 5px', borderRadius: 4,
             }}>● LIVE</span>
           )}
         </div>
@@ -111,7 +112,7 @@ export default function TickerHistory({ ticker, name, onClose }: Props) {
         <button
           onClick={onClose}
           style={{
-            background: 'none', border: 'none', color: '#64748b',
+            background: 'none', border: 'none', color: tokens.tx.muted,
             cursor: 'pointer', fontSize: 15, padding: '2px 4px', flexShrink: 0,
           }}
           title="닫기"
@@ -120,7 +121,7 @@ export default function TickerHistory({ ticker, name, onClose }: Props) {
 
       {/* 업데이트 시각 */}
       {lastUpdated && (
-        <div style={{ padding: '3px 12px', color: '#334155', fontSize: 10, flexShrink: 0, borderBottom: '1px solid #1e293b' }}>
+        <div style={{ padding: '3px 12px', color: tokens.tx.separator, fontSize: 10, flexShrink: 0, borderBottom: `1px solid ${tokens.bd.default}` }}>
           갱신 {lastUpdated} · 30초 자동갱신
         </div>
       )}
@@ -128,10 +129,10 @@ export default function TickerHistory({ ticker, name, onClose }: Props) {
       {/* 포지션 목록 */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px 10px' }}>
         {loading && (
-          <div style={{ color: '#64748b', padding: 16, textAlign: 'center' }}>이력 로딩 중…</div>
+          <div style={{ color: tokens.tx.muted, padding: 16, textAlign: 'center' }}>이력 로딩 중…</div>
         )}
         {!loading && rows.length === 0 && (
-          <div style={{ color: '#64748b', padding: 16, textAlign: 'center' }}>이력 없음</div>
+          <div style={{ color: tokens.tx.muted, padding: 16, textAlign: 'center' }}>이력 없음</div>
         )}
         {rows.map(r => (
           <PositionCard key={r.id} row={r} />
@@ -147,7 +148,7 @@ function PositionCard({ row: r }: { row: HistoryRow }) {
 
   return (
     <div style={{
-      border: `1px solid ${isActive ? '#1e3a5f' : '#1e293b'}`,
+      border: `1px solid ${isActive ? tokens.bg.active : tokens.bd.default}`,
       borderRadius: 8,
       marginBottom: 10,
       overflow: 'hidden',
@@ -159,7 +160,7 @@ function PositionCard({ row: r }: { row: HistoryRow }) {
         display: 'flex', alignItems: 'center', gap: 7,
         padding: '6px 10px',
         background: isActive ? '#0d1e35' : '#111827',
-        borderBottom: '1px solid #1e293b',
+        borderBottom: `1px solid ${tokens.bd.default}`,
       }}>
         <span style={{
           background: modelColor + '25', color: modelColor,
@@ -168,10 +169,10 @@ function PositionCard({ row: r }: { row: HistoryRow }) {
         }}>
           {r.model.toUpperCase()}
         </span>
-        <span style={{ color: '#64748b', fontSize: 11 }}>신호 {r.signal_date}</span>
+        <span style={{ color: tokens.tx.muted, fontSize: 11 }}>신호 {r.signal_date}</span>
         <span style={{
           marginLeft: 'auto', fontSize: 10, flexShrink: 0,
-          color: isActive ? '#4ade80' : '#475569',
+          color: isActive ? tokens.chart.cat.ichimoku : tokens.tx.subtle,
           fontWeight: isActive ? 700 : 400,
         }}>
           {r.status === 'pending' ? '⏳ 매수대기' : r.status === 'open' ? '● 보유중' : '✓ 완료'}
@@ -183,16 +184,16 @@ function PositionCard({ row: r }: { row: HistoryRow }) {
 
         {/* 진입 / 매수대기 */}
         {r.entry_actual != null ? (
-          <TimelineRow icon="▶" iconColor="#3b82f6">
+          <TimelineRow icon="▶" iconColor={tokens.accent.blue}>
             <span>
               진입{' '}
-              <strong style={{ color: '#cbd5e1' }}>₩{r.entry_actual.toLocaleString()}</strong>
+              <strong style={{ color: tokens.tx.secondary }}>₩{r.entry_actual.toLocaleString()}</strong>
               {r.qty != null && (
-                <> × <strong style={{ color: '#cbd5e1' }}>{r.qty}주</strong></>
+                <> × <strong style={{ color: tokens.tx.secondary }}>{r.qty}주</strong></>
               )}
             </span>
             {r.slippage_pct != null && (
-              <span style={{ color: '#64748b', marginLeft: 8 }}>
+              <span style={{ color: tokens.tx.muted, marginLeft: 8 }}>
                 슬리피지{' '}
                 <span style={{ color: pctColor(r.slippage_pct * 100) }}>
                   {fmtPct(r.slippage_pct * 100)}
@@ -201,8 +202,8 @@ function PositionCard({ row: r }: { row: HistoryRow }) {
             )}
           </TimelineRow>
         ) : (
-          <TimelineRow icon="⏳" iconColor="#f59e0b">
-            <span style={{ color: '#64748b' }}>
+          <TimelineRow icon="⏳" iconColor={tokens.stage[3]}>
+            <span style={{ color: tokens.tx.muted }}>
               T+1 시가 매수 대기
               {r.entry_theory != null && (
                 <> (이론가 ₩{r.entry_theory.toLocaleString()})</>
@@ -213,17 +214,17 @@ function PositionCard({ row: r }: { row: HistoryRow }) {
 
         {/* TP1 */}
         {r.tp1_date && r.tp1_price != null && r.entry_actual != null && (
-          <TimelineRow icon="★" iconColor="#a78bfa">
+          <TimelineRow icon="★" iconColor={tokens.stage[2]}>
             <span>
               1차익절{' '}
-              <strong style={{ color: '#a78bfa' }}>₩{r.tp1_price.toLocaleString()}</strong>
-              <span style={{ color: '#4ade80', marginLeft: 4 }}>
+              <strong style={{ color: tokens.stage[2] }}>₩{r.tp1_price.toLocaleString()}</strong>
+              <span style={{ color: tokens.chart.cat.ichimoku, marginLeft: 4 }}>
                 {fmtPct((r.tp1_price / r.entry_actual - 1) * 100)}
               </span>
             </span>
-            <span style={{ color: '#64748b', marginLeft: 8 }}>{r.tp1_date}</span>
+            <span style={{ color: tokens.tx.muted, marginLeft: 8 }}>{r.tp1_date}</span>
             {r.tp1_ratio != null && (
-              <span style={{ color: '#64748b', marginLeft: 4 }}>
+              <span style={{ color: tokens.tx.muted, marginLeft: 4 }}>
                 ({(r.tp1_ratio * 100).toFixed(0)}% 익절)
               </span>
             )}
@@ -232,16 +233,16 @@ function PositionCard({ row: r }: { row: HistoryRow }) {
 
         {/* 고점 (watermark) — 보유중일 때만 */}
         {isActive && r.watermark != null && r.entry_actual != null && r.watermark > r.entry_actual && (
-          <TimelineRow icon="▲" iconColor="#334155">
-            <span style={{ color: '#64748b' }}>
+          <TimelineRow icon="▲" iconColor={tokens.bd.emphasis}>
+            <span style={{ color: tokens.tx.muted }}>
               고점{' '}
-              <strong style={{ color: '#94a3b8' }}>₩{r.watermark.toLocaleString()}</strong>
-              <span style={{ color: '#4ade80', marginLeft: 4 }}>
+              <strong style={{ color: tokens.tx.secondary }}>₩{r.watermark.toLocaleString()}</strong>
+              <span style={{ color: tokens.chart.cat.ichimoku, marginLeft: 4 }}>
                 {fmtPct((r.watermark / r.entry_actual - 1) * 100)}
               </span>
             </span>
             {r.trail_pct != null && (
-              <span style={{ color: '#334155', marginLeft: 8 }}>
+              <span style={{ color: tokens.tx.separator, marginLeft: 8 }}>
                 트레일링 스탑 ₩{Math.round(r.watermark * (1 - r.trail_pct)).toLocaleString()}
               </span>
             )}
@@ -253,7 +254,7 @@ function PositionCard({ row: r }: { row: HistoryRow }) {
           <TimelineRow icon="◉" iconColor={pctColor(r.unrealized_pct)}>
             <span>
               현재{' '}
-              <strong style={{ color: '#e2e8f0' }}>₩{r.current_price.toLocaleString()}</strong>
+              <strong style={{ color: tokens.tx.secondary }}>₩{r.current_price.toLocaleString()}</strong>
               {r.unrealized_pct != null && (
                 <span style={{ color: pctColor(r.unrealized_pct), fontWeight: 700, marginLeft: 6 }}>
                   {fmtPct(r.unrealized_pct)}
@@ -267,18 +268,18 @@ function PositionCard({ row: r }: { row: HistoryRow }) {
         {r.exit_date && r.exit_price != null && (
           <TimelineRow
             icon={r.blended_return != null && r.blended_return > 0 ? '✓' : '✗'}
-            iconColor={r.blended_return != null && r.blended_return > 0 ? '#4ade80' : '#f87171'}
+            iconColor={r.blended_return != null && r.blended_return > 0 ? tokens.chart.cat.ichimoku : tokens.semantic.up}
           >
             <span>
               청산{' '}
-              <strong style={{ color: '#cbd5e1' }}>₩{r.exit_price.toLocaleString()}</strong>
-              <span style={{ color: '#64748b', marginLeft: 4 }}>{r.exit_date}</span>
+              <strong style={{ color: tokens.tx.secondary }}>₩{r.exit_price.toLocaleString()}</strong>
+              <span style={{ color: tokens.tx.muted, marginLeft: 4 }}>{r.exit_date}</span>
               {r.exit_type && (
                 <span style={{
                   marginLeft: 4,
-                  color: r.exit_type === 'hard_stop' ? '#f87171'
-                    : r.exit_type === 'trail' ? '#a78bfa'
-                    : '#94a3b8',
+                  color: r.exit_type === 'hard_stop' ? tokens.semantic.up
+                    : r.exit_type === 'trail' ? tokens.stage[2]
+                    : tokens.tx.secondary,
                 }}>
                   {EXIT_LABEL[r.exit_type] ?? r.exit_type}
                 </span>
@@ -307,7 +308,7 @@ function TimelineRow({
   children: React.ReactNode
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, fontSize: 11, color: '#94a3b8' }}>
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, fontSize: 11, color: tokens.tx.secondary }}>
       <span style={{ color: iconColor, fontSize: 12, flexShrink: 0, width: 14, textAlign: 'center' }}>
         {icon}
       </span>

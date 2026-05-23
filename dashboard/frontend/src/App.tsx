@@ -1,11 +1,12 @@
 import { Suspense, lazy, useState } from 'react'
 import MobileNav from './components/MobileNav'
 import { TAB_CONFIG, DEFAULT_TAB, type TabKey, type MobileTabKey } from './tabs'
+import { tokens } from './tokens'
 
 const SignalFeed = lazy(() => import('./components/SignalFeed'))
 
 const Loading = () => (
-  <div style={{ padding: 24, color: '#64748b', textAlign: 'center' as const }}>로딩 중…</div>
+  <div style={{ padding: 24, color: tokens.tx.muted, textAlign: 'center' as const }}>로딩 중…</div>
 )
 
 export default function App() {
@@ -17,10 +18,10 @@ export default function App() {
       <header style={styles.header}>
         <span style={styles.logo}>
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ marginRight: 6, verticalAlign: 'middle' }}>
-            <rect x="1" y="9" width="3" height="6" rx="1" fill="#3b82f6"/>
-            <rect x="6" y="5" width="3" height="10" rx="1" fill="#60a5fa"/>
-            <rect x="11" y="1" width="3" height="14" rx="1" fill="#93c5fd"/>
-            <path d="M2 7 L7 4 L12 2" stroke="#f87171" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            <rect x="1" y="9" width="3" height="6" rx="1" fill={tokens.accent.blue}/>
+            <rect x="6" y="5" width="3" height="10" rx="1" fill={tokens.accent.blueSoft}/>
+            <rect x="11" y="1" width="3" height="14" rx="1" fill={tokens.accent.blueLight}/>
+            <path d="M2 7 L7 4 L12 2" stroke={tokens.semantic.up} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
           Trading Dashboard
         </span>
@@ -69,23 +70,23 @@ export default function App() {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  root: { display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', background: '#0f1117' },
+  root: { display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', background: tokens.bg.root },
   header: {
     display: 'flex', alignItems: 'center', gap: 12, padding: '10px 20px',
-    background: '#1a1d2e', borderBottom: '1px solid #1e293b', flexShrink: 0,
+    background: tokens.bg.panel, borderBottom: `1px solid ${tokens.bd.default}`, flexShrink: 0,
   },
   logo: { fontWeight: 700, fontSize: 16, letterSpacing: 0.5 },
-  sub: { fontSize: 12, color: '#475569' },
+  sub: { fontSize: 12, color: tokens.tx.subtle },
   main: { display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' },
-  leftPane: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', borderRight: '1px solid #1e293b' },
-  tabBar: { display: 'flex', borderBottom: '1px solid #1e293b', background: '#1a1d2e', flexShrink: 0 },
+  leftPane: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', borderRight: `1px solid ${tokens.bd.default}` },
+  tabBar: { display: 'flex', borderBottom: `1px solid ${tokens.bd.default}`, background: tokens.bg.panel, flexShrink: 0 },
   tab: {
     padding: '8px 20px', border: 'none', background: 'transparent',
-    color: '#64748b', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+    color: tokens.tx.muted, cursor: 'pointer', fontSize: 13, fontWeight: 600,
     borderBottom: '2px solid transparent',
   },
-  tabActive: { color: '#93c5fd', borderBottom: '2px solid #3b82f6' },
+  tabActive: { color: tokens.accent.blueLight, borderBottom: `2px solid ${tokens.accent.blue}` },
   tabContent: { flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' },
   sidebar: { width: 340, display: 'flex', flexDirection: 'column', overflowY: 'auto', flexShrink: 0 },
-  panel: { flex: 1, minHeight: 200, borderBottom: '1px solid #1e293b', overflow: 'auto' },
+  panel: { flex: 1, minHeight: 200, borderBottom: `1px solid ${tokens.bd.default}`, overflow: 'auto' },
 }

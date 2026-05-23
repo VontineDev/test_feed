@@ -1,4 +1,5 @@
 import { useSSE } from '../hooks/useSSE'
+import { tokens } from '../tokens'
 
 interface Signal {
   id: number
@@ -12,14 +13,14 @@ interface Signal {
 }
 
 const directionStyle = (d: string): React.CSSProperties => ({
-  color: d === 'BUY' ? '#4ade80' : d === 'SELL' ? '#f87171' : '#94a3b8',
+  color: d === 'BUY' ? tokens.chart.cat.ichimoku : d === 'SELL' ? tokens.semantic.up : tokens.tx.secondary,
   fontWeight: 700,
   fontSize: 11,
 })
 
 const strengthDots = (s: number) =>
   Array.from({ length: 5 }, (_, i) => (
-    <span key={i} style={{ color: i < s ? '#facc15' : '#374151', fontSize: 10 }}>●</span>
+    <span key={i} style={{ color: i < s ? tokens.chart.significance : tokens.tx.separator, fontSize: 10 }}>●</span>
   ))
 
 export default function SignalFeed() {
@@ -57,15 +58,15 @@ export default function SignalFeed() {
 
 const styles: Record<string, React.CSSProperties> = {
   wrap: { padding: '8px 12px', overflowY: 'auto', height: '100%' },
-  hdr: { fontWeight: 700, fontSize: 13, color: '#94a3b8', marginBottom: 8 },
-  card: { background: '#1a1d2e', border: '1px solid #1e293b', borderRadius: 6, padding: '8px 10px', marginBottom: 8 },
+  hdr: { fontWeight: 700, fontSize: 13, color: tokens.tx.secondary, marginBottom: 8 },
+  card: { background: tokens.bg.panel, border: `1px solid ${tokens.bd.default}`, borderRadius: 6, padding: '8px 10px', marginBottom: 8 },
   cardTop: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 },
   strength: { display: 'flex', gap: 1 },
-  type: { fontSize: 10, color: '#64748b', marginLeft: 'auto' },
-  time: { fontSize: 10, color: '#475569' },
-  title: { fontSize: 12, color: '#cbd5e1', marginBottom: 4, lineHeight: 1.4 },
-  summary: { fontSize: 11, color: '#64748b', marginBottom: 4, lineHeight: 1.4 },
+  type: { fontSize: 10, color: tokens.tx.muted, marginLeft: 'auto' },
+  time: { fontSize: 10, color: tokens.tx.subtle },
+  title: { fontSize: 12, color: tokens.tx.secondary, marginBottom: 4, lineHeight: 1.4 },
+  summary: { fontSize: 11, color: tokens.tx.muted, marginBottom: 4, lineHeight: 1.4 },
   tickers: { display: 'flex', gap: 4, flexWrap: 'wrap' },
-  ticker: { background: '#0f172a', color: '#93c5fd', padding: '1px 6px', borderRadius: 3, fontSize: 10 },
-  empty: { padding: 24, color: '#64748b', textAlign: 'center' },
+  ticker: { background: tokens.bg.row, color: tokens.accent.blueLight, padding: '1px 6px', borderRadius: 3, fontSize: 10 },
+  empty: { padding: 24, color: tokens.tx.muted, textAlign: 'center' },
 }
