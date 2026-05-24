@@ -124,9 +124,9 @@ export default function StageHistoryPopup({ ticker, name, start, end, onClose }:
               )}
 
               {/* 스크리너 이력 */}
-              <div style={{ ...s.sectionTitle, marginTop: 14 }}>차트 스크리너 이력</div>
+              <div style={{ ...s.sectionTitle, marginTop: 14 }}>강세 후보 이력</div>
               {screenerHistory.length === 0 ? (
-                <div style={s.empty}>스크리너 이력 없음</div>
+                <div style={s.empty}>강세 후보 이력 없음</div>
               ) : (
                 <div style={s.tableWrap}>
                   <table style={s.table}>
