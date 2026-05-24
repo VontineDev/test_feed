@@ -4,6 +4,45 @@ Items deferred from code review and planning sessions.
 
 ---
 
+## P3: MarketSummaryBanner — 앱 레벨 헤더로 승격 (Phase 2)
+
+**What:** `MarketSummaryBanner`를 `Heatmap.tsx` 내부에서 `App.tsx` 최상단 헤더로 이동. 모든 탭(히트맵·레포트·Top·모의투자·매크로)에서 항상 표시.
+
+**Why:** Phase 1은 히트맵 탭에만 배너를 단다. 다른 탭으로 이동하면 시장 맥락이 사라진다. 초보자가 모의투자 탭에서 포지션을 볼 때도 "오늘 급락장"임을 알아야 한다.
+
+**How to apply:**
+- `Heatmap.tsx`에서 `<MarketSummaryBanner />` 마운트 제거
+- `App.tsx` 탭 컨텐츠 위 공통 영역에 `<MarketSummaryBanner />` 추가
+- `MarketSummaryBanner.tsx` 자체 수정 없음 — 마운트 위치만 변경
+- 모바일 레이아웃 확인: 헤더 + 탭 바 + 배너가 화면 상단을 과도하게 차지하지 않는지 검토
+
+**Pros:** Phase 1 실사용 데이터로 수요 확인 후 결정 가능. 마운트 위치 변경이라 코드 변경 최소.
+**Cons:** App.tsx 수정 → 전체 렌더링 영향 범위 주의. 모바일에서 화면 상단 공간 소모.
+**Effort:** XS (human: ~30min / CC: ~5min)
+**Priority:** P3
+**Depends on:** MarketSummaryBanner Phase 1 배포 (2026-05-24) 후 실사용 피드백
+
+---
+
+## P3: MarketSummaryBanner — 접기/펼치기 (localStorage)
+
+**What:** 배너 우상단에 chevron 버튼 추가. 클릭 시 배너 접힘. `localStorage.setItem('market-banner-collapsed', 'true')` 저장. 재방문 시 접힌 상태 복원.
+
+**Why:** 파워 유저가 매번 배너를 보면 시끄럽다. 초보자 팁 텍스트는 한 번 읽으면 더 볼 필요 없다.
+
+**How to apply:**
+- `MarketSummaryBanner.tsx`에 `useState(localStorage.getItem('market-banner-collapsed') === 'true')` 추가
+- 접힌 상태: 코스피/코스닥 수치만 한 줄 표시 (팁 텍스트·한마디 숨김)
+- 완전히 닫을 경우 vs 최소화할 경우 UX 결정 필요 (Phase 2에서 논의)
+
+**Pros:** 파워 유저 노이즈 제거. localStorage 1줄 수준 구현.
+**Cons:** 상태 관리 코드 추가로 컴포넌트 복잡도 소폭 증가.
+**Effort:** XS (human: ~1h / CC: ~5min)
+**Priority:** P3
+**Depends on:** MarketSummaryBanner Phase 1 배포 후 실사용 피드백 (접기 수요 실제로 있는지 확인)
+
+---
+
 ## P4: Move compare_tx_amt.py → scripts/compare_tx_amt.py (v0.7.0.0)
 
 **What:** `compare_tx_amt.py` is a dev validation script (Naver 거래대금 vs yfinance Vol×Close 오차 검증). It lives in the project root alongside production modules.

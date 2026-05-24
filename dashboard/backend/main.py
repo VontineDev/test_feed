@@ -29,7 +29,8 @@ import os
 import secrets
 import time
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -75,6 +76,12 @@ _TOP_LOCK = asyncio.Lock()
 _MACRO_CACHE: dict = {"data": None, "expires": 0.0}
 _MACRO_TTL = 600  # 10분 (yfinance 다운로드 비용 고려)
 _MACRO_LOCK = asyncio.Lock()
+
+# ── 시장 지수 캐시 (5분) ─────────────────────────────────────
+_MARKET_INDEX_CACHE: dict = {"data": None, "expires": 0.0}
+_MARKET_INDEX_TTL = 300  # 5분
+_MARKET_INDEX_LOCK = asyncio.Lock()
+_KST = ZoneInfo("Asia/Seoul")
 
 
 # ── lifespan ──────────────────────────────────────────────────
@@ -1385,6 +1392,123 @@ def _run_macro_analysis() -> dict:
         "stocks":     stocks,
         "fetched_at": time.strftime("%H:%M:%S"),
     }
+
+
+def _market_sentiment(
+    kospi_pct: float | None,
+    kosdaq_pct: float | None,
+) -> tuple[str, str]:
+    """KOSPI/KOSDAQ 등락률 → (sentiment, detail) 규칙 기반 분류."""
+    if kospi_pct is None and kosdaq_pct is None:
+        return "정보없음", "지수 데이터 로딩 실패"
+
+    available = [p for p in (kospi_pct, kosdaq_pct) if p is not None]
+    avg = sum(available) / len(available)
+    both = kospi_pct is not None and kosdaq_pct is not None
+
+    if avg >= 2.0:
+        detail = "코스피/코스닥 모두 급등 — 매수세 강함" if both else "지수 급등 — 매수세 강함 (코스피 기준)"
+        return "강세", detail
+    elif avg >= 0.5:
+        return "상승", f"시장 전반 오름세{'' if both else ' (코스피 기준)'}"
+    elif avg >= -0.5:
+        return "보합", f"큰 방향성 없이 혼조{'' if both else ' (코스피 기준)'}"
+    elif avg >= -2.0:
+        return "하락", f"시장 전반 내림세{'' if both else ' (코스피 기준)'}"
+    else:
+        detail = "코스피/코스닥 모두 하락폭 커짐" if both else "지수 급락 — 낙폭 확대 (코스피 기준)"
+        return "급락", detail
+
+
+@app.get("/api/market_index")
+async def get_market_index():
+    """KOSPI / KOSDAQ 지수 등락률 + 시장 감성 (5분 캐시).
+
+    장중: yfinance ^KS11/^KQ11 현재가 + KRX BASPRC_IDX(기준가) → change_pct 계산.
+    장마감/주말: KRX OpenAPI 확정값.
+    응답: {market_status, is_realtime, kospi, kosdaq, sentiment, sentiment_detail, as_of}
+    """
+    now = time.time()
+    async with _MARKET_INDEX_LOCK:
+        if _MARKET_INDEX_CACHE["data"] and now < _MARKET_INDEX_CACHE["expires"]:
+            return _MARKET_INDEX_CACHE["data"]
+
+    now_kst = datetime.now(_KST)
+    is_open = (
+        now_kst.weekday() < 5
+        and time(9, 0) <= now_kst.time() < time(15, 31)
+    )
+    bas_dd = now_kst.strftime("%Y%m%d")
+
+    def _fetch_krx():
+        try:
+            from data.krx_openapi import get_client as _krx_client
+            client = _krx_client()
+            return (
+                client.get_kospi_index_ohlcv(bas_dd),
+                client.get_kosdaq_index_ohlcv(bas_dd),
+            )
+        except Exception as e:
+            logger.warning("[market_index] KRX 조회 실패: %s", e)
+            return None, None
+
+    def _fetch_realtime():
+        try:
+            import yfinance as _yf
+            hist = _yf.download(["^KS11", "^KQ11"], period="1d", interval="1m",
+                                auto_adjust=True, progress=False, threads=True)
+            if hist.empty:
+                return None, None
+            close_df = hist["Close"]
+            ks = float(close_df["^KS11"].dropna().iloc[-1]) if "^KS11" in close_df.columns else None
+            kq = float(close_df["^KQ11"].dropna().iloc[-1]) if "^KQ11" in close_df.columns else None
+            return ks, kq
+        except Exception as e:
+            logger.warning("[market_index] yfinance 실시간 조회 실패: %s", e)
+            return None, None
+
+    krx_kospi, krx_kosdaq = await asyncio.to_thread(_fetch_krx)
+
+    is_realtime = False
+    kospi_close = krx_kospi["close"] if krx_kospi else None
+    kosdaq_close = krx_kosdaq["close"] if krx_kosdaq else None
+
+    if is_open and (krx_kospi or krx_kosdaq):
+        rt_ks, rt_kq = await asyncio.to_thread(_fetch_realtime)
+        if rt_ks:
+            kospi_close = rt_ks
+            is_realtime = True
+        if rt_kq:
+            kosdaq_close = rt_kq
+            is_realtime = True
+
+    def _pct(close, prev):
+        if close and prev and prev > 0:
+            return round((close - prev) / prev * 100, 2)
+        return None
+
+    kospi_prev  = krx_kospi["prev_close"]  if krx_kospi  else None
+    kosdaq_prev = krx_kosdaq["prev_close"] if krx_kosdaq else None
+    kospi_pct   = _pct(kospi_close,  kospi_prev)
+    kosdaq_pct  = _pct(kosdaq_close, kosdaq_prev)
+
+    sentiment, sentiment_detail = _market_sentiment(kospi_pct, kosdaq_pct)
+
+    result = {
+        "market_status":    "open" if is_open else "closed",
+        "is_realtime":      is_realtime,
+        "kospi":  {"change_pct": kospi_pct,  "close": kospi_close,  "prev_close": kospi_prev}  if kospi_close  else None,
+        "kosdaq": {"change_pct": kosdaq_pct, "close": kosdaq_close, "prev_close": kosdaq_prev} if kosdaq_close else None,
+        "sentiment":        sentiment,
+        "sentiment_detail": sentiment_detail,
+        "as_of":            now_kst.isoformat(),
+    }
+
+    async with _MARKET_INDEX_LOCK:
+        _MARKET_INDEX_CACHE["data"] = result
+        _MARKET_INDEX_CACHE["expires"] = time.time() + _MARKET_INDEX_TTL
+
+    return result
 
 
 @app.get("/api/macro")

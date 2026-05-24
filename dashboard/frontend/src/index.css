@@ -85,6 +85,13 @@ button:focus:not(:focus-visible) {
   }
 }
 
+/* ───────────── MarketSummaryBanner 모바일 대응 ───────────── */
+@media (max-width: 768px) {
+  .market-banner-tip {
+    display: none;
+  }
+}
+
 /* ───────────── PaperPortfolio split-view 모바일 대응 ───────────── */
 /* 데스크탑: 55%/45% 나란히, 모바일: 세로 스택 */
 @media (max-width: 768px) {

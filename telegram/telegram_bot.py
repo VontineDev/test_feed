@@ -149,6 +149,31 @@ async def _handle_status(http: httpx.AsyncClient, chat_id: str, pool) -> None:
                 "SELECT COUNT(*) FROM trade_signals WHERE detected_at >= NOW() - INTERVAL '24 hours'"
             )
 
+    # 시장 현황 (KRX 직접 호출 — 대시보드 독립적)
+    market_line = ""
+    try:
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo as _ZI
+        from data.krx_openapi import get_client as _krx_client
+        _kst = _ZI("Asia/Seoul")
+        _bas = _dt.now(_kst).strftime("%Y%m%d")
+        _client = _krx_client()
+        _ks = _client.get_kospi_index_ohlcv(_bas)
+        _kq = _client.get_kosdaq_index_ohlcv(_bas)
+
+        def _fmt(label: str, d: dict | None) -> str:
+            if not d or not d.get("close") or not d.get("prev_close"):
+                return ""
+            pct = (d["close"] - d["prev_close"]) / d["prev_close"] * 100
+            arrow = "▲" if pct > 0 else "▼" if pct < 0 else "–"
+            return f"{label} {arrow}{abs(pct):.2f}%"
+
+        parts = [s for s in (_fmt("코스피", _ks), _fmt("코스닥", _kq)) if s]
+        if parts:
+            market_line = f"📈 시장: {esc(' / '.join(parts))}"
+    except Exception as _e:
+        logger.debug("[status] 시장 현황 조회 실패: %s", _e)
+
     lines = [
         "📡 *크롤러 상태*",
         "",
@@ -158,6 +183,8 @@ async def _handle_status(http: httpx.AsyncClient, chat_id: str, pool) -> None:
         f"🎯 최근 24h 신호: {esc(str(signal_count))}건",
         f"🌐 피드: Reuters \\+ Investing \\+ CNBC",
     ]
+    if market_line:
+        lines.insert(2, market_line)
     await _send(http, chat_id, "\n".join(lines))
 
 
