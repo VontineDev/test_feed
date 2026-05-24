@@ -983,9 +983,15 @@ async def get_paper_curve():
             open_rows = await conn.fetch(
                 """
                 SELECT p.ticker, p.model, p.entry_actual, p.qty,
-                       COALESCE(tn.name_ko, SPLIT_PART(p.ticker, '.', 1)) AS name
+                       COALESCE(tn.name_ko, k.name_ko,
+                                cs.name, SPLIT_PART(p.ticker, '.', 1)) AS name
                 FROM   paper_positions p
                 LEFT JOIN ticker_names tn ON tn.ticker = p.ticker
+                LEFT JOIN krx_listings k  ON k.yfinance_symbol = p.ticker
+                LEFT JOIN LATERAL (
+                    SELECT name FROM chart_signals
+                    WHERE  ticker = p.ticker ORDER BY screened_at DESC LIMIT 1
+                ) cs ON TRUE
                 WHERE  p.status IN ('open', 'pending')
                 ORDER  BY p.signal_date
                 """
