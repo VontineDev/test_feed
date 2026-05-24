@@ -27,7 +27,7 @@ import json
 import logging
 import os
 import secrets
-import time
+import time as _time_module
 from contextlib import asynccontextmanager
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
@@ -193,7 +193,7 @@ async def _fetch_current_prices(
     """
     if not tickers:
         return {}
-    now = time.time()
+    now = _time_module.time()
     if _POS_PRICE_CACHE["data"] and now < _POS_PRICE_CACHE["expires"]:
         return _POS_PRICE_CACHE["data"]
 
@@ -305,7 +305,7 @@ async def _build_heatmap_data() -> list[dict]:
 # ── GET /api/heatmap ──────────────────────────────────────────
 @app.get("/api/heatmap")
 async def get_heatmap():
-    now = time.time()
+    now = _time_module.time()
     # 가격 캐시 만료 시 stage 구조 유지하고 가격만 갱신
     if _HEATMAP_CACHE["data"] and now < _HEATMAP_CACHE["expires"]:
         return {"data": _HEATMAP_CACHE["data"], "cached": True}
@@ -766,7 +766,7 @@ async def get_paper_report():
 def _get_kiwoom_token() -> str:
     """키움 OAuth 토큰 반환 (23h 캐시, 만료 시 재발급)."""
     global _KIWOOM_TOKEN, _KIWOOM_TOKEN_TS
-    now = time.time()
+    now = _time_module.time()
     if _KIWOOM_TOKEN and now - _KIWOOM_TOKEN_TS < _KIWOOM_TOKEN_TTL:
         return _KIWOOM_TOKEN
     appkey = os.environ.get("KIWOOM_APPKEY")
@@ -815,11 +815,11 @@ async def get_top(n: int = 50, refresh: bool = False):
     EPS는 Naver Finance에서 병렬 조회 후 각 항목에 추가.
     """
     n = min(max(n, 1), 100)
-    now = time.time()
+    now = _time_module.time()
     if not refresh and _TOP_CACHE["data"] and now < _TOP_CACHE["expires"]:
         return _TOP_CACHE["data"]
     async with _TOP_LOCK:
-        now = time.time()
+        now = _time_module.time()
         if not refresh and _TOP_CACHE["data"] and now < _TOP_CACHE["expires"]:
             return _TOP_CACHE["data"]
         try:
@@ -1428,7 +1428,7 @@ async def get_market_index():
     장마감/주말: KRX OpenAPI 확정값.
     응답: {market_status, is_realtime, kospi, kosdaq, sentiment, sentiment_detail, as_of}
     """
-    now = time.time()
+    now = _time_module.time()
     async with _MARKET_INDEX_LOCK:
         if _MARKET_INDEX_CACHE["data"] and now < _MARKET_INDEX_CACHE["expires"]:
             return _MARKET_INDEX_CACHE["data"]
@@ -1506,7 +1506,7 @@ async def get_market_index():
 
     async with _MARKET_INDEX_LOCK:
         _MARKET_INDEX_CACHE["data"] = result
-        _MARKET_INDEX_CACHE["expires"] = time.time() + _MARKET_INDEX_TTL
+        _MARKET_INDEX_CACHE["expires"] = _time_module.time() + _MARKET_INDEX_TTL
 
     return result
 
@@ -1519,12 +1519,12 @@ async def get_macro(refresh: bool = False):
     최초 호출 시 yfinance 다운로드로 30~60초 소요.
     이후 캐시에서 즉시 반환.
     """
-    now = time.time()
+    now = _time_module.time()
     if not refresh and _MACRO_CACHE["data"] and now < _MACRO_CACHE["expires"]:
         return {**_MACRO_CACHE["data"], "cached": True}
 
     async with _MACRO_LOCK:
-        now = time.time()
+        now = _time_module.time()
         if not refresh and _MACRO_CACHE["data"] and now < _MACRO_CACHE["expires"]:
             return {**_MACRO_CACHE["data"], "cached": True}
         try:
