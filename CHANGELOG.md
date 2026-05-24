@@ -11,9 +11,14 @@ All notable changes to this project will be documented in this file.
 - **KOSDAQ 지수 KRX 조회** (`data/krx_openapi.py`): `get_kosdaq_index()` / `get_kosdaq_index_ohlcv()` 신규, KOSPI `prev_close`(`BASPRC_IDX`) 필드 추가.
 - **텔레그램 `/status` 시장 현황** (`telegram/telegram_bot.py`): KRX 클라이언트 직접 호출로 KOSPI/KOSDAQ 등락률을 대시보드 HTTP 의존 없이 표시.
 
+### Changed
+
+- **시작 스크립트 단일화** (`scripts/`): `restart_dashboard.bat`·`start_dashboard_hidden.vbs` 제거. `start_dashboard.ps1`이 수동 시작/재시작의 단일 진입점. Task Scheduler 자동 시작은 `start_dashboard_service.bat` 래퍼가 담당.
+
 ### Fixed
 
 - **`time` 모듈 이름 충돌** (`dashboard/backend/main.py`): `from datetime import time`이 `import time` 모듈을 shadow하여 캐시 TTL 계산(`time.time()`)이 `TypeError`로 실패하던 버그. `import time as _time_module`로 해결.
+- **TOP/Macro/Heatmap `time.strftime` 오류** (`dashboard/backend/main.py`): `_fetch_top_kiwoom`(L800)·`_run_macro_analysis`(L1393)에서 `time.strftime()`이 `datetime.time` 클래스의 언바운드 메서드로 해석되어 세 탭 모두 "API 오류" 표시. `_time_module.strftime()`으로 수정.
 
 ## [0.9.8.1] - 2026-05-24
 

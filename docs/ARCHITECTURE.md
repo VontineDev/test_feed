@@ -816,9 +816,8 @@ test_feed/
 ├── scripts/                       # 운영 스크립트
 │   ├── register_tasks.ps1         # Windows 작업 스케줄러 통합 등록 (-Task all|crawler|aftermarket|dashboard)
 │   ├── restart_scheduler.bat      # NewsCrawler 재시작
-│   ├── restart_dashboard.bat      # 대시보드 서버 재시작
-│   ├── start_dashboard_hidden.vbs # 창 없는 백그라운드 대시보드 시작
-│   ├── start_dashboard_service.bat # 대시보드 서비스 래퍼
+│   ├── start_dashboard.ps1        # 대시보드 서버 시작/재시작 (단일 진입점)
+│   ├── start_dashboard_service.bat # 대시보드 서비스 래퍼 (Task Scheduler용)
 │   ├── start_crawler.bat          # NewsCrawler 배치 실행
 │   ├── run_aftermarket_sync.bat   # 장후 동기화 실행
 │   ├── duckdns_update.bat         # DuckDNS IP 업데이트

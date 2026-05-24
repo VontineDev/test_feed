@@ -113,15 +113,14 @@ dashboard/                # 웹 대시보드 (FastAPI + React)
 tests/                    # pytest 테스트 (601개)
 docs/                     # 문서
 scripts/                  # 운영 스크립트
-  restart_dashboard.bat   # 대시보드 서버 재시작
+  start_dashboard.ps1     # 대시보드 서버 시작/재시작 (단일 진입점)
   start_crawler.bat       # 크롤러 직접 실행
   run_aftermarket_sync.bat # 장후 동기화 실행
   duckdns_update.bat      # DuckDNS IP 업데이트
   restart_scheduler.bat   # Windows 작업 스케줄러 NewsCrawler 재시작
   run_sweep.py            # 백테스트 파라미터 그리드서치
   register_tasks.ps1      # Windows 작업 스케줄러 통합 등록 (-Task all|crawler|aftermarket|dashboard)
-  start_dashboard_hidden.vbs   # 창 없는 대시보드 시작 (VBScript)
-  start_dashboard_service.bat  # 대시보드 서비스 래퍼
+  start_dashboard_service.bat  # 대시보드 서비스 래퍼 (Task Scheduler용)
 sql/                      # DB 스키마 마이그레이션
   rls_policies.sql        # RLS 정책 마이그레이션 (14 테이블 backend_all, pgAdmin/Supabase SQL 에디터 실행)
 logs/                     # 로그 파일
@@ -160,7 +159,7 @@ KRX_PW=your_krx_password
 ## 대시보드 실행
 
 ```bash
-scripts\restart_dashboard.bat   # 백엔드 서버 시작 (http://localhost:8000)
+scripts\start_dashboard.ps1   # 백엔드 서버 시작/재시작 (http://localhost:8000)
 ```
 
 탭 구성: 히트맵 · 레포트 · Top · 모의투자 · 매크로
