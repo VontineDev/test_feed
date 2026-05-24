@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { tokens } from '../tokens'
+import { tokens, pctTextColor } from '../tokens'
 import {
   ResponsiveContainer,
   LineChart,
@@ -84,12 +84,6 @@ export function pivotSeries(
   })
 }
 
-// ── pctColor ─────────────────────────────────────────────────
-
-function pctColor(v: number | null | undefined): string {
-  if (v == null) return tokens.tx.muted
-  return v > 0 ? tokens.chart.cat.ichimoku : v < 0 ? tokens.semantic.up : tokens.tx.secondary
-}
 
 function fmt(v: number | null, digits = 1): string {
   if (v == null) return '—'
@@ -221,19 +215,19 @@ export default function PaperAnalytics({ onSelect, collapsed = false, onToggle }
                   </td>
                   <td style={S.td}>{st.n_trades}</td>
                   <td style={S.td}>{st.n_wins} / {st.n_trades - st.n_wins}</td>
-                  <td style={{ ...S.td, color: pctColor(st.win_rate - 0.5) }}>
+                  <td style={{ ...S.td, color: pctTextColor(st.win_rate - 0.5) }}>
                     {(st.win_rate * 100).toFixed(0)}%
                   </td>
-                  <td style={{ ...S.td, color: pctColor(st.avg_win) }}>
+                  <td style={{ ...S.td, color: pctTextColor(st.avg_win) }}>
                     {fmt(st.avg_win)}
                   </td>
-                  <td style={{ ...S.td, color: pctColor(st.avg_loss) }}>
+                  <td style={{ ...S.td, color: pctTextColor(st.avg_loss) }}>
                     {fmt(st.avg_loss)}
                   </td>
-                  <td style={{ ...S.td, color: pctColor(st.total_realized), fontWeight: 600 }}>
+                  <td style={{ ...S.td, color: pctTextColor(st.total_realized), fontWeight: 600 }}>
                     {fmt(st.total_realized)}
                   </td>
-                  <td style={{ ...S.td, color: pctColor(st.total_unrealized) }}>
+                  <td style={{ ...S.td, color: pctTextColor(st.total_unrealized) }}>
                     {st.total_unrealized !== 0 ? fmt(st.total_unrealized) : '—'}
                   </td>
                 </tr>
@@ -314,7 +308,7 @@ export default function PaperAnalytics({ onSelect, collapsed = false, onToggle }
                     {MODEL_LABEL[r.model] ?? r.model}
                     <span style={{ fontSize: 10, color: tokens.tx.muted, marginLeft: 4 }}>(미)</span>
                   </td>
-                  <td style={{ ...S.td, color: pctColor(r.pct), fontWeight: 600 }}>
+                  <td style={{ ...S.td, color: pctTextColor(r.pct), fontWeight: 600 }}>
                     {fmt(r.pct)}
                   </td>
                 </tr>
