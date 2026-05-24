@@ -171,7 +171,8 @@ class TradeSignal:
     ticker_symbols: dict    # name → yfinance 심볼 (예: {"삼성전자": "005930.KS"})
     backend: Backend
     success: bool
-    article_type: str = "other"  # earnings|ma|management|analyst|regulatory|product|macro|other
+    article_type: str = "other"      # earnings|ma|management|analyst|regulatory|product|macro|other
+    confidence: str = "NORMAL"       # "NORMAL" | "HIGH" — Ichimoku 교차 시 HIGH, 🔥 배지 (v0.9.3.0~)
 
     @property
     def is_actionable(self) -> bool:
@@ -188,6 +189,8 @@ class TradeSignal:
 | NONE | 매매와 무관 (스포츠, 연예, 정치 등) |
 
 **유효 신호 조건**: `is_actionable` — `direction in (BUY, SELL, WATCH)` AND `strength >= 2`
+
+**HIGH CONFIDENCE 배지 (v0.9.3.0~)**: 해당 주 Ichimoku 스크리너 통과 종목(`_screener_tickers`)과 교차하는 뉴스 신호는 `confidence="HIGH"`로 상향. 텔레그램 메시지에 🔥 배지 부여.
 
 **LLM 프롬프트 출력 형식**:
 ```json
@@ -219,8 +222,8 @@ class TradeSignal:
 **시세 조회 우선순위** (`get_price_context()` 5단계 캐스케이드):
 1. LLM이 제공한 yfinance 심볼 직접 사용
 2. pykrx 지수 매핑 (`PYKRX_INDEX_MAP`) — pykrx 사용 가능 시
-3. `ticker_cache.resolve()` — KRX DB 전체 종목 캐시 (KOSPI+KOSDAQ ~2500종목, v0.3.0.0~)
-   - 3가지 이름 변형 시도: raw → 소문자 strip → 공백 제거본
+3. `ticker_cache.resolve()` — KRX DB 전체 종목 캐시 (KOSPI+KOSDAQ ~2500종목)
+   - 정확 매칭 → `resolve_fuzzy(threshold=0.82)` fuzzy 매칭 → miss 카운터
 4. 내장 매핑 테이블 (`YFINANCE_MAP`) — 한국·미국 주식/지수/원자재 약 80개 매핑
 5. 대문자 5자 이하 문자열이면 yfinance 직접 시도
 
@@ -256,9 +259,9 @@ class TradeSignal:
 | PER < 15 (저평가) | +1 |
 | PBR < 1 (저평가) | +1 |
 
-멀티 티커 신호는 개별 델타의 평균을 최종 스코어에 합산 (합산이 아닌 평균 — 한 종목이 전체를 지배하지 않도록).
+멀티 티커 신호는 개별 델타의 평균을 최종 스코어에 합산 (한 종목이 전체를 지배하지 않도록).
 
-캐시: `_fund_cache` (날짜 키) — 프로세스 재시작 시 초기화. 캐시 히트 ~0ms, 미스 ~150ms. `dict.setdefault()`로 스레드 안전.
+캐시: `_fund_cache` (날짜 키) — 프로세스 재시작 시 초기화. 캐시 히트 ~0ms, 미스 ~150ms.
 
 시작 시 `prewarm_fundamentals()`가 `YFINANCE_MAP`의 한국 티커 전체를 5-worker 스레드 풀로 사전 적재.
 
@@ -286,7 +289,7 @@ class CrossAnalysis:
 -- 뉴스 기사
 CREATE TABLE news_articles (
     id           BIGSERIAL PRIMARY KEY,
-    url_hash     CHAR(16) NOT NULL UNIQUE,  -- 중복 방지 키
+    url_hash     CHAR(16) NOT NULL UNIQUE,
     url          TEXT NOT NULL,
     source       VARCHAR(32) NOT NULL,       -- cnbc | reuters | investing | ...
     category     VARCHAR(32) NOT NULL,       -- markets | macro | korea
@@ -307,9 +310,9 @@ CREATE TABLE trade_signals (
     reason          TEXT,
     tickers         TEXT[],
     llm_backend     VARCHAR(16),
-    macro_usd_krw   FLOAT,                      -- 신호 시점 USD/KRW (백테스팅용)
-    macro_base_rate FLOAT,                      -- 신호 시점 한국 기준금리 (백테스팅용)
-    article_type    VARCHAR(20) DEFAULT 'other',-- earnings|ma|management|analyst|regulatory|product|macro|other
+    macro_usd_krw   FLOAT,
+    macro_base_rate FLOAT,
+    article_type    VARCHAR(20) DEFAULT 'other',
     detected_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -322,72 +325,71 @@ CREATE TABLE chart_signals (
     ma_20w      FLOAT NOT NULL,
     ma_60w      FLOAT NOT NULL,
     cloud_top   FLOAT NOT NULL,
-    is_enhanced BOOLEAN DEFAULT FALSE,
-    has_gapjum  BOOLEAN DEFAULT FALSE,
-    week_of     VARCHAR(10) NOT NULL,        -- ISO 주차 (예: "2026-W16")
+    is_enhanced BOOLEAN DEFAULT FALSE,      -- 전환선>기준선 AND 둘 다 우상향 (v0.9.3.0~)
+    has_gapjum  BOOLEAN DEFAULT FALSE,      -- 20주MA > 60주MA 정배열
+    week_of     VARCHAR(10) NOT NULL,       -- ISO 주차 (예: "2026-W16")
     screened_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    sector      VARCHAR(80) DEFAULT '',      -- KIND 업종명 (v0.2.7.0~)
-    ma_120w     FLOAT,                       -- 120주선 값, NULL = 데이터 부족 (v0.2.7.0~)
+    sector      VARCHAR(80) DEFAULT '',
+    ma_120w     FLOAT,                      -- NULL = 데이터 부족 (100봉 미만)
     UNIQUE(ticker, week_of)
 );
 
--- 일별 외국인·기관 순매수 + 스트릭 (v0.5.0.0~)
+-- 일별 외국인·기관 순매수 + 스트릭
 CREATE TABLE daily_flow (
     ticker          TEXT NOT NULL,
     trade_date      DATE NOT NULL,
-    foreign_net     BIGINT,                  -- 외국인 순매수(주), 양수=순매수
-    inst_net        BIGINT,                  -- 기관 순매수(주)
-    foreign_streak  SMALLINT,               -- 연속 순매수일(음수=순매도)
+    foreign_net     BIGINT,
+    inst_net        BIGINT,
+    foreign_streak  SMALLINT,               -- 연속 순매수일 (음수=순매도)
     inst_streak     SMALLINT,
     PRIMARY KEY (ticker, trade_date)
 );
 
--- 일봉 3단계 분류 결과 (v0.6.0.0~)
+-- 일봉 3단계 분류 결과
 CREATE TABLE stage_classifications (
     ticker          TEXT NOT NULL,
     classified_date DATE NOT NULL,
-    stage           SMALLINT NOT NULL,       -- 1(랠리초입) | 2(중간조정) | 3(과열재가속)
+    stage           SMALLINT NOT NULL,      -- 1(랠리초입) | 2(중간조정) | 3(과열재가속)
     s1_entry_date   DATE,
-    s1_high         NUMERIC,                 -- Stage 1 당일 고가
-    s1_volume       BIGINT,                  -- Stage 1 당일 거래량 (vol_ratio 기준)
+    s1_high         NUMERIC,
+    s1_volume       BIGINT,
     peakout_flag    BOOLEAN DEFAULT false,
     PRIMARY KEY (ticker, classified_date)
 );
 
--- 워치리스트 일별 거래대금 비율 이력 (v0.7.3.0~)
+-- 워치리스트 일별 거래대금 비율 이력
 CREATE TABLE watchlist_vol_log (
     ticker      TEXT NOT NULL,
     trade_date  DATE NOT NULL,
-    vol_ratio   FLOAT,                       -- today_vol / s1_vol
-    s1_vol      BIGINT,
+    vol_ratio   FLOAT,                      -- today_txamt / s1_txamt
+    s1_txamt    BIGINT,
     PRIMARY KEY (ticker, trade_date)
 );
 
--- KRX 전체 종목 디렉토리 (v0.3.0.0~)
+-- KRX 전체 종목 디렉토리
 CREATE TABLE krx_listings (
     isin_code       TEXT PRIMARY KEY,
-    short_code      TEXT NOT NULL,           -- 6자리 종목코드
-    name_ko         TEXT NOT NULL,           -- 정식 종목명 (예: 삼성전자)
-    name_ko_abbr    TEXT,                    -- 단축명 (예: 삼성전자)
+    short_code      TEXT NOT NULL,
+    name_ko         TEXT NOT NULL,
+    name_ko_abbr    TEXT,
     name_en         TEXT,
     listed_at       DATE,
-    market          TEXT,                    -- KOSPI | KOSDAQ
+    market          TEXT,                   -- KOSPI | KOSDAQ
     security_type   TEXT,
     sector          TEXT,
     stock_type      TEXT,
     par_value       TEXT,
     listed_shares   BIGINT,
-    yfinance_symbol TEXT NOT NULL,           -- 예: 005930.KS, 086520.KQ
+    yfinance_symbol TEXT NOT NULL,          -- 예: 005930.KS, 086520.KQ
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
--- 인덱스: name_ko, name_ko_abbr, short_code, updated_at
 
--- 시간외 단일가 스냅샷 (v0.7.x~, kiwoom/krx_aftermarket_sync.py)
+-- 시간외 단일가 스냅샷
 CREATE TABLE aftermarket_snap (
     trade_date    DATE           NOT NULL,
-    ticker        VARCHAR(12)    NOT NULL,   -- yfinance 심볼 (005930.KS 등)
-    reg_close     NUMERIC(12,0),             -- 정규장 종가
-    after_close   NUMERIC(12,0),             -- 시간외 체결가
+    ticker        VARCHAR(12)    NOT NULL,
+    reg_close     NUMERIC(12,0),
+    after_close   NUMERIC(12,0),
     after_volume  BIGINT,
     after_value   BIGINT,
     after_chg_pct NUMERIC(6,2),
@@ -395,15 +397,15 @@ CREATE TABLE aftermarket_snap (
     PRIMARY KEY (trade_date, ticker)
 );
 
--- 키움 모의투자 포지션 (v0.9.0.0~, kiwoom_paper_trader.py)
+-- 키움 모의투자 포지션
 CREATE TABLE paper_positions (
     id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    model           VARCHAR(20)  NOT NULL,   -- stage|kosdaq|cross|ichimoku
+    model           VARCHAR(20)  NOT NULL,  -- stage|kosdaq|cross|ichimoku
     ticker          VARCHAR(20)  NOT NULL,
     signal_date     DATE         NOT NULL,
-    entry_theory    FLOAT        NOT NULL,   -- T+0 종가 (백테스트 가정 진입가)
-    entry_actual    FLOAT,                   -- T+1 시가 (Kiwoom 실제 체결가)
-    slippage_pct    FLOAT,                   -- (entry_actual - entry_theory) / entry_theory
+    entry_theory    FLOAT        NOT NULL,  -- T+0 종가 (백테스트 가정 진입가)
+    entry_actual    FLOAT,                  -- T+1 시가 (Kiwoom 실제 체결가)
+    slippage_pct    FLOAT,
     qty             INTEGER,
     kiwoom_buy_no   VARCHAR(20),
     kiwoom_sell_no  VARCHAR(20),
@@ -413,11 +415,11 @@ CREATE TABLE paper_positions (
     hard_stop_pct   FLOAT        NOT NULL DEFAULT 0.10,
     tp1_date        DATE,
     tp1_price       FLOAT,
-    watermark       FLOAT,                   -- 고점 추적 (트레일링 스탑용)
+    watermark       FLOAT,                  -- 고점 추적 (트레일링 스탑용)
     exit_date       DATE,
     exit_price      FLOAT,
-    exit_type       VARCHAR(20),             -- tp1|trailing|hard_stop|max_hold|manual
-    blended_return  FLOAT,                   -- tp1_ratio×tp1_ret + (1-tp1_ratio)×final_ret
+    exit_type       VARCHAR(20),            -- hard_stop|tp1|trailing|max_hold|manual
+    blended_return  FLOAT,                  -- tp1_ratio×tp1_ret + (1-tp1_ratio)×final_ret
     status          VARCHAR(20)  NOT NULL DEFAULT 'pending',  -- pending|open|closed
     created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
@@ -435,15 +437,16 @@ CREATE TABLE paper_positions (
 | `fetch_latest()` | 최신 기사 조회 (category·source 필터) |
 | `fetch_latest_signals()` | 최신 신호 조회 (direction·strength 필터) |
 | `load_seen_hashes()` | 재시작 시 중복 해시 복원 |
-| `save_chart_signals()` | 스크리닝 결과 저장 (`chart_signals`, sector/ma_120w 포함, ON CONFLICT DO UPDATE) |
-| `load_chart_signals_latest()` | 가장 최근 주차 스크리닝 결과 전체 조회 (sector/ma_120w 포함) |
-| `save_daily_flow()` | daily_flow upsert (ticker, trade_date, foreign_net, inst_net, streak) |
-| `get_prev_streak()` | 전일 foreign_streak·inst_streak 조회 (streak 누적 계산용) |
+| `save_chart_signals()` | 스크리닝 결과 저장 (ON CONFLICT DO UPDATE) |
+| `load_chart_signals_latest()` | 가장 최근 주차 스크리닝 결과 전체 조회 |
+| `save_daily_flow()` | daily_flow upsert |
+| `get_prev_streak()` | 전일 streak 조회 (누적 계산용) |
 | `save_stage_classifications()` | stage_classifications 일괄 upsert |
-| `get_stage1_history()` | Stage 1 이력 배치 조회 (stage_classifier Stage 2 판단용) |
-| `get_stage1_watchlist()` | 최근 N일 이내 Stage 1 종목 1건씩 반환 (워치리스트 일보용, v0.7.3.0~) |
-| `upsert_watchlist_vol_log()` | 일별 vol_ratio 이력 upsert (랠리 소멸 3거래일 판정용, v0.7.3.0~) |
-| `get_watchlist_vol_log()` | 최근 N거래일 vol_ratio 조회 (LIMIT N ORDER BY trade_date DESC, v0.7.3.0~) |
+| `get_stage1_history()` | Stage 1 이력 배치 조회 (Stage 2 판단용) |
+| `get_active_stage_tickers()` | 최근 N일 이내 Stage 활성 종목 집합 (게이팅용, v0.9.3.0~) |
+| `get_stage1_watchlist()` | 최근 N일 이내 Stage 1 종목 반환 (워치리스트 일보용) |
+| `upsert_watchlist_vol_log()` | 일별 vol_ratio 이력 upsert |
+| `get_watchlist_vol_log()` | 최근 N거래일 vol_ratio 조회 |
 
 **DSN 설정 우선순위**:
 ```
@@ -452,7 +455,7 @@ DATABASE_URL 환경변수 → DB_HOST/PORT/NAME/USER/PASSWORD 개별 변수
 
 ---
 
-### 3-6. `telegram_bot.py` — 봇 명령어 처리
+### 3-6. `telegram/telegram_bot.py` — 봇 명령어 처리
 
 **방식**: Long polling (`getUpdates` 루프)
 
@@ -464,75 +467,73 @@ DATABASE_URL 환경변수 → DB_HOST/PORT/NAME/USER/PASSWORD 개별 변수
 | `/signals` | 최근 매매 신호 10건 (direction, strength, reason, 시각) |
 | `/signals buy\|sell\|watch` | 방향별 신호 필터링 조회 |
 | `/today` | 오늘 카테고리별 수집 건수 + 최신 기사 5건 한글 요약 |
-| `/backtest <mode> <start> <end> [--tp1 F] [--trail F] [--stop F]` | 통합 백테스트 — ichimoku/stage/cross 모드, 분할 청산 파라미터 지원 |
-| `/scan` | 주봉 스크리닝 즉시 실행 |
+| `/backtest <mode> <start> <end> [--tp1 F] [--trail F] [--stop F]` | 통합 백테스트 — ichimoku/stage/cross/stage2 모드 |
+| `/scan` | 주봉 스크리닝 즉시 실행 (전 종목 실시간, ~14분) |
 | `/screener` | 최신 주봉 차트 스크리닝 결과 — DM + 채널 동시 발송 |
-| `/top` | 당일 거래금액 상위 10 종목 (KOSPI+KOSDAQ 합산, fdr.StockListing) (v0.9.0.0~) |
-| `/paper` | 모의투자 현재 포지션 현황 (모델별 open·pending, 미실현 수익률) (v0.9.0.0~) |
-| `/paper_perf` | 모의투자 누적 성과 — 실전 승률·평균 수익·슬리피지 (v0.9.0.0~) |
-| `/paper_exit <종목코드>` | 모의투자 특정 종목 수동 강제 청산 (v0.9.0.0~) |
+| `/watchlist` | 거래대금 워치리스트 즉시 조회 (온디맨드, v0.9.3.0~) |
+| `/top` | 당일 거래금액 상위 10 종목 (KOSPI+KOSDAQ 합산) |
+| `/paper` | 모의투자 현재 포지션 현황 (모델별 open·pending, 미실현 수익률) |
+| `/paper_perf` | 모의투자 누적 성과 — 실전 승률·평균 수익·슬리피지 |
+| `/paper_exit <종목코드>` | 모의투자 특정 종목 수동 강제 청산 |
+| `/buy <코드> <가격> <수량>` | 진입 기록 (trade_log) |
+| `/sell <코드> <가격>` | 청산 기록 FIFO |
+| `/port` | 보유 현황 + 미실현 P&L |
+| `/pnl [week\|month\|all]` | 실현 P&L 요약 |
 | `/help` | 명령어 목록 |
 
-**알림 예시 (`/signals`)**:
-```
-🎯 최근 매매 신호 10건
+---
 
-🟢 BUY ⬛⬛⬛⬜⬜
-   Federal Reserve cuts rates by 25bp
-   💬 금리 인하로 증시 호재 예상
-   🕐 03-29 10:32
+### 3-7. `analysis/backtest_engine.py` — 통합 백테스트 엔진 (v0.7.0.0~)
 
-🔴 SELL ⬛⬛⬛⬛⬜
-   Samsung Q1 earnings miss estimates
-   💬 실적 부진으로 단기 하락 압력
-   🕐 03-29 09:15
+**역할**: Ichimoku·Stage·Cross·Stage2 4개 모드로 과거 구간 walk-forward 백테스트를 실행합니다.
+
+**모드별 신호 소스**:
+
+| 모드 | 신호 조건 | 주요 사용처 |
+|------|----------|-----------|
+| `ichimoku` | 주봉 Ichimoku 7조건 (A~G) | 주봉 스크리너 성과 검증 |
+| `stage` | 일봉 Stage 1 5조건 (KOSPI/KOSDAQ 분리) | 일봉 분류기 성과 검증 |
+| `cross` | Ichimoku × Stage 1 동일 ISO 주 교차 | 교차 신호 성과 검증 |
+| `stage2` | Stage 1 후 14일 이내 Stage 2 재진입 | Stage 2 신호 walk-forward |
+
+**출력 지표**: 승률(7d/28d/91d), 평균/중앙값 수익률, KOSPI 초과수익률, 샤프비율(연환산), MDD
+
+**비용**: 왕복 0.210% (매수 0.014% + 매도 0.014% + 증권거래세 0.180% + 농특세 0.002%)
+
+**그리드서치 검증 최적 청산 파라미터**:
+
+| 상수 | 대상 모델 | val_sharpe |
+|------|---------|-----------|
+| `OPTIMAL_EXIT_PARAMS` | stage (KOSPI) | 4.70 |
+| `OPTIMAL_EXIT_PARAMS_KOSDAQ` | stage (KOSDAQ) | 5.48 |
+| `OPTIMAL_EXIT_PARAMS_CROSS` | cross | 5.11 |
+| `OPTIMAL_EXIT_PARAMS_ICHIMOKU` | ichimoku | 7.50 |
+
+**`BacktestConfig` 주요 필드**:
+```python
+@dataclass
+class BacktestConfig:
+    mode: str           # ichimoku | stage | cross | stage2
+    start_date: date
+    end_date: date
+    market: str = "ALL" # KOSPI | KOSDAQ | ALL
+    tp1_pct: float = 0.25
+    tp1_ratio: float = 0.50
+    trail_pct: float = 0.10
+    hard_stop_pct: float = 0.10
+    hold_weeks: int = 13         # 최대 보유 기간 (주)
+    cost: float = TX_COST_DEFAULT
 ```
+
+**자동 스케줄**: 매주 일요일 20:00 KST — `jobs/screener_job.py`에서 호출 후 결과를 텔레그램 발송.
 
 ---
 
-### 3-7. `backtest.py` — 판정 정확도 추적 + 백테스팅
-
-**역할**: `cross_analysis_results` 판정(CONFIRM/CAUTION/FILTER/NEUTRAL)이 실제 시세 움직임을 얼마나 맞혔는지 추적하고 리포트를 생성합니다.
-
-**핵심 흐름**:
-```
-trade_signals (DB)
-→ cross_analysis_results (DB)
-→ yfinance 가격 조회 (1h / 4h / 1d / 3d 체크포인트)
-→ price_outcomes 저장
-→ calculate_metrics() — 판정별·체크포인트별 적중률 집계
-→ backtest_report_telegram() — MarkdownV2 포맷 리포트
-```
-
-**적중률 정의**:
-
-| direction | 적중 조건 |
-|-----------|-----------|
-| BUY | `return_pct > 0` |
-| SELL | `return_pct < 0` |
-| FILTER | `return_pct <= 0` (손실 방어 성공) |
-| WATCH | `hit_rate = None` (방향성 없는 모니터링 신호) |
-
-**주요 함수**:
-
-| 함수 | 설명 |
-|------|------|
-| `track_outcomes()` | 미결 신호의 가격 체크포인트를 채워넣음 (매 스케줄 실행) |
-| `backfill_historical()` | 과거 신호에 대한 yfinance 가격 소급 채움 |
-| `calculate_metrics()` | 판정별·checkpoint별 적중률 딕셔너리 반환 |
-| `backtest_report_telegram()` | `/backtest` 명령어·주간 자동 발송용 MarkdownV2 텍스트 |
-| `_fetch_type_breakdown()` | 기사 유형별(article_type) 1d 적중률 집계 (BUY/SELL만, WATCH 제외) |
-| `_esc(s)` | MarkdownV2 특수문자 이스케이프 (`&` 포함) |
-
-**자동 스케줄**: 매주 일요일 20:00 KST (`CronTrigger(day_of_week="sun", hour=20, minute=0)`)
-
----
-
-### 3-8. `chart_screener.py` — 주봉 차트 스크리너
+### 3-8. `analysis/chart_screener.py` — 주봉 차트 스크리너
 
 **역할**: KOSPI/KOSDAQ 전 종목(~2,770개)을 Ichimoku + MA 조건으로 스크리닝하여 기술적 돌파 후보를 필터링
 
-**스크리닝 조건 (7가지, A~G 모두 충족)**:
+**스크리닝 조건 (7가지 A~G, 모두 충족)**:
 
 | 조건 | 설명 |
 |------|------|
@@ -542,15 +543,15 @@ trade_signals (DB)
 | D | 종가 > 60주 이동평균 |
 | E | 20주 이동평균 > 직전 주 20주 이동평균 (우상향) |
 | F | 60주 이동평균 > 직전 주 60주 이동평균 (우상향) |
-| G | 종가 > 120주 이동평균 (데이터 < 100봉 시 NaN-pass) |
+| G | 종가 > 120주 이동평균 (데이터 < 100봉 시 NaN-pass, `SCREENER_G_NAN_STRICT=1`로 강화) |
 
-**OHLCV 수집**: `period="3y"` (주봉 ~156봉, 진정한 120주선 계산을 위해 3년 필요)
+**Enhanced 조건 (v0.9.3.0~, `is_enhanced` 실제 설정)**:
+- H: 전환선(9주) > 기준선(26주)
+- I: 전환선·기준선 둘 다 우상향
 
-**섹터 데이터**: `fetch_kind_sector_map()`이 KIND(한국거래소 기업공시시스템)에서 KOSPI/KOSDAQ 전 종목 업종(업종명)을 수집. EUC-KR HTML 파싱. 조회 실패 시 빈 dict 반환 — 스크리너는 계속 실행.
+**OHLCV 수집**: `period="3y"` (주봉 ~156봉, 120주선 계산을 위해 3년 필요)
 
-**추가 플래그**:
-- `has_gapjum`: 20주MA > 60주MA (정배열) — 결과 상위 정렬
-- `is_enhanced`: 향후 H/I 조건 확장 예약 필드
+**섹터 데이터**: `fetch_kind_sector_map()`이 KIND(한국거래소 기업공시시스템)에서 업종명을 수집. EUC-KR HTML 파싱.
 
 **주요 타입**:
 ```python
@@ -561,22 +562,55 @@ class ScreenResult:
     close: float
     ma_20w: float
     ma_60w: float
-    cloud_top: float        # max(Span A, Span B)
-    is_enhanced: bool
-    has_gapjum: bool        # 20주MA > 60주MA
+    cloud_top: float        # max(선행스팬A, 선행스팬B)
+    is_enhanced: bool       # H+I 조건 충족 여부 (v0.9.3.0~부터 실제 설정)
+    has_gapjum: bool        # 20주MA > 60주MA 정배열
     screened_at: str
     week_of: str            # ISO 주차 (예: "2026-W16")
-    sector: str = ""                  # KIND 업종명 (조회 실패 시 빈 문자열)
-    ma_120w: Optional[float] = None  # 120주선 (데이터 부족 시 None)
+    sector: str = ""
+    ma_120w: Optional[float] = None
 ```
 
-**성능 특이사항**: yfinance 병렬 다운로드 시 데이터 오염 발생 — `SCREENER_WORKERS=1`(직렬)이 기본값. 전 종목 스캔 소요 시간 약 14분.
+**성능**: yfinance 병렬 다운로드 시 데이터 오염 발생 — `SCREENER_WORKERS=1`(직렬) 기본값. 전 종목 스캔 소요 시간 약 14분.
 
-**자동 스케줄**: 매주 일요일 20:30 KST (`CronTrigger(day_of_week="sun", hour=20, minute=30)`)
+**자동 스케줄**: 매주 일요일 20:30 KST — `jobs/screener_job.py`에서 실행.
 
 ---
 
-### 3-9. `kiwoom_paper_trader.py` — 키움 모의투자 자동주문 (v0.9.0.0~)
+### 3-9. `analysis/stage_classifier.py` — 일봉 3단계 분류기 (v0.6.0.0~)
+
+**역할**: KOSPI+KOSDAQ 전 종목(~2,770개)을 매일 16:30 KST에 Stage 1/2/3으로 분류합니다. Ichimoku 주봉 스크리너와 완전히 독립된 시스템.
+
+**3단계 정의**:
+
+| Stage | 의미 | 핵심 조건 |
+|-------|------|----------|
+| 1 | 랠리 초입 | 당일 상승률 ≥ 5%(KOSPI) / 7%(KOSDAQ) + 거래대금 급증 + 외국인/기관 순매수 |
+| 2 | 중간 조정·재매집 | Stage 1 후 14일 이내, 고가 −5%~−20% 눌림, 거래대금 30~60% 감소 |
+| 3 | 과열 재가속 | Stage 1 후 고점 갱신, RSI ≥ 70, 거래대금 급증 재확인 |
+
+**우선순위**: Stage 3 > Stage 2 > Stage 1 (하나의 종목에 복수 조건 충족 시 높은 Stage 반환)
+
+**거래대금 기준 (v0.9.3.0~)**: 거래량(`Volume`) 대신 `Volume × Close`(거래대금) 기준으로 전환. 소형주 과잉 선정 방지. `compare_tx_amt.py` 검증: MAE 1.38%, Max 3.55%.
+
+**피크아웃 탐지 (`check_peakout()`)**: Stage 3 진입 후 외국인·기관 연속 순매도 streak ≤ −2 AND 윗꼬리 캔들 패턴으로 고점 이탈 조기 경보.
+
+**핵심 설계**:
+- ThreadPoolExecutor 내부에서 asyncpg 직접 호출 금지 — price_df, flow_df, s1_history 모두 진입 전에 배치 로드하여 전달 (learnings: asyncpg-threadpool-no-db)
+- `DAILY_CLASSIFIER_TICKERS` 환경변수로 최대 처리 종목 수 제어 (기본 150), Ichimoku 통과 종목은 캡 초과 시에도 항상 포함
+
+**주요 함수**:
+
+| 함수 | 반환 | 설명 |
+|------|------|------|
+| `classify_stage(ticker, price_df, flow_df, s1_history, market)` | `int \| None` | 3단계 분류 (1/2/3/None) |
+| `check_peakout(ticker, flow_df, price_df)` | `bool` | Stage 3 피크아웃 신호 |
+
+**자동 스케줄**: 매일 16:30 KST — `jobs/stage_job.py`에서 실행, 결과를 `stage_classifications` 테이블에 저장.
+
+---
+
+### 3-10. `data/kiwoom_paper_trader.py` — 키움 모의투자 자동주문 (v0.9.0.0~)
 
 **역할**: 키움 모의투자 서버(mockapi.kiwoom.com)에 실제 주문을 제출하고, 백테스트 진입가(T+0 종가)와 실전 진입가(T+1 시가 체결가) 사이의 슬리피지를 측정합니다.
 
@@ -589,10 +623,10 @@ class ScreenResult:
 | `cross` | Stage 1 ∩ Ichimoku | 5 | 15% | 50% | 10% | 10% | 5.11 |
 | `ichimoku` | 주봉 Ichimoku 7조건 | 10 | 25% | **70%** | 10% | 10% | **7.50** |
 
-**스케줄 잡 3개** (`run_scheduler.py`):
-- `09:05 KST` — `open_entry`: pending → T+1 시가로 키움 모의투자 매수주문
-- `16:10 KST` — `exit_checker`: open 포지션 EOD 가격 → 손절/익절/트레일 매도주문
-- `16:40 KST` — `eod_sampler`: Stage1·Ichimoku·Cross 신호 샘플링 → pending 삽입
+**스케줄 잡 3개** (`jobs/paper_jobs.py`):
+- `09:05 KST` — `paper_open_entry_job`: pending → T+1 시가로 키움 모의투자 매수주문
+- `16:10 KST` — `paper_exit_checker_job`: open 포지션 EOD 가격 → 손절/익절/트레일 매도주문
+- `16:40 KST` — `paper_eod_sampler_job`: Stage1·Ichimoku·Cross 신호 샘플링 → pending 삽입
 
 **exit_type 분류**: `hard_stop` → `tp1` 기록 → `trailing` → `max_hold`(91일) → `manual`
 
@@ -600,24 +634,86 @@ class ScreenResult:
 
 ---
 
-### 3-10. `telegram_notify.py` — 신호 알림 전송
+### 3-11. `analysis/macro_tracker.py` — OLS 팩터 모델 (v0.9.6.0~)
 
-**역할**: 유효 신호 감지 시 즉시 텔레그램 전송. 주봉 스크리닝 결과는 DM + 채널 동시 발송 (v0.2.7.0~: 섹터별 그룹 포맷 — 상위 5개 섹터 × 섹터당 상위 3종목).
+**역할**: 6개 매크로 팩터와 개별 종목 수익률의 선형 관계를 OLS 회귀로 추정하여 현재 매크로 환경이 해당 종목에 유리한지 불리한지 점수로 출력합니다.
 
-**v0.7.3.0 추가 함수 `send_watchlist_brief(entries, http)`**: 거래대금 워치리스트 일보 전송. plain text 모드(`parse_mode=None`). 확신도 순 정렬된 종목별 4줄 포맷 — 거래대금 비율(✅⚠️❌❓), 외국인/기관 스트릭(🔵🔴❓), Ichimoku 상태(☁️✅/❌/N/A). 워치리스트 없음 시 "워치리스트 없음" 발송.
+**6개 팩터** (모두 yfinance 일별 무료 수집):
+
+| 팩터 | 심볼 | 해석 |
+|------|------|------|
+| rate | `^TNX` | 미국 10년 국채금리 — 글로벌 유동성·밸류에이션 기준 |
+| fx | `KRW=X` | USD/KRW 환율 (상승 = 원화 약세) |
+| oil | `BZ=F` | 브렌트유 선물 |
+| vix | `^VIX` | 공포지수 |
+| dxy | `DX-Y.NYB` | 달러인덱스 |
+| export | `EWY` | 한국 수출 프록시 ETF |
+
+**모델 수식**:
+```
+r_주식[t] = α + β_rate·Δrate + β_fx·Δfx + β_oil·Δoil + β_vix·Δvix + β_dxy·Δdxy + β_export·Δexport + ε
+```
+- `rate`: 절대 변화(%p). 나머지: 로그 수익률(×100).
+
+**매크로 영향 점수 (Macro Score, −100~+100)**: 최근 5일 팩터 변화 × 베타 합산 → tanh 정규화.
+
+**대시보드 연동**: `GET /api/macro` 엔드포인트가 `MacroTracker.run_analysis()`를 비동기로 호출, 결과를 React Macro 탭에 표시.
+
+**CLI 사용법**:
+```bash
+python analysis/macro_tracker.py                             # 기본 KOSPI 대형주 전체 분석
+python analysis/macro_tracker.py --tickers 005930.KS        # 삼성전자만 상세 분석
+python analysis/macro_tracker.py --scenario rate+0.5        # 금리 +0.5%p 시나리오
+python analysis/macro_tracker.py --snapshot-only            # 매크로 현황 스냅샷만 출력
+```
+
+---
+
+### 3-12. `telegram/telegram_notify.py` — 신호 알림 전송
+
+**역할**: 유효 신호 감지 시 즉시 텔레그램 전송. 주봉 스크리닝 결과는 DM + 채널 동시 발송.
+
+**주요 함수**:
+
+| 함수 | 설명 |
+|------|------|
+| `send_signal_message(signal, cross, http)` | 뉴스 신호 알림 (HIGH CONFIDENCE 시 🔥 배지) |
+| `send_weekly_screener(results, http)` | 주봉 스크리닝 결과 — 섹터별 그룹 포맷 (상위 5섹터 × 섹터당 상위 3종목) |
+| `send_watchlist_brief(entries, http)` | 거래대금 워치리스트 일보 — plain text, 확신도 순 정렬 |
+| `_post_message(http, token, chat_id, text, label, parse_mode)` | Telegram Bot API 래퍼 |
+
+**`send_watchlist_brief` 포맷**: 종목별 4줄 — 거래대금 비율(✅⚠️❌❓), 전일 대비 delta(`+5%▲`/`-8%▼`), 외국인/기관 스트릭, Ichimoku 상태. D+10 마지막 추적일 표시. Stage 1→2 전환 시·랠리 소멸(3거래일 연속 vol_ratio < 0.6) 시 별도 단독 알림 발송.
 
 **알림 메시지 형식**:
 ```
-📈 [BUY] 연준 금리 인하 발표
-─────────────────
-방향: BUY  강도: ⬛⬛⬛⬛⬜ (4/5)
+[BUY] 연준 금리 인하 발표
+방향: BUY  강도: 4/5
 근거: 연준이 기준금리를 0.25%p 인하. 증시 강한 호재.
-교차분석: ✅ CONFIRM (점수: 9/10)
-  S&P500 +1.2% (상승)  NVDA +2.8% (급등)
-출처: Reuters
-시각: 2026-03-29 10:32 KST
-⚠️ 참고용 알림입니다. 투자 결정은 직접 하세요.
+교차분석: CONFIRM (점수: 9/10)
+  S&P500 +1.2%  NVDA +2.8%
+출처: Reuters | 2026-03-29 10:32 KST
+참고용 알림입니다. 투자 결정은 직접 하세요.
 ```
+
+---
+
+### 3-13. `jobs/` — 스케줄러 잡 패키지 (v0.9.8.1~)
+
+**역할**: `run_scheduler.py`에서 위임받은 잡 로직을 기능별 모듈로 분리합니다. `run_scheduler.py`는 얇은 래퍼로 외부 import 호환성을 유지합니다.
+
+| 모듈 | 잡 함수 | 스케줄 |
+|------|---------|--------|
+| `stage_job.py` | `daily_stage_job(db_pool)` | 매일 16:30 KST |
+| `screener_job.py` | `weekly_screener_job(db_pool)` | 매주 일요일 20:30 KST |
+| `infra_jobs.py` | `daily_krx_refresh_job(db_pool)` | 매일 08:00 KST |
+| `infra_jobs.py` | `daily_flow_sync_job()` | 매일 17:30 KST |
+| `watchlist_job.py` | `watchlist_brief_job(db_pool)` | 매일 17:00 KST |
+| `watchlist_job.py` | `build_watchlist_entries(pool)` | on-demand (`/watchlist` 봇 커맨드) |
+| `paper_jobs.py` | `paper_open_entry_job(db_pool, trader)` | 매일 09:05 KST |
+| `paper_jobs.py` | `paper_exit_checker_job(db_pool, trader)` | 매일 16:10 KST |
+| `paper_jobs.py` | `paper_eod_sampler_job(db_pool, trader)` | 매일 16:40 KST |
+
+**설계 원칙**: 각 잡 함수는 `db_pool`/`trader` 등 의존성을 인자로 받아 전역 상태 없이 동작. 전역 캐시(`_screener_tickers`, `_active_stage_tickers`)를 갱신하는 잡은 새 값을 반환 — 호출자(`run_scheduler.py`)가 전역에 대입.
 
 ---
 
