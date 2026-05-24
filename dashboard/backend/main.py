@@ -156,11 +156,6 @@ class _BasicAuthMiddleware(BaseHTTPMiddleware):
         if not user or not pw:
             return await call_next(request)
 
-        # localhost/127.0.0.1 접속은 인증 면제
-        client_host = request.client.host if request.client else ""
-        if client_host in ("127.0.0.1", "::1", "localhost"):
-            return await call_next(request)
-
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Basic "):
             try:

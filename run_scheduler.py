@@ -1,4 +1,4 @@
-﻿"""
+"""
 run_scheduler.py  —  수집/요약 분리 구조
 ────────────────────────────────────────────────────────────
 [수집 잡]  1분마다 피드 수집 → 신규 기사를 Queue에 적재 (즉시 종료)
@@ -482,495 +482,122 @@ async def summary_worker() -> None:
                 _summary_queue.task_done()
 
 
-# ── 3단계 분류기: 일별 16:30 KST (UTC 07:30) ─────────────────
+# ── 잡 래퍼 (핵심 로직은 jobs/ 패키지에 위치) ───────────────
+
 async def _daily_stage_job() -> None:
-    """일봉 3단계 분류기 — Stage 1/2/3 분류 + daily_flow streak + Ichimoku 비교 전송."""
-    if not _db_pool:
-        logger.warning("[3단계] DB 풀 없음 — 스킵")
-        return
-
-    loop = asyncio.get_running_loop()
-    logger.info("[3단계] 일별 분류 시작")
-
-    # 1. Ichimoku 비교용 결과 (D4: load_chart_signals_latest 사용 — 종목명/has_gapjum 포함)
-    _week, ichimoku_rows = await load_chart_signals_latest(_db_pool)
-    logger.info("[3단계] Ichimoku 비교 풀: %d종목 (week_of=%s)", len(ichimoku_rows), _week)
-
-    # 2. 전 종목 티커 목록 (KOSPI + KOSDAQ, ~2770개)
-    from analysis.chart_screener import get_all_tickers as _get_all_tickers
-    all_tickers: list[tuple[str, str, str]] = await loop.run_in_executor(
-        None, _get_all_tickers, None
-    )
-    # 티커 캡: Ichimoku 통과 종목 우선 포함, 나머지는 순서대로 채움
-    cap = int(os.environ.get("DAILY_CLASSIFIER_TICKERS", "150"))
-    if len(all_tickers) > cap:
-        _ichi_syms = {r["ticker"] for r in ichimoku_rows}
-        _priority  = [(t, n, s) for t, n, s in all_tickers if t in _ichi_syms]
-        _others    = [(t, n, s) for t, n, s in all_tickers if t not in _ichi_syms]
-        _n_fill    = max(0, cap - len(_priority))
-        all_tickers = _priority + _others[:_n_fill]
-        logger.info("[3단계] 티커 캡 %d 적용 (Ichimoku 우선 %d + 기타 %d)",
-                    cap, len(_priority), _n_fill)
-
-    logger.info("[3단계] 분류 대상: %d종목 / SCREENER_WORKERS=%s",
-                len(all_tickers), os.environ.get("SCREENER_WORKERS", "1"))
-
-    from datetime import date as _date
-
-    today = _date.today()
-
-    # 2b. daily OHLCV (60일, yfinance, 병렬)
-    import yfinance as _yf
-
-    def _fetch_daily_ohlcv(ticker: str):
-        try:
-            tkr = _yf.Ticker(ticker)
-            df = tkr.history(period="60d", interval="1d", auto_adjust=True)
-            if df.empty or len(df) < 21:
-                return None
-            if isinstance(df.columns, __import__("pandas").MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-            df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
-            df.index = __import__("pandas").to_datetime(df.index, utc=True)
-            return df
-        except Exception:
-            return None
-
-    workers = int(os.environ.get("SCREENER_WORKERS", "1"))
-    from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _as_completed
-
-    price_map: dict[str, object] = {}
-    with _TPE(max_workers=workers) as pool_ex:
-        futures = {pool_ex.submit(_fetch_daily_ohlcv, t): t for t, _, _ in all_tickers}
-        for fut in _as_completed(futures):
-            tk = futures[fut]
-            try:
-                df = fut.result()
-                if df is not None:
-                    price_map[tk] = df
-            except Exception:
-                pass
-    logger.info("[3단계] OHLCV 수집: %d/%d종목", len(price_map), len(all_tickers))
-
-    # 3. daily_flow 20일 배치 로드
-    from datetime import timedelta as _td
-    since_20d = today - _td(days=20)
-    flow_map: dict[str, object] = {}
-    import pandas as _pd
-    try:
-        async with _db_pool.acquire() as conn:
-            rows_flow = await conn.fetch(
-                """
-                SELECT ticker, trade_date, foreign_net, inst_net,
-                       foreign_streak, inst_streak
-                FROM   daily_flow
-                WHERE  trade_date >= $1
-                ORDER  BY trade_date ASC
-                """,
-                since_20d,
-            )
-        for row in rows_flow:
-            t = row["ticker"]
-            if t not in flow_map:
-                flow_map[t] = []
-            flow_map[t].append(dict(row))
-        for t, rows_list in flow_map.items():
-            df_f = _pd.DataFrame(rows_list)
-            df_f = df_f.set_index("trade_date")
-            df_f.index = _pd.to_datetime(df_f.index)
-            flow_map[t] = df_f
-    except Exception as e:
-        logger.warning("[3단계] flow_map 로드 실패: %s", e)
-
-    # 4. s1_history 배치 조회
-    all_ticker_list = [t for t, _, _ in all_tickers]
-    since_14d = today - _td(days=14)
-    s1_history = await get_stage1_history(_db_pool, all_ticker_list, since_14d)
-    logger.info("[3단계] s1_history: %d종목 이력", len(s1_history))
-
-    # 5. classify_stage() 병렬 실행
-    from analysis.stage_classifier import classify_stage as _classify, check_peakout as _peakout
-
-    market_map = {t: ("KOSDAQ" if s.endswith(".KQ") else "KOSPI") for t, _, s in all_tickers}
-
-    def _classify_one(ticker: str) -> tuple[str, Optional[int], bool]:
-        price_df = price_map.get(ticker)
-        flow_df  = flow_map.get(ticker, _pd.DataFrame())
-        if price_df is None:
-            return ticker, None, False
-        market = market_map.get(ticker, "KOSPI")
-        stage = _classify(ticker, price_df, flow_df, s1_history, market)
-        peakout = _peakout(ticker, flow_df, price_df) if stage == 3 else False
-        return ticker, stage, peakout
-
-    stage_results: dict[str, int] = {}
-    peakout_flags: set[str] = set()
-    upsert_rows: list[dict] = []
-
-    with _TPE(max_workers=workers) as pool_ex2:
-        futures2 = {pool_ex2.submit(_classify_one, t): t for t in all_ticker_list}
-        for fut in _as_completed(futures2):
-            try:
-                ticker, stage, peakout = fut.result()
-                if stage is not None:
-                    stage_results[ticker] = stage
-                    if peakout:
-                        peakout_flags.add(ticker)
-
-                    s1_high = s1_vol = s1_txamt = None
-                    if stage == 1:
-                        pdf = price_map.get(ticker)
-                        if pdf is not None and not pdf.empty:
-                            last_row = pdf.iloc[-1]
-                            s1_high  = float(last_row.get("High") or last_row.get("Close") or 0) or None
-                            _vol     = int(last_row.get("Volume") or 0)
-                            _close   = float(last_row.get("Close") or 0)
-                            s1_vol   = _vol or None
-                            s1_txamt = int(_vol * _close) or None  # 거래대금 = Volume × Close
-
-                    upsert_rows.append({
-                        "ticker":          ticker,
-                        "classified_date": today,
-                        "stage":           stage,
-                        "s1_entry_date":   today if stage == 1 else None,
-                        "s1_high":         s1_high,
-                        "s1_volume":       s1_vol,
-                        "s1_txamt":        s1_txamt,
-                        "peakout_flag":    peakout,
-                    })
-            except Exception as e:
-                logger.debug("[3단계] 분류 오류: %s", e)
-
-    logger.info("[3단계] 분류 완료 — Stage1:%d Stage2:%d Stage3:%d 피크아웃:%d",
-                sum(1 for s in stage_results.values() if s == 1),
-                sum(1 for s in stage_results.values() if s == 2),
-                sum(1 for s in stage_results.values() if s == 3),
-                len(peakout_flags))
-
-    # 6. stage_classifications upsert
-    await save_stage_classifications(_db_pool, upsert_rows)
-
-    # 6b. 분류된 종목 이름 캐시 갱신 (ticker_names)
-    try:
-        from core.db import upsert_ticker_names as _upsert_tn
-        stage_tickers = list(stage_results.keys())
-        await _upsert_tn(_db_pool, stage_tickers)
-    except Exception as e:
-        logger.warning("[3단계] ticker_names 업데이트 실패: %s", e)
-
-    # 7. 텔레그램 비교 메세지 전송
-    try:
-        await tg_send_screener_comparison(
-            ichimoku_rows=ichimoku_rows,
-            stage_results=stage_results,
-            peakout_flags=peakout_flags,
-        )
-    except Exception as e:
-        logger.warning("[3단계] 텔레그램 전송 실패: %s", e)
-
-    # 8. 활성 Stage 캐시 갱신 (뉴스 게이팅용, 7일 이내 분류 종목)
+    """일봉 3단계 분류기 — jobs/stage_job.py 위임."""
     global _active_stage_tickers
-    try:
-        from core.db import get_active_stage_tickers as _get_active
-        _active_stage_tickers = await _get_active(_db_pool, days=7)
-        logger.info("[3단계] 활성 Stage 캐시 갱신 — %d종목", len(_active_stage_tickers))
-    except Exception as e:
-        logger.warning("[3단계] 활성 Stage 캐시 갱신 실패: %s", e)
-
-    logger.info("[3단계] 일별 분류 완료")
+    from jobs.stage_job import daily_stage_job as _impl
+    _active_stage_tickers = await _impl(_db_pool)
 
 
-# ── 거래대금 워치리스트 일보 (평일 17:00 KST = 08:00 UTC) ────
 async def _build_watchlist_entries(pool) -> dict:
-    """워치리스트 데이터 조회·조합 헬퍼.
-
-    _watchlist_brief_job(스케줄러)와 /watchlist 봇 커맨드에서 공유.
-    vol_log upsert는 스케줄러만 수행 — 이 함수에서는 하지 않음.
-
-    반환 dict:
-      entries:             확신도순 정렬된 entry list (send_watchlist_brief 입력)
-      vol_log_rows:        오늘 vol_ratio upsert 대기 행
-      vol_log_map:         {ticker: [최신, ...]} lookback=3
-      s1_date_map:         {ticker: date}
-      yesterday_stage_map: {ticker: stage}
-    """
-    import yfinance as _yf
-    from datetime import date as _date, timedelta as _td
-    from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _as_completed
-
-    today = _date.today()
-
-    # Step 1: Stage 1 워치리스트 조회 (최근 14 캘린더일)
-    watchlist = await get_stage1_watchlist(pool, days=14)
-    if not watchlist:
-        return {
-            "entries": [], "vol_log_rows": [], "vol_log_map": {},
-            "s1_date_map": {}, "yesterday_stage_map": {},
-        }
-
-    tickers      = [r["ticker"]   for r in watchlist]
-    s1_txamt_map = {r["ticker"]: r.get("s1_txamt") or (
-        # 구버전 DB 행 fallback: s1_volume × s1_high 추정값 사용
-        int(r["s1_volume"] * r["s1_high"])
-        if r.get("s1_volume") and r.get("s1_high") else None
-    ) for r in watchlist}
-    s1_date_map  = {r["ticker"]: r["s1_date"]   for r in watchlist}
-
-    # Step 2: 5개 벌크 쿼리
-    flow_map: dict[str, dict]           = {}
-    ichimoku_set: set[str]              = set()
-    stage_map: dict[str, int]           = {}
-    yesterday_stage_map: dict[str, int] = {}
-    latest_week: Optional[str]          = None
-
-    try:
-        yesterday = today - _td(days=1)
-        async with pool.acquire() as conn:
-            latest_week = await conn.fetchval(
-                "SELECT week_of FROM chart_signals ORDER BY screened_at DESC LIMIT 1"
-            )
-            flow_rows = await conn.fetch(
-                """
-                SELECT DISTINCT ON (ticker) ticker, foreign_streak, inst_streak
-                FROM   daily_flow
-                WHERE  ticker = ANY($1) AND trade_date <= $2
-                ORDER  BY ticker, trade_date DESC
-                """,
-                tickers, today,
-            )
-            for r in flow_rows:
-                flow_map[r["ticker"]] = {"f_streak": r["foreign_streak"], "i_streak": r["inst_streak"]}
-
-            if latest_week:
-                ichi_rows = await conn.fetch(
-                    "SELECT ticker FROM chart_signals WHERE ticker = ANY($1) AND week_of = $2",
-                    tickers, latest_week,
-                )
-                ichimoku_set = {r["ticker"] for r in ichi_rows}
-
-            stage_rows = await conn.fetch(
-                """
-                SELECT DISTINCT ON (ticker) ticker, stage
-                FROM   stage_classifications
-                WHERE  ticker = ANY($1)
-                ORDER  BY ticker, classified_date DESC
-                """,
-                tickers,
-            )
-            for r in stage_rows:
-                stage_map[r["ticker"]] = r["stage"]
-
-            prev_stage_rows = await conn.fetch(
-                """
-                SELECT DISTINCT ON (ticker) ticker, stage
-                FROM   stage_classifications
-                WHERE  ticker = ANY($1) AND classified_date <= $2
-                ORDER  BY ticker, classified_date DESC
-                """,
-                tickers, yesterday,
-            )
-            for r in prev_stage_rows:
-                yesterday_stage_map[r["ticker"]] = r["stage"]
-    except Exception as e:
-        logger.warning("[워치리스트] 벌크 DB 조회 실패: %s", e)
-
-    # Step 3: vol_ratio 이력 (lookback=3, 최신순). index 0 = 어제 (upsert 전이므로 오늘 없음)
-    vol_log_map: dict[str, list[float]] = await get_watchlist_vol_log(pool, tickers, lookback=3)
-
-    # Step 4: yfinance 병렬 거래대금 fetch (Volume × Close)
-    def _fetch_txamt(t: str) -> tuple[str, Optional[float]]:
-        try:
-            df = _yf.Ticker(t).history(period="2d", interval="1d", auto_adjust=True)
-            if df.empty:
-                return t, None
-            last = df.iloc[-1]
-            vol   = float(last["Volume"])
-            close = float(last["Close"])
-            txamt = vol * close
-            return t, txamt if txamt > 0 else None
-        except Exception:
-            return t, None
-
-    txamt_today: dict[str, Optional[float]] = {}
-    with _TPE(max_workers=4) as pool_ex:
-        futures = {pool_ex.submit(_fetch_txamt, t): t for t in tickers if s1_txamt_map.get(t)}
-        for fut in _as_completed(futures):
-            t, v = fut.result()
-            txamt_today[t] = v
-
-    # Step 5: 결과 조합 (vol_ratio_delta, retiring 포함)
-    entries: list[dict] = []
-    vol_log_rows: list[dict] = []
-
-    for ticker in tickers:
-        s1_txamt   = s1_txamt_map.get(ticker)
-        s1_date    = s1_date_map[ticker]
-        days_since = (today - s1_date).days
-        today_txamt = txamt_today.get(ticker)
-        vol_ratio  = (today_txamt / s1_txamt) if (s1_txamt and s1_txamt > 0 and today_txamt is not None) else None
-
-        # 전일 대비 vol_ratio 변화 (vol_log_map index 0 = 어제)
-        hist            = vol_log_map.get(ticker) or []
-        yesterday_ratio = hist[0] if hist else None
-        vol_ratio_delta = (
-            (vol_ratio - yesterday_ratio)
-            if (vol_ratio is not None and yesterday_ratio is not None)
-            else None
-        )
-
-        flow          = flow_map.get(ticker, {})
-        ichimoku_ok   = (ticker in ichimoku_set) if latest_week else None
-        current_stage = stage_map.get(ticker)
-        retiring      = days_since >= 10  # D+10부터 마지막 추적일 표시
-
-        logger.debug(
-            "[워치리스트] %s vol_ratio=%.2f delta=%s stage=%s streak=(%s,%s)",
-            ticker, vol_ratio or 0,
-            f"{vol_ratio_delta:+.2f}" if vol_ratio_delta is not None else "N/A",
-            current_stage, flow.get("f_streak"), flow.get("i_streak"),
-        )
-
-        entries.append({
-            "ticker":          ticker,
-            "days_since":      days_since,
-            "vol_ratio":       vol_ratio,
-            "vol_ratio_delta": vol_ratio_delta,
-            "retiring":        retiring,
-            "f_streak":        flow.get("f_streak"),
-            "i_streak":        flow.get("i_streak"),
-            "ichimoku_ok":     ichimoku_ok,
-            "current_stage":   current_stage,
-        })
-
-        if vol_ratio is not None:
-            vol_log_rows.append({
-                "ticker":     ticker,
-                "trade_date": today,
-                "vol_ratio":  vol_ratio,
-                "s1_txamt":   s1_txamt,
-                "s1_vol":     None,   # 구버전 호환용 컬럼, txamt 기준 전환 후 미사용
-            })
-
-    # Step 7: 확신도 순 정렬
-    def _conviction(e: dict) -> float:
-        vr  = e.get("vol_ratio") or 0.0
-        fs  = e.get("f_streak") or 0
-        is_ = e.get("i_streak") or 0
-        return vr + ((1 if fs > 0 else 0) + (1 if is_ > 0 else 0)) * 0.1
-
-    entries.sort(key=_conviction, reverse=True)
-
-    return {
-        "entries":             entries,
-        "vol_log_rows":        vol_log_rows,
-        "vol_log_map":         vol_log_map,
-        "s1_date_map":         s1_date_map,
-        "yesterday_stage_map": yesterday_stage_map,
-    }
+    """워치리스트 데이터 조회·조합 — jobs/watchlist_job.py 위임."""
+    from jobs.watchlist_job import build_watchlist_entries
+    return await build_watchlist_entries(pool)
 
 
 async def _watchlist_brief_job() -> None:
-    """Stage 1 진입 후 추적 중인 종목의 거래대금 건강도·수급 스트릭·Ichimoku를 요약해 전송.
+    """거래대금 워치리스트 일보 — jobs/watchlist_job.py 위임."""
+    from jobs.watchlist_job import watchlist_brief_job
+    await watchlist_brief_job(_db_pool)
 
-    확장 기능:
-    - Stage 1→2 전환 감지 시 별도 알림 전송
-    - vol_ratio < 0.6 3거래일 연속 시 랠리 소멸 경고 전송
-    """
+
+# ── 인프라 잡 ────────────────────────────────────────────────
+
+async def _daily_krx_refresh_job():
     if not _db_pool:
-        logger.warning("[워치리스트] DB 풀 없음 — 스킵")
         return
+    from jobs.infra_jobs import daily_krx_refresh_job
+    await daily_krx_refresh_job(_db_pool)
 
-    from datetime import date as _date
-    logger.info("[워치리스트] 거래대금 워치리스트 일보 시작")
 
-    data                = await _build_watchlist_entries(_db_pool)
-    entries             = data["entries"]
-    vol_log_rows        = data["vol_log_rows"]
-    vol_log_map         = data["vol_log_map"]
-    s1_date_map         = data["s1_date_map"]
-    yesterday_stage_map = data["yesterday_stage_map"]
-
-    if not entries:
-        logger.info("[워치리스트] 워치리스트 없음")
-        async with httpx.AsyncClient() as http:
-            await tg_send_watchlist_brief([], http=http)
+async def _weekly_screener_job():
+    global _screener_tickers
+    if not _db_pool:
+        logger.warning("[차트스크리너] DB 풀 없음 — 스크리닝 건너뜀")
         return
+    from jobs.screener_job import weekly_screener_job
+    _screener_tickers = await weekly_screener_job(_db_pool)
 
-    logger.info("[워치리스트] %d종목 추적", len(entries))
 
-    # Step 6: vol_ratio 로그 upsert
-    await upsert_watchlist_vol_log(_db_pool, vol_log_rows)
+async def _daily_flow_sync_job():
+    from jobs.infra_jobs import daily_flow_sync_job
+    await daily_flow_sync_job()
 
-    today = _date.today()
 
-    # Step 8: 단독 알림 — Stage 2 전환 감지
-    stage2_alerts: list[str] = []
-    for e in entries:
-        ticker = e["ticker"]
-        if e.get("current_stage") == 2 and yesterday_stage_map.get(ticker) == 1:
-            stage2_alerts.append(ticker)
+# ── 모의투자 잡 래퍼 ─────────────────────────────────────────
 
-    if stage2_alerts:
-        try:
-            today_str = today.strftime("%Y-%m-%d")
-            from core.ticker_cache import ticker_cache as _tc
-            alert_lines = [f"🟢 Stage 2 전환 확인 ({today_str})", ""]
-            for t in stage2_alerts:
-                code  = t.split(".")[0]
-                ko    = _tc.get_name(t)
-                label = f"{ko}({code})" if ko != code else code
-                days_d = (today - s1_date_map[t]).days
-                alert_lines.append(f"  {label} — D+{days_d} → Stage 2 진입")
-            alert_msg = "\n".join(alert_lines)
-            async with httpx.AsyncClient() as http:
-                from telegram.telegram_notify import _get_token, _get_chat_id, _post_message
-                await _post_message(http, _get_token(), _get_chat_id(), alert_msg, label="Stage2알림", parse_mode=None)
-            logger.info("[워치리스트] Stage 2 전환 알림 — %d종목", len(stage2_alerts))
-        except Exception as e:
-            logger.warning("[워치리스트] Stage 2 알림 전송 실패: %s", e)
+async def _paper_exit_checker_job() -> None:
+    if not _db_pool or not _paper_trader:
+        return
+    from jobs.paper_jobs import paper_exit_checker_job
+    await paper_exit_checker_job(_db_pool, _paper_trader)
 
-    # Step 9: 단독 알림 — 랠리 소멸 감지 (최근 3거래일 연속 vol_ratio < 0.6)
-    rally_death_alerts: list[str] = []
-    for e in entries:
-        ticker    = e["ticker"]
-        vol_ratio = e.get("vol_ratio")
-        history   = vol_log_map.get(ticker, [])
-        all_three = ([vol_ratio] + history)[:3]
-        if len(all_three) == 3 and all(r is not None and r < 0.6 for r in all_three):
-            rally_death_alerts.append(ticker)
 
-    if rally_death_alerts:
-        try:
-            today_str = today.strftime("%Y-%m-%d")
-            from core.ticker_cache import ticker_cache as _tc
-            death_lines = [f"❌ 랠리 소멸 경고 ({today_str})", "3거래일 연속 진입비 -40% 이상", ""]
-            for t in rally_death_alerts:
-                code  = t.split(".")[0]
-                ko    = _tc.get_name(t)
-                label = f"{ko}({code})" if ko != code else code
-                ratio = next((e["vol_ratio"] for e in entries if e["ticker"] == t), None)
-                pct   = f"{(ratio - 1) * 100:.0f}%" if ratio is not None else "N/A"
-                death_lines.append(f"  {label} 오늘 비율 {pct}")
-            death_msg = "\n".join(death_lines)
-            async with httpx.AsyncClient() as http:
-                from telegram.telegram_notify import _get_token, _get_chat_id, _post_message
-                await _post_message(http, _get_token(), _get_chat_id(), death_msg, label="랠리소멸알림", parse_mode=None)
-            logger.info("[워치리스트] 랠리 소멸 경고 — %d종목", len(rally_death_alerts))
-        except Exception as e:
-            logger.warning("[워치리스트] 랠리 소멸 알림 전송 실패: %s", e)
+async def _paper_eod_sampler_job() -> None:
+    if not _db_pool or not _paper_trader:
+        logger.debug("[paper-sampler] 미초기화 — 스킵")
+        return
+    from jobs.paper_jobs import paper_eod_sampler_job
+    await paper_eod_sampler_job(_db_pool, _paper_trader)
 
-    # Step 10: 일보 전송
+
+async def _paper_open_entry_job() -> None:
+    if not _db_pool or not _paper_trader:
+        return
+    from jobs.paper_jobs import paper_open_entry_job
+    await paper_open_entry_job(_db_pool, _paper_trader)
+
+
+# ── 대시보드 → 스케줄러 트리거 폴러 ─────────────────────────
+# dashboard POST /api/scheduler/trigger → scheduler_triggers INSERT
+# 이 잡이 30초마다 pending 행을 1개씩 꺼내 실행하고 status='done'으로 갱신.
+# FOR UPDATE SKIP LOCKED: 동시 실행 방지 (max_instances=1로도 충분하나 DB 레벨 보장)
+async def _trigger_watcher_job():
+    if not _db_pool:
+        return
     try:
-        async with httpx.AsyncClient() as http:
-            await tg_send_watchlist_brief(entries, http=http)
-        logger.info("[워치리스트] 일보 전송 완료 — %d종목", len(entries))
+        async with _db_pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    "SELECT id, job_name FROM scheduler_triggers"
+                    " WHERE status = 'pending'"
+                    " ORDER BY requested_at ASC LIMIT 1"
+                    " FOR UPDATE SKIP LOCKED"
+                )
+                if not row:
+                    return
+                trig_id = row["id"]
+                job_name = row["job_name"]
+                await conn.execute(
+                    "UPDATE scheduler_triggers"
+                    " SET status='running', executed_at=NOW()"
+                    " WHERE id=$1", trig_id
+                )
+        logger.info("[trigger] 대시보드 요청 잡 실행: %s", job_name)
+        try:
+            if job_name == "stage":
+                await _daily_stage_job()
+            elif job_name == "screener":
+                await _weekly_screener_job()
+            elif job_name == "paper_sample":
+                await _paper_eod_sampler_job()
+            else:
+                logger.warning("[trigger] 알 수 없는 잡: %s", job_name)
+        finally:
+            async with _db_pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE scheduler_triggers SET status='done' WHERE id=$1",
+                    trig_id
+                )
     except Exception as e:
-        logger.warning("[워치리스트] 전송 실패: %s", e)
+        logger.warning("[trigger] 폴링 실패: %s", e)
 
 
 # ── 스케줄러 진입점 ───────────────────────────────────────────
 async def main(interval: int, enable_summary: bool) -> None:
-    global _summary_queue, _db_pool, _screener_tickers, _active_stage_tickers
+    global _summary_queue, _db_pool, _paper_trader, _screener_tickers, _active_stage_tickers
 
     logger.info("뉴스 크롤러 시작 — 수집 %d분 간격", interval)
     logger.info("구조: [수집 잡] → Queue → [요약 워커] (완전 분리)")
@@ -1043,7 +670,6 @@ async def main(interval: int, enable_summary: bool) -> None:
     logger.info("Telegram 봇 시작 — /status /signals /today /help")
 
     # ── 키움 모의투자 클라이언트 초기화 (선택적) ─────────────────
-    global _paper_trader
     if _db_pool and os.environ.get("KIWOOM_MOCK_APPKEY"):
         try:
             from data.kiwoom_paper_trader import KiwoomPaperTrader, init_paper_positions
@@ -1056,13 +682,13 @@ async def main(interval: int, enable_summary: bool) -> None:
     else:
         logger.info("[paper] KIWOOM_MOCK_APPKEY 미설정 — 모의투자 비활성")
 
-    # 요약 워커 초기화
+    # ── 요약 워커 초기화 ──────────────────────────────────────
     worker_task = None
     if enable_summary:
         _summary_queue = asyncio.Queue()
         worker_task = asyncio.create_task(summary_worker())
 
-    # 수집 스케줄러 등록
+    # ── APScheduler 잡스토어 설정 ─────────────────────────────
     # Build jobstores — fall back to MemoryJobStore if Postgres is unreachable
     # at startup (e.g. container cold-start race) so the scheduler doesn't crash.
     try:
@@ -1077,6 +703,8 @@ async def main(interval: int, enable_summary: bool) -> None:
         jobstores = {"default": MemoryJobStore()}
         logger.warning("[스케줄러] APScheduler jobstore: MemoryJobStore (Postgres 연결 실패: %s)", _jse)
     scheduler = AsyncIOScheduler(timezone="UTC", jobstores=jobstores)
+
+    # ── 잡 등록 ──────────────────────────────────────────────
     scheduler.add_job(
         collect_job,
         trigger="interval",
@@ -1087,24 +715,6 @@ async def main(interval: int, enable_summary: bool) -> None:
         coalesce=True,                              # 밀린 잡 합치기
         replace_existing=True,
     )
-
-    # ── KRX 종목 리스트 일일 갱신 (매일 20:00 KST — 장 마감 후) ──
-    async def _daily_krx_refresh_job():
-        if not _db_pool:
-            return
-        from data.krx_sync import sync_krx_listings
-        from core.ticker_cache import ticker_cache as _ticker_cache
-        try:
-            n = await sync_krx_listings(_db_pool)
-            logger.info("[krx_sync] 일일 갱신 완료: %d행", n)
-        except Exception as e:
-            logger.error("[krx_sync] 일일 갱신 실패: %s — 기존 DB 데이터로 캐시 재로드", e)
-        finally:
-            try:
-                await _ticker_cache.load(_db_pool)
-            except Exception as _cache_e:
-                logger.warning("[ticker_cache] 캐시 재로드 실패: %s", _cache_e)
-
     scheduler.add_job(
         _daily_krx_refresh_job,
         CronTrigger(hour=20, minute=0, timezone="Asia/Seoul"),
@@ -1113,43 +723,6 @@ async def main(interval: int, enable_summary: bool) -> None:
         misfire_grace_time=3600,
         replace_existing=True,
     )
-
-    # ── 차트 스크리닝: 주봉 스크리닝 (일요일 20:30 KST) ──────────
-    async def _weekly_screener_job():
-        global _screener_tickers
-        loop = asyncio.get_running_loop()
-        if not _db_pool:
-            logger.warning("[차트스크리너] DB 풀 없음 — 스크리닝 건너뜀")
-            return
-        try:
-            from analysis.chart_screener import run_weekly_screen
-            results = await loop.run_in_executor(None, run_weekly_screen)
-            saved = await save_chart_signals(_db_pool, results)
-            logger.info("[차트스크리너] 완료 — 통과:%d 저장:%d", len(results), saved)
-            # 뉴스 게이팅 캐시 갱신
-            _screener_tickers = {r.ticker for r in results}
-            logger.info("[게이팅] 스크리너 캐시 갱신 — %d종목", len(_screener_tickers))
-            async with httpx.AsyncClient() as http:
-                await tg_send_weekly_screener(results, http=http)
-        except Exception as e:
-            logger.warning("[차트스크리너] 실행 실패: %s", e)
-            return
-
-        try:
-            from reports.generate_html_report import generate_html
-            from pathlib import Path as _Path
-            html_str = generate_html(results)
-            _html_dir = _Path("reports/screener")
-            _html_dir.mkdir(parents=True, exist_ok=True)
-            from datetime import datetime as _dt
-            from zoneinfo import ZoneInfo as _ZI
-            _html_path = _html_dir / f"screener_{_dt.now(_ZI('Asia/Seoul')).strftime('%Y%m%d_%H%M')}.html"
-            _html_path.write_text(html_str, encoding="utf-8")
-            logger.info("[차트스크리너] HTML 리포트: %s", _html_path)
-        except Exception as _html_e:
-            logger.warning("[차트스크리너] HTML 생성 실패 (비중요): %s", _html_e)
-
-
     scheduler.add_job(
         _weekly_screener_job,
         CronTrigger(day_of_week="sun", hour=20, minute=30, timezone="Asia/Seoul"),
@@ -1158,8 +731,6 @@ async def main(interval: int, enable_summary: bool) -> None:
         misfire_grace_time=3600,
         replace_existing=True,
     )
-
-    # ── 3단계 분류기: 일별 16:30 KST (UTC 07:30) ─────────────────
     scheduler.add_job(
         _daily_stage_job,
         CronTrigger(day_of_week="mon-fri", hour=7, minute=30, timezone="UTC"),  # = 16:30 KST
@@ -1168,8 +739,6 @@ async def main(interval: int, enable_summary: bool) -> None:
         misfire_grace_time=3600,
         replace_existing=True,
     )
-
-    # ── 거래대금 워치리스트 일보 (평일 17:00 KST = 08:00 UTC) ──
     scheduler.add_job(
         _watchlist_brief_job,
         CronTrigger(day_of_week="mon-fri", hour=8, minute=0, timezone="UTC"),
@@ -1178,32 +747,10 @@ async def main(interval: int, enable_summary: bool) -> None:
         misfire_grace_time=3600,
         replace_existing=True,
     )
-
     # ── 수급 증분 sync: 평일 18:00 KST (09:00 UTC) ───────────────
     # krx_flow_sync.py --incremental (전일 전 종목 수급 → daily_flow)
     # 장 마감(15:30) + KRX 데이터 게시 여유(~2h) 확보.
     # stage_classifier(16:30 KST)는 DB에 이미 적재된 전일 데이터를 읽으므로 순서 무관.
-    async def _daily_flow_sync_job():
-        import sys as _sys
-        logger.info("[flow-sync] krx_flow_sync --incremental 시작")
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                _sys.executable, "krx_flow_sync.py", "--incremental",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-            out, _ = await proc.communicate()
-            if proc.returncode == 0:
-                logger.info("[flow-sync] 완료 (exit=0)")
-            else:
-                logger.warning("[flow-sync] 비정상 종료 (exit=%d)", proc.returncode)
-            if out:
-                for line in out.decode("utf-8", errors="replace").splitlines():
-                    if line.strip():
-                        logger.debug("[flow-sync] %s", line)
-        except Exception as e:
-            logger.warning("[flow-sync] 실행 실패: %s", e)
-
     scheduler.add_job(
         _daily_flow_sync_job,
         CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone="UTC"),  # = 18:00 KST
@@ -1212,143 +759,6 @@ async def main(interval: int, enable_summary: bool) -> None:
         misfire_grace_time=3600,
         replace_existing=True,
     )
-
-    # ── 모의투자 Exit Checker: 평일 16:10 KST (07:10 UTC) ───────────
-    # 장 마감 직후 — 오픈 포지션 전체에 대해 exit 조건 판정 → 매도주문
-    async def _paper_exit_checker_job() -> None:
-        if not _db_pool or not _paper_trader:
-            return
-
-        from datetime import date as _date, timedelta as _td
-        from data.kiwoom_paper_trader import get_open_positions, update_to_closed
-
-        today = _date.today()
-        _loop = asyncio.get_running_loop()
-
-        _open_positions = await get_open_positions(_db_pool)
-        if not _open_positions:
-            logger.info("[paper-exit] 오픈 포지션 없음")
-            return
-
-        logger.info("[paper-exit] 오픈 포지션 %d건 exit 체크 시작", len(_open_positions))
-
-        _closed, _tp1_fired, _watermark_updated = 0, 0, 0
-
-        for _pos in _open_positions:
-            _pos_id       = _pos["id"]
-            _ticker       = _pos["ticker"]
-            _entry        = _pos["entry_actual"] or _pos["entry_theory"]
-            _hard_stop    = _pos["hard_stop_pct"]
-            _tp1_pct      = _pos["tp1_pct"]
-            _tp1_ratio    = _pos["tp1_ratio"]
-            _trail_pct    = _pos["trail_pct"]
-            _tp1_done     = _pos["tp1_date"] is not None
-            _watermark    = _pos["watermark"] or _entry
-            _signal_date  = _pos["signal_date"]
-            _qty          = _pos["qty"] or 0
-
-            if not _entry or _entry <= 0:
-                continue
-
-            # 현재가 조회 (EOD ≈ 종가)
-            _close = await _loop.run_in_executor(None, _paper_trader.get_current_price, _ticker)
-            if not _close or _close <= 0:
-                logger.warning("[paper-exit] %s 현재가 조회 실패 — 스킵", _ticker)
-                continue
-
-            _ret = (_close - _entry) / _entry  # 수익률 (미실현)
-
-            # 워터마크 갱신 (고점 추적)
-            if _close > _watermark:
-                _watermark = float(_close)
-                _watermark_updated += 1
-                try:
-                    async with _db_pool.acquire() as _conn:
-                        await _conn.execute(
-                            "UPDATE paper_positions SET watermark=$1 WHERE id=$2",
-                            _watermark, _pos_id,
-                        )
-                except Exception as _e:
-                    logger.warning("[paper-exit] %s 워터마크 업데이트 실패: %s", _ticker, _e)
-
-            # ── exit 조건 판정 ────────────────────────────────────
-            _exit_type = None
-            _blended   = None
-
-            # 1. 최대 보유일 (91일)
-            if (today - _signal_date).days >= 91:
-                _exit_type = "period_end"
-
-            # 2. 하드 스탑
-            elif _close <= _entry * (1 - _hard_stop):
-                _exit_type = "hard_stop"
-
-            # 3. 1차 익절 (TP1 미발동 시)
-            elif not _tp1_done and _close >= _entry * (1 + _tp1_pct):
-                # TP1 발동: 절반 청산 기록만 (잔여분은 계속 보유)
-                _exit_type = None   # 전량 청산 아님
-                _tp1_fired += 1
-                try:
-                    async with _db_pool.acquire() as _conn:
-                        await _conn.execute(
-                            "UPDATE paper_positions SET tp1_date=$1, tp1_price=$2 WHERE id=$3",
-                            today, float(_close), _pos_id,
-                        )
-                    logger.info("[paper-exit] %s TP1 발동 +%.1f%% (잔여분 트레일링 계속)",
-                                _ticker, _ret * 100)
-                except Exception as _e:
-                    logger.warning("[paper-exit] %s TP1 기록 실패: %s", _ticker, _e)
-
-            # 4. 트레일링 스탑 (TP1 발동 후)
-            elif _tp1_done and _close <= _watermark * (1 - _trail_pct):
-                _exit_type = "trail"
-
-            if _exit_type is None:
-                continue
-
-            # ── 매도주문 제출 ─────────────────────────────────────
-            _sell_ord = ""
-            if _qty > 0:
-                try:
-                    _sell_ord = await _loop.run_in_executor(
-                        None, _paper_trader.place_sell, _ticker, _qty
-                    )
-                except Exception as _e:
-                    logger.warning("[paper-exit] %s 매도주문 실패: %s", _ticker, _e)
-                    _sell_ord = f"FAILED:{_e}"
-
-            # blended_return 계산 (TP1 발동 시 가중평균)
-            if _tp1_done:
-                _tp1_ret = (_pos["tp1_price"] - _entry) / _entry if _pos.get("tp1_price") else 0
-                _final   = _ret
-                _blended = _tp1_ratio * _tp1_ret + (1 - _tp1_ratio) * _final
-            else:
-                _blended = _ret
-
-            try:
-                await update_to_closed(_db_pool, _pos_id, float(_close), _exit_type, _sell_ord, _blended)
-                _closed += 1
-                logger.info("[paper-exit] %s 청산 [%s] 수익=%.2f%% 주문번호=%s",
-                            _ticker, _exit_type, _blended * 100, _sell_ord)
-            except Exception as _e:
-                logger.warning("[paper-exit] %s DB 청산 업데이트 실패: %s", _ticker, _e)
-
-        logger.info("[paper-exit] 완료 — 청산=%d TP1발동=%d 워터마크갱신=%d",
-                    _closed, _tp1_fired, _watermark_updated)
-
-        if _closed > 0:
-            try:
-                from telegram.telegram_notify import _get_token, _get_chat_id, _post_message
-                import httpx as _hx
-                _msg = (
-                    f"📤 모의투자 청산 완료 ({today})\n"
-                    f"청산: {_closed}건 | TP1발동: {_tp1_fired}건"
-                )
-                async with _hx.AsyncClient() as _http:
-                    await _post_message(_http, _get_token(), _get_chat_id(),
-                                        _msg, label="paper-exit", parse_mode=None)
-            except Exception as _e:
-                logger.warning("[paper-exit] 텔레그램 알림 실패: %s", _e)
 
     if _paper_trader:
         scheduler.add_job(
@@ -1360,122 +770,6 @@ async def main(interval: int, enable_summary: bool) -> None:
             replace_existing=True,
         )
         logger.info("[paper] Exit Checker 등록 완료 (16:10 KST)")
-
-    # ── 모의투자 EOD 샘플러: 평일 16:40 KST (07:40 UTC) ─────────────
-    # stage_classifier(16:30) 완료 후 10분 대기, 오늘 신호를 sampling → pending 삽입
-    async def _paper_eod_sampler_job() -> None:
-        if not _db_pool or not _paper_trader:
-            logger.debug("[paper-sampler] 미초기화 — 스킵")
-            return
-
-        import random as _random
-        from datetime import date as _date
-        from data.kiwoom_paper_trader import (
-            MODEL_CONFIG, insert_pending, get_open_slot_count,
-        )
-        from analysis.backtest_engine import (
-            OPTIMAL_EXIT_PARAMS           as _KOSPI_P,
-            OPTIMAL_EXIT_PARAMS_KOSDAQ    as _KOSDAQ_P,
-            OPTIMAL_EXIT_PARAMS_CROSS     as _CROSS_P,
-            OPTIMAL_EXIT_PARAMS_ICHIMOKU  as _ICHI_P,
-        )
-
-        today = _date.today()
-        logger.info("[paper-sampler] EOD 샘플링 시작 (%s)", today)
-
-        # 오늘 Stage 1 진입 종목
-        try:
-            async with _db_pool.acquire() as _conn:
-                _stage1_rows = await _conn.fetch(
-                    "SELECT ticker, s1_high FROM stage_classifications "
-                    "WHERE classified_date=$1 AND stage=1",
-                    today,
-                )
-        except Exception as _e:
-            logger.warning("[paper-sampler] stage_classifications 조회 실패: %s", _e)
-            return
-
-        stage1_all = [{"ticker": r["ticker"], "price": float(r["s1_high"] or 0)}
-                      for r in _stage1_rows]
-        logger.info("[paper-sampler] Stage1 %d종목", len(stage1_all))
-
-        # 최신 Ichimoku 통과 종목
-        try:
-            _week, _ichi_rows = await load_chart_signals_latest(_db_pool)
-            _ichi_tickers = {r["ticker"] for r in _ichi_rows}
-            _ichi_price   = {r["ticker"]: float(r.get("close") or 0) for r in _ichi_rows}
-        except Exception as _e:
-            logger.warning("[paper-sampler] Ichimoku 조회 실패: %s", _e)
-            _ichi_tickers, _ichi_price = set(), {}
-
-        # Cross = Stage1 ∩ Ichimoku
-        cross_signals  = [s for s in stage1_all if s["ticker"] in _ichi_tickers]
-        stage_kospi    = [s for s in stage1_all if s["ticker"].endswith(".KS")]
-        stage_kosdaq   = [s for s in stage1_all if s["ticker"].endswith(".KQ")]
-        ichi_signals   = [{"ticker": t, "price": _ichi_price.get(t, 0)}
-                          for t in _ichi_tickers]
-
-        model_queue = [
-            ("stage",    stage_kospi,   _KOSPI_P),
-            ("kosdaq",   stage_kosdaq,  _KOSDAQ_P),
-            ("cross",    cross_signals, _CROSS_P),
-            ("ichimoku", ichi_signals,  _ICHI_P),
-        ]
-
-        total_inserted = 0
-        seed_base = int(today.strftime("%Y%m%d"))
-
-        for _model, _signals, _params in model_queue:
-            if not _signals:
-                continue
-            _cfg       = MODEL_CONFIG.get(_model, {"max_slots": 10, "position_krw": 10_000_000})
-            _open_cnt  = await get_open_slot_count(_db_pool, _model)
-            _available = _cfg["max_slots"] - _open_cnt
-            if _available <= 0:
-                logger.info("[paper-sampler] [%s] 슬롯 없음 (%d/%d)", _model, _open_cnt, _cfg["max_slots"])
-                continue
-
-            _random.seed(seed_base ^ (hash(_model) & 0xFFFFFFFF))
-            _selected = _random.sample(_signals, min(_available, len(_signals)))
-
-            for _sig in _selected:
-                try:
-                    _pid = await insert_pending(
-                        _db_pool,
-                        model=_model,
-                        ticker=_sig["ticker"],
-                        signal_date=today,
-                        entry_theory=_sig["price"],
-                        tp1_pct=_params.get("tp1_pct", 0.15),
-                        tp1_ratio=_params.get("tp1_ratio", 0.50),
-                        trail_pct=_params.get("trail_pct", 0.10),
-                        hard_stop_pct=_params.get("hard_stop_pct", 0.10),
-                    )
-                    total_inserted += 1
-                    logger.info("[paper-sampler] [%s] %s pending (id=%d, theory=%.0f)",
-                                _model, _sig["ticker"], _pid, _sig["price"])
-                except Exception as _e:
-                    logger.warning("[paper-sampler] [%s] %s 삽입 실패: %s", _model, _sig["ticker"], _e)
-
-        logger.info("[paper-sampler] 완료 — %d건 pending 삽입", total_inserted)
-
-        if total_inserted > 0:
-            try:
-                from telegram.telegram_notify import _get_token, _get_chat_id, _post_message
-                import httpx as _hx
-                _msg = (
-                    f"📋 모의투자 EOD 샘플링 ({today})\n"
-                    f"Stage KOSPI {len(stage_kospi)}건 / KOSDAQ {len(stage_kosdaq)}건 / "
-                    f"Cross {len(cross_signals)}건 / Ichimoku {len(ichi_signals)}건\n"
-                    f"→ pending 삽입: {total_inserted}건"
-                )
-                async with _hx.AsyncClient() as _http:
-                    await _post_message(_http, _get_token(), _get_chat_id(),
-                                        _msg, label="paper-sampler", parse_mode=None)
-            except Exception as _e:
-                logger.warning("[paper-sampler] 텔레그램 알림 실패: %s", _e)
-
-    if _paper_trader:
         scheduler.add_job(
             _paper_eod_sampler_job,
             CronTrigger(day_of_week="mon-fri", hour=7, minute=40, timezone="UTC"),  # 16:40 KST
@@ -1485,73 +779,6 @@ async def main(interval: int, enable_summary: bool) -> None:
             replace_existing=True,
         )
         logger.info("[paper] EOD 샘플러 등록 완료 (16:40 KST)")
-
-    # ── 모의투자 T+1 진입 잡: 평일 09:05 KST (00:05 UTC) ────────────
-    # 장 시작(09:00) 후 시가 확정 → 매수주문 제출
-    async def _paper_open_entry_job() -> None:
-        if not _db_pool or not _paper_trader:
-            return
-
-        from datetime import date as _date, timedelta as _td
-        from data.kiwoom_paper_trader import (
-            get_pending_positions, update_to_open,
-            _qty_from_price, MODEL_CONFIG,
-        )
-
-        today = _date.today()
-        # 오늘 pending이 없으면 최근 4일 이내 미처리 pending 처리
-        # (주말 트리거로 signal_date가 토/일인 경우도 포함)
-        for _delta in range(0, 4):
-            _target = today - _td(days=_delta)
-            _pending = await get_pending_positions(_db_pool, _target)
-            if _pending:
-                break
-        else:
-            logger.info("[paper-entry] pending 없음")
-            return
-
-        logger.info("[paper-entry] %d건 pending → 매수주문 시작 (신호일=%s)", len(_pending), _target)
-        _loop = asyncio.get_running_loop()
-
-        for _pos in _pending:
-            _ticker = _pos["ticker"]
-            _model  = _pos["model"]
-            _pos_id = _pos["id"]
-
-            # 시가 조회 (ka10001 open_pric)
-            _open_px = await _loop.run_in_executor(None, _paper_trader.get_open_price, _ticker)
-            if not _open_px:
-                _open_px = await _loop.run_in_executor(None, _paper_trader.get_current_price, _ticker)
-            if not _open_px:
-                logger.warning("[paper-entry] %s 가격 조회 실패 — 스킵", _ticker)
-                continue
-
-            _cfg = MODEL_CONFIG.get(_model, {"max_slots": 10, "position_krw": 10_000_000})
-            _qty = _qty_from_price(_cfg["position_krw"], _open_px)
-            if _qty <= 0:
-                logger.warning("[paper-entry] %s qty=0 (price=%d) — 스킵", _ticker, _open_px)
-                continue
-
-            # 매수주문 제출
-            try:
-                _ord_no = await _loop.run_in_executor(
-                    None, _paper_trader.place_buy, _ticker, _qty
-                )
-            except Exception as _e:
-                logger.warning("[paper-entry] %s 매수주문 실패: %s", _ticker, _e)
-                continue
-
-            # pending → open
-            try:
-                await update_to_open(_db_pool, _pos_id, float(_open_px), _qty, _ord_no)
-                logger.info("[paper-entry] %s %d주 매수 완료 (시가=%d, 주문번호=%s)",
-                            _ticker, _qty, _open_px, _ord_no)
-            except Exception as _e:
-                logger.warning("[paper-entry] %s DB 업데이트 실패: %s", _ticker, _e)
-
-        logger.info("[paper-entry] 완료")
-
-    if _paper_trader:
         scheduler.add_job(
             _paper_open_entry_job,
             CronTrigger(day_of_week="mon-fri", hour=0, minute=5, timezone="UTC"),  # 09:05 KST
@@ -1561,50 +788,6 @@ async def main(interval: int, enable_summary: bool) -> None:
             replace_existing=True,
         )
         logger.info("[paper] T+1 진입 잡 등록 완료 (09:05 KST)")
-
-    # ── 대시보드 → 스케줄러 트리거 폴러 ─────────────────────────
-    # dashboard POST /api/scheduler/trigger → scheduler_triggers INSERT
-    # 이 잡이 30초마다 pending 행을 1개씩 꺼내 실행하고 status='done'으로 갱신.
-    # FOR UPDATE SKIP LOCKED: 동시 실행 방지 (max_instances=1로도 충분하나 DB 레벨 보장)
-    async def _trigger_watcher_job():
-        if not _db_pool:
-            return
-        try:
-            async with _db_pool.acquire() as conn:
-                async with conn.transaction():
-                    row = await conn.fetchrow(
-                        "SELECT id, job_name FROM scheduler_triggers"
-                        " WHERE status = 'pending'"
-                        " ORDER BY requested_at ASC LIMIT 1"
-                        " FOR UPDATE SKIP LOCKED"
-                    )
-                    if not row:
-                        return
-                    trig_id = row["id"]
-                    job_name = row["job_name"]
-                    await conn.execute(
-                        "UPDATE scheduler_triggers"
-                        " SET status='running', executed_at=NOW()"
-                        " WHERE id=$1", trig_id
-                    )
-            logger.info("[trigger] 대시보드 요청 잡 실행: %s", job_name)
-            try:
-                if job_name == "stage":
-                    await _daily_stage_job()
-                elif job_name == "screener":
-                    await _weekly_screener_job()
-                elif job_name == "paper_sample":
-                    await _paper_eod_sampler_job()
-                else:
-                    logger.warning("[trigger] 알 수 없는 잡: %s", job_name)
-            finally:
-                async with _db_pool.acquire() as conn:
-                    await conn.execute(
-                        "UPDATE scheduler_triggers SET status='done' WHERE id=$1",
-                        trig_id
-                    )
-        except Exception as e:
-            logger.warning("[trigger] 폴링 실패: %s", e)
 
     scheduler.add_job(
         _trigger_watcher_job,
