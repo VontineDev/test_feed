@@ -194,8 +194,9 @@ function StageReport({ data, start, end }: { data: StageData; start: string; end
 }
 
 // ── 스크리너 레포트 ──────────────────────────────────────────
-function ScreenerReport({ data }: { data: ScreenerData }) {
+function ScreenerReport({ data, start, end }: { data: ScreenerData; start: string; end: string }) {
   const [filter, setFilter] = useState<'all' | 'enhanced' | 'gapjum'>('all')
+  const [popup, setPopup] = useState<{ ticker: string; name: string } | null>(null)
   const filtered = data.items.filter(r =>
     filter === 'all' ? true : filter === 'enhanced' ? r.is_enhanced : r.has_gapjum
   )
@@ -238,7 +239,11 @@ function ScreenerReport({ data }: { data: ScreenerData }) {
           </thead>
           <tbody>
             {filtered.map(r => (
-              <tr key={r.ticker}>
+              <tr
+                key={r.ticker}
+                style={{ cursor: 'pointer' }}
+                onClick={() => setPopup({ ticker: r.ticker, name: r.name })}
+              >
                 <td style={s.td}>
                   <div style={s.tickerName}>{r.name}</div>
                   <div style={s.tickerCode}>{r.ticker}</div>
@@ -256,6 +261,16 @@ function ScreenerReport({ data }: { data: ScreenerData }) {
           </tbody>
         </table>
       </div>
+
+      {popup && (
+        <StageHistoryPopup
+          ticker={popup.ticker}
+          name={popup.name}
+          start={start}
+          end={end}
+          onClose={() => setPopup(null)}
+        />
+      )}
     </>
   )
 }
@@ -372,7 +387,7 @@ export default function Report() {
         tooltip="주봉 일목균형표 + 20주 이동평균 조건을 통과한 종목입니다. 기술적으로 강세 신호가 켜진 후보를 매주 스캔합니다."
       >
         {preset === 'today'
-          ? (screener ? <ScreenerReport data={screener} /> : <div style={s.empty}>데이터 없음</div>)
+          ? (screener ? <ScreenerReport data={screener} start={range.start} end={range.end} /> : <div style={s.empty}>데이터 없음</div>)
           : (histScreener
               ? <HistoryScreenerView items={histScreener.items} start={range.start} end={range.end} />
               : <div style={s.empty}>{loading ? '로딩…' : '데이터 없음'}</div>)
