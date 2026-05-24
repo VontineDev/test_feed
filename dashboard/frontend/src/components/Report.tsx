@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { tokens } from '../tokens'
 import DateRangeBar, { DatePreset, computeRange } from './DateRangeBar'
 import HistoryStageView from './HistoryStageView'
@@ -296,6 +296,7 @@ export default function Report() {
   // 우측 패널 선택 상태
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null)
   const [selectedName, setSelectedName] = useState<string>('')
+  const splitRightRef = useRef<HTMLDivElement>(null)
 
   const range = useMemo(() => computeRange(preset), [preset])
 
@@ -338,6 +339,13 @@ export default function Report() {
 
   // 프리셋 변경 시 패널 닫기
   useEffect(() => { setSelectedTicker(null); setSelectedName('') }, [preset])
+
+  // 패널 열릴 때 화면에 보이도록 스크롤 (모바일 세로 스택 대응)
+  useEffect(() => {
+    if (selectedTicker && splitRightRef.current) {
+      splitRightRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
+  }, [selectedTicker])
 
   const handleSelect = (ticker: string, name: string) => {
     if (selectedTicker === ticker) {
@@ -405,7 +413,7 @@ export default function Report() {
 
         {/* 오른쪽: 상세 패널 */}
         {selectedTicker && (
-          <div className="report-split-right" style={s.splitRight}>
+          <div ref={splitRightRef} className="report-split-right" style={s.splitRight}>
             <StageHistoryPopup
               ticker={selectedTicker}
               name={selectedName}

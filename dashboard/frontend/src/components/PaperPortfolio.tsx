@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { tokens, pctTextColor } from '../tokens'
 import Positions from './Positions'
 import Scheduler from './Scheduler'
@@ -25,6 +25,7 @@ export default function PaperPortfolio() {
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null)
   const [selectedName, setSelectedName] = useState<string>('')
   const [filterModel, setFilterModel] = useState<string | null>(null)
+  const splitRightRef = useRef<HTMLDivElement>(null)
   const [posOpen, setPosOpen] = useState(true)
   const [analyticsOpen, setAnalyticsOpen] = useState(true)
 
@@ -34,6 +35,13 @@ export default function PaperPortfolio() {
       .then(j => setData(j.data))
       .catch(() => {})
   }, [])
+
+  // 패널 열릴 때 화면에 보이도록 스크롤 (모바일 세로 스택 대응)
+  useEffect(() => {
+    if (selectedTicker && splitRightRef.current) {
+      splitRightRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
+  }, [selectedTicker])
 
   const handleSelect = (ticker: string, name: string) => {
     if (selectedTicker === ticker) {
@@ -126,7 +134,7 @@ export default function PaperPortfolio() {
               <Positions onSelect={handleSelect} selectedTicker={selectedTicker} filterModel={filterModel} />
             </div>
             {selectedTicker && (
-              <div className="paper-split-right" style={{ flex: '0 0 45%', minWidth: 0, overflowY: 'auto' }}>
+              <div ref={splitRightRef} className="paper-split-right" style={{ flex: '0 0 45%', minWidth: 0, overflowY: 'auto' }}>
                 <TickerHistory
                   ticker={selectedTicker}
                   name={selectedName}
