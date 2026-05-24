@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { tokens } from '../tokens'
+import { tokens, pctTextColor } from '../tokens'
 import Positions from './Positions'
 import Scheduler from './Scheduler'
 import TickerHistory from './TickerHistory'
@@ -19,10 +19,6 @@ const EXIT_LABEL: Record<string, string> = {
   hard_stop: '손절', trail: '트레일', period_end: '기간종료', manual: '수동',
 }
 
-const pctColor = (v: number | null | undefined) => {
-  if (v == null) return tokens.tx.muted
-  return v > 0 ? tokens.chart.cat.ichimoku : v < 0 ? tokens.semantic.up : tokens.tx.secondary
-}
 
 export default function PaperPortfolio() {
   const [data, setData] = useState<PaperData | null>(null)
@@ -85,7 +81,7 @@ export default function PaperPortfolio() {
                   {closed.avg_return != null && (
                     <div style={{ ...s.modelRow, marginTop: 4 }}>
                       <span style={s.lbl}>평균수익</span>
-                      <span style={{ color: pctColor(closed.avg_return), fontWeight: 700 }}>
+                      <span style={{ color: pctTextColor(closed.avg_return), fontWeight: 700 }}>
                         {closed.avg_return > 0 ? '+' : ''}{closed.avg_return.toFixed(1)}%
                       </span>
                     </div>
@@ -163,7 +159,7 @@ export default function PaperPortfolio() {
                           {r.exit_type ? (EXIT_LABEL[r.exit_type] ?? r.exit_type) : '—'}
                           {r.tp1_date && <span style={{ color: tokens.stage[2], marginLeft: 4 }}>TP1</span>}
                         </td>
-                        <td style={{ ...s.td, textAlign: 'right', color: pctColor(r.blended_return != null ? r.blended_return * 100 : null), fontWeight: 600 }}>
+                        <td style={{ ...s.td, textAlign: 'right', color: pctTextColor(r.blended_return != null ? r.blended_return * 100 : null), fontWeight: 600 }}>
                           {r.blended_return != null
                             ? `${r.blended_return > 0 ? '+' : ''}${(r.blended_return * 100).toFixed(1)}%`
                             : '—'}

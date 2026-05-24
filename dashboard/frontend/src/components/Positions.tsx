@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { tokens } from '../tokens'
+import { tokens, pctTextColor } from '../tokens'
 
 interface Position {
   id: number
@@ -16,12 +16,6 @@ interface Position {
   unrealized_pct: number | null
 }
 
-const pctColor = (v: number | null) => {
-  if (v === null) return tokens.tx.secondary
-  if (v > 0) return tokens.chart.cat.ichimoku
-  if (v < 0) return tokens.semantic.up
-  return tokens.tx.secondary
-}
 
 interface Props {
   onSelect?: (ticker: string, name: string) => void
@@ -85,7 +79,7 @@ export default function Positions({ onSelect, selectedTicker, filterModel }: Pro
                 <td style={styles.td}>{r.signal_date?.slice(0, 10)}</td>
                 <td style={{ ...styles.td, fontVariantNumeric: 'tabular-nums' }}>{r.entry_actual?.toLocaleString() ?? '—'}</td>
                 <td style={{ ...styles.td, fontVariantNumeric: 'tabular-nums' }}>{r.current_price?.toLocaleString() ?? '—'}</td>
-                <td style={{ ...styles.td, color: pctColor(r.unrealized_pct), fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+                <td style={{ ...styles.td, color: pctTextColor(r.unrealized_pct), fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
                   {r.unrealized_pct !== null ? `${r.unrealized_pct > 0 ? '+' : ''}${r.unrealized_pct.toFixed(2)}%` : '—'}
                 </td>
                 <td style={styles.td}>{r.status}</td>
