@@ -53,7 +53,7 @@ export default function Positions({ onSelect, selectedTicker, filterModel }: Pro
       <table style={styles.table}>
         <thead>
           <tr style={styles.theadRow}>
-            {['종목', '모델', '진입일', '진입가', '현재가', '수익률', '상태'].map(h => (
+            {['종목', '모델', '진입일', '진입가', '현재가', '수익률'].map(h => (
               <th key={h} style={{
                 ...styles.th,
                 textAlign: (h === '진입가' || h === '현재가' || h === '수익률') ? 'right' : 'left'
@@ -87,7 +87,6 @@ export default function Positions({ onSelect, selectedTicker, filterModel }: Pro
                 <td style={{ ...styles.td, color: pctTextColor(r.unrealized_pct), fontWeight: 600, fontVariantNumeric: 'tabular-nums', textAlign: 'right' }}>
                   {r.unrealized_pct !== null ? `${r.unrealized_pct > 0 ? '+' : ''}${r.unrealized_pct.toFixed(2)}%` : '—'}
                 </td>
-                <td style={styles.td}>{r.status}</td>
               </tr>
             )
           })}

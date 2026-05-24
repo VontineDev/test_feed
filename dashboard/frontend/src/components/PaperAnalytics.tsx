@@ -348,8 +348,8 @@ const S: Record<string, React.CSSProperties> = {
   },
   title: {
     fontWeight: 700,
-    fontSize: 11,
-    color: tokens.tx.subtle,
+    fontSize: 12,
+    color: tokens.tx.secondary,
   },
   section: {
     padding: '4px 12px 8px',
@@ -358,7 +358,7 @@ const S: Record<string, React.CSSProperties> = {
   sectionTitle: {
     fontWeight: 700,
     fontSize: 11,
-    color: tokens.tx.subtle,
+    color: tokens.tx.secondary,
     marginBottom: 4,
   },
   table: {

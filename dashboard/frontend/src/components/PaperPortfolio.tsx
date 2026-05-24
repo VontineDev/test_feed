@@ -67,21 +67,31 @@ export default function PaperPortfolio() {
                 style={{
                   background: filterModel === m ? tokens.bg.active : tokens.bg.raised,
                   borderRadius: 8,
-                  padding: '10px 12px',
+                  padding: '8px 12px',
                   cursor: 'pointer',
                   outline: filterModel === m ? `1px solid ${tokens.accent.blue}` : undefined,
                 }}
               >
-                  <div style={{ fontWeight: 700, color: tokens.accent.blueLight, marginBottom: 6 }}>{MODEL_LABEL[m] ?? m}</div>
-                  <div style={s.modelRow}><span style={s.lbl}>오픈</span><span>{open.count}</span></div>
-                  <div style={s.modelRow}><span style={s.lbl}>대기</span><span>{pending.count}</span></div>
-                  {closed.count > 0 && (
-                    <div style={s.modelRow}><span style={s.lbl}>청산</span><span>{closed.count}건</span></div>
-                  )}
+                  <div style={{ fontWeight: 700, fontSize: 12, color: tokens.accent.blueLight, marginBottom: 6 }}>{MODEL_LABEL[m] ?? m}</div>
+                  <div style={s.statRow}>
+                    <div style={s.stat}>
+                      <span style={s.statVal}>{open.count}</span>
+                      <span style={s.statLbl}>오픈</span>
+                    </div>
+                    <div style={s.stat}>
+                      <span style={s.statVal}>{pending.count}</span>
+                      <span style={s.statLbl}>대기</span>
+                    </div>
+                    {closed.count > 0 && (
+                      <div style={s.stat}>
+                        <span style={s.statVal}>{closed.count}</span>
+                        <span style={s.statLbl}>청산</span>
+                      </div>
+                    )}
+                  </div>
                   {closed.avg_return != null && (
-                    <div style={{ ...s.modelRow, marginTop: 4 }}>
-                      <span style={s.lbl}>평균수익</span>
-                      <span style={{ color: pctTextColor(closed.avg_return), fontWeight: 700 }}>
+                    <div style={{ marginTop: 5, fontSize: 11, color: tokens.tx.subtle }}>
+                      평균 <span style={{ color: pctTextColor(closed.avg_return), fontWeight: 700 }}>
                         {closed.avg_return > 0 ? '+' : ''}{closed.avg_return.toFixed(1)}%
                       </span>
                     </div>
@@ -129,13 +139,13 @@ export default function PaperPortfolio() {
           {/* 최근 청산 이력 */}
           {data && data.closed.length > 0 && (
             <div style={{ borderTop: `1px solid ${tokens.bd.default}`, flexShrink: 0, maxHeight: 220, overflowY: 'auto' }}>
-              <div style={{ padding: '7px 12px 0', fontWeight: 700, fontSize: 11, color: tokens.tx.subtle, position: 'sticky', top: 0, background: tokens.bg.row }}>
+              <div style={{ padding: '7px 12px 0', fontWeight: 700, fontSize: 12, color: tokens.tx.secondary, position: 'sticky', top: 0, background: tokens.bg.row }}>
                 최근 청산 이력
               </div>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
                 <thead>
                   <tr>
-                    {['종목', '모델', '청산일', '청산유형', 'blended수익'].map(h => (
+                    {['종목', '모델', '청산일', '청산유형', '실현수익'].map(h => (
                       <th key={h} style={s.th}>{h}</th>
                     ))}
                   </tr>
@@ -194,6 +204,10 @@ export default function PaperPortfolio() {
 const s: Record<string, React.CSSProperties> = {
   modelRow: { display: 'flex', justifyContent: 'space-between', fontSize: 11, color: tokens.tx.secondary, marginBottom: 2 },
   lbl: { color: tokens.tx.subtle },
+  statRow: { display: 'flex', gap: 10 },
+  stat: { display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 28 },
+  statVal: { fontSize: 16, fontWeight: 700, color: tokens.tx.primary, lineHeight: '1.1' },
+  statLbl: { fontSize: 9, color: tokens.tx.subtle, marginTop: 1, letterSpacing: '0.03em' },
   collapseHdr: {
     width: '100%', display: 'flex', alignItems: 'center', gap: 8,
     padding: '7px 12px', background: 'none', border: 'none',
