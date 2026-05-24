@@ -820,6 +820,7 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 | RLS `backend_all` 정책 — 14개 테이블 명시적 allow-all 정책, Security Advisor 경고 해소 | ✅ (v0.9.7.0~) |
 | asyncpg `statement_cache_size=0` — Supabase PgBouncer 호환 | ✅ (v0.9.0.0~) |
 | 모의투자는 키움 가상 계좌 전용 (실자산 영향 없음) | ✅ |
+| 대시보드 localhost 인증 우회 차단 — `client.host` 기반 면제 로직 제거 (Nginx 뒤 모든 요청이 127.0.0.1로 보여 사실상 인증 전면 무력화됐던 취약점 수정, v0.9.8.x) | ✅ |
 
 ---
 
@@ -840,7 +841,7 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 
 ---
 
-*현재 코드베이스 v0.9.7.0 (2026-05-23) 기준*
+*현재 코드베이스 v0.9.8.1 (2026-05-24) 기준*
 
 ---
 

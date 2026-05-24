@@ -64,7 +64,14 @@ RSS 피드 수집 → 기사 본문 크롤링 → LLM 한글 요약
 ## 프로젝트 구조
 
 ```
-run_scheduler.py          # 메인 실행 — RSS 루프 + 봇 병렬 실행 / --once watchlist|stage 지원
+run_scheduler.py          # 메인 실행 — RSS 루프 + 봇 병렬 실행 / --once watchlist|stage 지원 (892줄, 잡 로직은 jobs/에 위임)
+
+jobs/                     # 스케줄러 잡 패키지 (run_scheduler.py 에서 import)
+  stage_job.py            # 일봉 3단계 분류 잡 (OHLCV 수집 + stage_classifications 저장)
+  screener_job.py         # 주봉 Ichimoku 스크리너 잡 (전 종목 스캔 + HTML 리포트)
+  infra_jobs.py           # KRX 종목 갱신 + 외국인·기관 순매수 증분 sync 잡
+  watchlist_job.py        # 거래대금 워치리스트 일보 잡 + build_watchlist_entries 헬퍼
+  paper_jobs.py           # 모의투자 3종 잡 — EOD exit, 샘플링, T+1 시가 진입
 
 core/                     # 공유 유틸리티
   db.py                   # PostgreSQL 연동 (asyncpg)
@@ -192,4 +199,4 @@ pytest tests/test_watchlist_brief.py -v
 
 ## 버전
 
-현재 버전: `0.9.8.0` — [CHANGELOG](CHANGELOG.md) 참고
+현재 버전: `0.9.8.1` — [CHANGELOG](CHANGELOG.md) 참고

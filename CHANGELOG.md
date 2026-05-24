@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.8.1] - 2026-05-24
+
+### Security
+
+- **대시보드 인증 우회 취약점 수정** (`dashboard/backend/main.py`): Nginx 리버스 프록시 뒤에서 모든 요청의 `client.host`가 `127.0.0.1`로 보여 localhost 면제 로직이 인증을 사실상 전면 무력화하던 취약점 제거. `DASHBOARD_USER`/`DASHBOARD_PASSWORD` 미설정 시 인증 비활성화(기존 동작 유지), 설정 시 반드시 `Authorization` 헤더 검증.
+
+### Refactored
+
+- **스케줄러 잡 패키지 분리** (`jobs/`): `run_scheduler.py` 1,710줄 → 892줄. Stage 분류·주봉 스크리너·KRX 갱신·워치리스트·모의투자 잡 5종을 `jobs/` 패키지(6개 모듈)로 추출. `run_scheduler.py`는 얇은 래퍼로 외부 import 호환성 유지. 596개 테스트 전량 통과.
+
 ## [0.9.8.0] - 2026-05-24
 
 ### Added
