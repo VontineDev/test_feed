@@ -22,6 +22,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **종목분석 이력 필터 우측 패널 미작동** (`dashboard/frontend/src/components/HistoryStageView.tsx`, `HistoryScreenerView.tsx`): `-3일/-1주/-2주/-1달` 필터에서 종목 클릭 시 우측 패널이 열리지 않던 버그. 두 컴포넌트가 내부 `popup` state로 구식 모달 방식으로 동작하고 있었음. `selectedTicker`/`onSelect` prop으로 부모(`Report`) 패널 상태와 통합하여 모든 날짜 필터에서 동작 통일.
 - **`time` 모듈 이름 충돌** (`dashboard/backend/main.py`): `from datetime import time`이 `import time` 모듈을 shadow하여 캐시 TTL 계산(`time.time()`)이 `TypeError`로 실패하던 버그. `import time as _time_module`로 해결.
 - **TOP/Macro/Heatmap `time.strftime` 오류** (`dashboard/backend/main.py`): `_fetch_top_kiwoom`(L800)·`_run_macro_analysis`(L1393)에서 `time.strftime()`이 `datetime.time` 클래스의 언바운드 메서드로 해석되어 세 탭 모두 "API 오류" 표시. `_time_module.strftime()`으로 수정.
 
