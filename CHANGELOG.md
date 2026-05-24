@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.9.0] - 2026-05-24
+
+### Added
+
+- **MarketSummaryBanner 컴포넌트** (`dashboard/frontend/src/components/MarketSummaryBanner.tsx`): 히트맵 상단에 KOSPI/KOSDAQ 지수 + 시장 심리 한마디를 표시하는 초보자 친화적 배너. 장마감/장없는날 상태 구분, 5분 자동 갱신, 모바일 팁 숨김(`market-banner-tip`).
+- **`/api/market_index` 엔드포인트** (`dashboard/backend/main.py`): KRX OpenAPI + yfinance 혼합으로 KOSPI/KOSDAQ 지수 조회. `asyncio.Lock` 기반 5분 TTL 캐시, `_market_sentiment()` 순수 함수로 강세/상승/보합/하락/급락 5단계 판정.
+- **KOSDAQ 지수 KRX 조회** (`data/krx_openapi.py`): `get_kosdaq_index()` / `get_kosdaq_index_ohlcv()` 신규, KOSPI `prev_close`(`BASPRC_IDX`) 필드 추가.
+- **텔레그램 `/status` 시장 현황** (`telegram/telegram_bot.py`): KRX 클라이언트 직접 호출로 KOSPI/KOSDAQ 등락률을 대시보드 HTTP 의존 없이 표시.
+
+### Fixed
+
+- **`time` 모듈 이름 충돌** (`dashboard/backend/main.py`): `from datetime import time`이 `import time` 모듈을 shadow하여 캐시 TTL 계산(`time.time()`)이 `TypeError`로 실패하던 버그. `import time as _time_module`로 해결.
+
 ## [0.9.8.1] - 2026-05-24
 
 ### Security
