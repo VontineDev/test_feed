@@ -44,6 +44,7 @@ interface Props {
   start: string
   end: string
   onClose: () => void
+  mode?: 'modal' | 'panel'
 }
 
 const STAGE_COLOR: Record<number, string> = {
@@ -55,7 +56,7 @@ const STAGE_COLOR: Record<number, string> = {
 const fmt = (v: number | null | undefined, digits = 0) =>
   v == null ? '—' : v.toLocaleString('ko-KR', { maximumFractionDigits: digits })
 
-export default function StageHistoryPopup({ ticker, name, start, end, onClose }: Props) {
+export default function StageHistoryPopup({ ticker, name, start, end, onClose, mode = 'modal' }: Props) {
   const [stageHistory, setStageHistory] = useState<StageRow[]>([])
   const [screenerHistory, setScreenerHistory] = useState<ScreenerRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -81,13 +82,8 @@ export default function StageHistoryPopup({ ticker, name, start, end, onClose }:
       })
   }, [ticker, start, end])
 
-  return (
-    <>
-      {/* 배경 오버레이 */}
-      <div style={s.overlay} onClick={onClose} />
-
-      {/* 팝업 패널 */}
-      <div style={s.panel}>
+  const content = (
+    <div style={mode === 'panel' ? s.panelInline : s.panel}>
         {/* 헤더 */}
         <div style={s.header}>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -190,6 +186,13 @@ export default function StageHistoryPopup({ ticker, name, start, end, onClose }:
           )}
         </div>
       </div>
+  )
+
+  if (mode === 'panel') return content
+  return (
+    <>
+      <div style={s.overlay} onClick={onClose} />
+      {content}
     </>
   )
 }
@@ -204,6 +207,12 @@ const s: Record<string, React.CSSProperties> = {
     display: 'flex', flexDirection: 'column',
     top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
     width: 'min(680px, 95vw)', maxHeight: '80vh',
+    overflow: 'hidden',
+  },
+  panelInline: {
+    display: 'flex', flexDirection: 'column',
+    width: '100%', height: '100%',
+    background: tokens.bg.row,
     overflow: 'hidden',
   },
   header: {
