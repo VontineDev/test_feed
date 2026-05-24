@@ -162,7 +162,7 @@ KRX_PW=your_krx_password
 scripts\start_dashboard.ps1   # 백엔드 서버 시작/재시작 (http://localhost:8000)
 ```
 
-탭 구성: 히트맵 · 레포트 · Top · 모의투자 · 매크로
+탭 구성: 히트맵 · 종목 분석 · Top · 모의투자 · 매크로
 
 ## 테스트 실행
 

@@ -6,7 +6,7 @@ Items deferred from code review and planning sessions.
 
 ## P3: MarketSummaryBanner — 앱 레벨 헤더로 승격 (Phase 2)
 
-**What:** `MarketSummaryBanner`를 `Heatmap.tsx` 내부에서 `App.tsx` 최상단 헤더로 이동. 모든 탭(히트맵·레포트·Top·모의투자·매크로)에서 항상 표시.
+**What:** `MarketSummaryBanner`를 `Heatmap.tsx` 내부에서 `App.tsx` 최상단 헤더로 이동. 모든 탭(히트맵·종목 분석·Top·모의투자·매크로)에서 항상 표시.
 
 **Why:** Phase 1은 히트맵 탭에만 배너를 단다. 다른 탭으로 이동하면 시장 맥락이 사라진다. 초보자가 모의투자 탭에서 포지션을 볼 때도 "오늘 급락장"임을 알아야 한다.
 

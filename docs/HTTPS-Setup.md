@@ -53,11 +53,11 @@ vtrading.duckdns.org {
         propagation_timeout -1
     }
 
-    basicauth {
+    basic_auth {
         admin $2a$14$tHdZT7fIobl/Pc/IPmLmCu279QRjarPifyVEUhxHJF8dtX8Sjzpcq
     }
 
-    reverse_proxy localhost:8000
+    reverse_proxy 127.0.0.1:8000
 }
 ```
 
@@ -200,6 +200,31 @@ Get-NetTCPConnection -LocalPort 2019 | Select-Object OwningProcess | ForEach-Obj
     Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue
 }
 ```
+
+### 증상: Chrome에서만 접속 불가 — ERR_PROXY_CONNECTION_FAILED
+
+**원인:** Chrome에 VPN 확장 프로그램이 켜져 있으면 `vtrading.duckdns.org` 트래픽을 VPN 서버로 라우팅합니다. VPN 서버에서는 `127.0.0.1`로 연결이 불가하므로 실패합니다. 다른 브라우저(Edge, Firefox)는 시스템 기본 네트워크를 사용하므로 정상 접속됩니다.
+
+**확인:** Chrome 시크릿 창(`Ctrl+Shift+N`)에서 접속 시도. 됩니다 → VPN 확장이 원인.
+
+**해결:**
+1. `chrome://extensions` → VPN 확장 비활성화 후 접속
+2. 또는 VPN 확장 설정 → 예외 목록(Bypass/Whitelist)에 `vtrading.duckdns.org` 추가
+
+---
+
+### 증상: Chrome에서 "보안 연결을 지원하지 않습니다" — hosts 파일 무시
+
+**원인:** Chrome의 보안 DNS(DNS-over-HTTPS)가 켜져 있으면 OS의 `hosts` 파일을 우회하고 외부 DNS 서버에서 실제 공인 IP(`175.197.9.6`)를 받아옵니다. 공유기가 헤어핀 NAT를 지원하지 않으면 서버 PC에서 자기 자신으로 연결 불가합니다.
+
+**확인:** `chrome://net-internals/#dns` → `vtrading.duckdns.org` Lookup → `175.197.9.6`이 나오면 이 문제.
+
+**해결:**
+1. `chrome://settings/security` → "보안 DNS 사용" 토글 **OFF**
+2. `chrome://net-internals/#dns` → "호스트 캐시 지우기" 클릭
+3. 재접속
+
+---
 
 ### 증상: HTTPS 접속은 되는데 API 호출이 401
 
