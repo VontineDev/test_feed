@@ -13,6 +13,10 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **종목분석 상세 보기 우측 패널 방식으로 전환** (`dashboard/frontend/src/components/Report.tsx`, `StageHistoryPopup.tsx`): 모달 오버레이 팝업 방식에서 모의투자 탭과 동일한 Master–Detail 분할 패널 방식으로 변경. 종목 클릭 시 목록이 55%로 수축하고 우측에 45% 상세 패널 슬라이드인. 같은 종목 재클릭·날짜 범위 변경 시 패널 닫힘. `StageHistoryPopup`에 `mode='panel'` prop 추가로 오버레이 없이 부모 영역 채우기 지원.
+- **종목분석 팝업 너비 확대** (`StageHistoryPopup.tsx`): 모달 모드 최대 너비 480px → 680px.
+- **오늘 필터 종목 상세 연결** (`Report.tsx`): 추세 단계·강세 후보 발굴 두 섹션 모두 종목 클릭 이벤트와 `StageHistoryPopup` 연결. 이전에는 "오늘" 날짜 범위에서 클릭해도 팝업이 열리지 않던 문제 수정.
+- **종목분석 모바일 세로 스택 대응** (`dashboard/frontend/src/index.css`): 768px 이하에서 좌우 분할 패널이 세로 스택으로 전환되는 `report-split-*` 미디어쿼리 추가. 모의투자 `paper-split-*` 패턴과 동일.
 - **시작 스크립트 단일화** (`scripts/`): `restart_dashboard.bat`·`start_dashboard_hidden.vbs` 제거. `start_dashboard.ps1`이 수동 시작/재시작의 단일 진입점. Task Scheduler 자동 시작은 `start_dashboard_service.bat` 래퍼가 담당.
 - **대시보드 탭·섹션 이름 직관화** (`dashboard/frontend/src/tabs.ts`, `Report.tsx`): `레포트` 탭 → `종목 분석`, `Stage 분류` 섹션 → `추세 단계`, `차트 스크리닝` 섹션 → `강세 후보 발굴`. 처음 접하는 사용자도 탭 이름만으로 기능을 파악할 수 있도록 한국어 직관명으로 변경. `InfoTip` 컴포넌트(ⓘ)로 호버 시 동작 설명 팝업 표시.
 
