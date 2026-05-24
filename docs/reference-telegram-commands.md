@@ -18,6 +18,7 @@
 - 최근 24시간 발생 신호 수 (BUY / SELL / WATCH)
 - DB 연결 여부
 - 현재 활성 백엔드 (Ollama / LM Studio)
+- KOSPI / KOSDAQ 현재가 + 등락률 (KRX 직접 조회)
 
 ### `/today`
 
