@@ -1,6 +1,5 @@
 import { useState, useMemo } from 'react'
 import { tokens } from '../tokens'
-import StageHistoryPopup from './StageHistoryPopup'
 
 interface ScreenerItem {
   ticker: string
@@ -16,13 +15,14 @@ interface Props {
   items: ScreenerItem[]
   start: string
   end: string
+  selectedTicker?: string | null
+  onSelect?: (ticker: string, name: string) => void
 }
 
 const CHIP_COLOR = { all: tokens.accent.blueSoft, enhanced: tokens.stage[2], gapjum: tokens.chart.cat.ichimoku } as const
 
-export default function HistoryScreenerView({ items, start, end }: Props) {
+export default function HistoryScreenerView({ items, start: _start, end: _end, selectedTicker, onSelect }: Props) {
   const [filter, setFilter] = useState<'all' | 'enhanced' | 'gapjum'>('all')
-  const [popup, setPopup] = useState<{ ticker: string; name: string } | null>(null)
 
   const counts = useMemo(() => ({
     all: items.length,
@@ -72,8 +72,8 @@ export default function HistoryScreenerView({ items, start, end }: Props) {
             {filtered.map(it => (
               <tr
                 key={it.ticker}
-                style={{ cursor: 'pointer' }}
-                onClick={() => setPopup({ ticker: it.ticker, name: it.name })}
+                style={{ background: it.ticker === selectedTicker ? tokens.bg.active : 'transparent', cursor: 'pointer' }}
+                onClick={() => onSelect?.(it.ticker, it.name)}
               >
                 <td style={s.td}>
                   <div style={s.tickerName}>{it.name}</div>
@@ -96,15 +96,6 @@ export default function HistoryScreenerView({ items, start, end }: Props) {
         </table>
       </div>
 
-      {popup && (
-        <StageHistoryPopup
-          ticker={popup.ticker}
-          name={popup.name}
-          start={start}
-          end={end}
-          onClose={() => setPopup(null)}
-        />
-      )}
     </>
   )
 }

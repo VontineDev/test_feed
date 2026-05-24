@@ -384,7 +384,7 @@ export default function Report() {
             {preset === 'today'
               ? (stage ? <StageReport data={stage} selectedTicker={selectedTicker} onSelect={handleSelect} /> : <div style={s.empty}>데이터 없음</div>)
               : (histStage
-                  ? <HistoryStageView items={histStage.items} start={range.start} end={range.end} />
+                  ? <HistoryStageView items={histStage.items} start={range.start} end={range.end} selectedTicker={selectedTicker} onSelect={handleSelect} />
                   : <div style={s.empty}>{loading ? '로딩…' : '데이터 없음'}</div>)
             }
           </Section>
@@ -397,7 +397,7 @@ export default function Report() {
             {preset === 'today'
               ? (screener ? <ScreenerReport data={screener} selectedTicker={selectedTicker} onSelect={handleSelect} /> : <div style={s.empty}>데이터 없음</div>)
               : (histScreener
-                  ? <HistoryScreenerView items={histScreener.items} start={range.start} end={range.end} />
+                  ? <HistoryScreenerView items={histScreener.items} start={range.start} end={range.end} selectedTicker={selectedTicker} onSelect={handleSelect} />
                   : <div style={s.empty}>{loading ? '로딩…' : '데이터 없음'}</div>)
             }
           </Section>

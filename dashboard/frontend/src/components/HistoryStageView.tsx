@@ -1,6 +1,5 @@
 import { useState, useMemo } from 'react'
 import { tokens } from '../tokens'
-import StageHistoryPopup from './StageHistoryPopup'
 
 interface StageItem {
   ticker: string
@@ -17,6 +16,8 @@ interface Props {
   items: StageItem[]
   start: string
   end: string
+  selectedTicker?: string | null
+  onSelect?: (ticker: string, name: string) => void
 }
 
 const STAGE_COLOR: Record<number, string> = {
@@ -25,9 +26,8 @@ const STAGE_COLOR: Record<number, string> = {
   3: tokens.stage[3],
 }
 
-export default function HistoryStageView({ items, start, end }: Props) {
+export default function HistoryStageView({ items, start: _start, end: _end, selectedTicker, onSelect }: Props) {
   const [activeStage, setActiveStage] = useState<1 | 2 | 3>(1)
-  const [popup, setPopup] = useState<{ ticker: string; name: string } | null>(null)
 
   const stageCounts = useMemo(() => {
     const counts: Record<number, number> = { 1: 0, 2: 0, 3: 0 }
@@ -82,8 +82,11 @@ export default function HistoryStageView({ items, start, end }: Props) {
                 return (
                   <tr
                     key={`${it.ticker}-${it.stage_queried}`}
-                    style={{ background: it.any_peakout ? '#1a0f0f' : 'transparent', cursor: 'pointer' }}
-                    onClick={() => setPopup({ ticker: it.ticker, name: it.name })}
+                    style={{
+                      background: it.ticker === selectedTicker ? tokens.bg.active : it.any_peakout ? '#1a0f0f' : 'transparent',
+                      cursor: 'pointer',
+                    }}
+                    onClick={() => onSelect?.(it.ticker, it.name)}
                   >
                     <td style={s.td}>
                       <div style={s.tickerName}>{it.name}</div>
@@ -117,16 +120,6 @@ export default function HistoryStageView({ items, start, end }: Props) {
         </div>
       )}
 
-      {/* 히스토리 팝업 */}
-      {popup && (
-        <StageHistoryPopup
-          ticker={popup.ticker}
-          name={popup.name}
-          start={start}
-          end={end}
-          onClose={() => setPopup(null)}
-        />
-      )}
     </>
   )
 }
