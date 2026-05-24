@@ -403,7 +403,8 @@ const S: Record<string, React.CSSProperties> = {
     color: tokens.tx.secondary,
     cursor: 'pointer',
     fontSize: 11,
-    padding: '2px 8px',
+    padding: '6px 8px',
+    minHeight: 28,
   },
   chevron: { fontSize: 10, color: tokens.tx.subtle },
 }

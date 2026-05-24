@@ -186,8 +186,8 @@ const s: Record<string, React.CSSProperties> = {
   btnRow: { display: 'flex', gap: 8, flexWrap: 'wrap' as const, marginBottom: 12 },
   btn: {
     background: tokens.bg.active, color: tokens.accent.blueLight, border: `1px solid ${tokens.accent.blue}`,
-    borderRadius: 4, padding: '7px 12px', cursor: 'pointer', fontSize: 12,
-    fontWeight: 600, transition: 'opacity 0.15s', minHeight: 36,
+    borderRadius: 4, padding: '11px 12px', cursor: 'pointer', fontSize: 12,
+    fontWeight: 600, transition: 'opacity 0.15s', minHeight: 44,
   },
 
   activeWrap:    { background: tokens.bg.panel, borderRadius: 8, padding: '8px 10px', marginBottom: 12 },
