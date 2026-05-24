@@ -18,7 +18,7 @@ export interface TabConfig {
 
 export const TAB_CONFIG: TabConfig[] = [
   { key: 'heatmap', label: '히트맵',  icon: '🗺',  component: Heatmap        },
-  { key: 'report',  label: '레포트',  icon: '📈', component: Report         },
+  { key: 'report',  label: '종목 분석', icon: '📈', component: Report         },
   { key: 'top',     label: 'Top',    icon: '📊', component: Top            },
   { key: 'paper',   label: '모의투자', icon: '💼', component: PaperPortfolio },
   { key: 'macro',   label: '매크로',  icon: '🌐', component: Macro          },

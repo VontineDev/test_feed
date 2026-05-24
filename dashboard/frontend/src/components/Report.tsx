@@ -27,15 +27,53 @@ interface ScreenerData {
 const fmt = (v: number | null | undefined, digits = 0) =>
   v == null ? '—' : v.toLocaleString('ko-KR', { maximumFractionDigits: digits })
 
+// ── 툴팁 ─────────────────────────────────────────────────────
+function InfoTip({ text }: { text: string }) {
+  const [show, setShow] = useState(false)
+  return (
+    <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+      <span
+        style={{ cursor: 'help', color: tokens.tx.subtle, fontSize: 11, marginLeft: 4, userSelect: 'none' }}
+        onMouseEnter={() => setShow(true)}
+        onMouseLeave={() => setShow(false)}
+      >ⓘ</span>
+      {show && (
+        <span style={{
+          position: 'absolute',
+          left: '110%',
+          top: '50%',
+          transform: 'translateY(-50%)',
+          background: tokens.bg.raised,
+          border: `1px solid ${tokens.bd.emphasis}`,
+          color: tokens.tx.secondary,
+          fontSize: 11,
+          lineHeight: 1.5,
+          padding: '6px 10px',
+          borderRadius: 4,
+          whiteSpace: 'normal',
+          width: 240,
+          zIndex: 100,
+          pointerEvents: 'none',
+        }}>
+          {text}
+        </span>
+      )}
+    </span>
+  )
+}
+
 // ── 섹션 컨테이너 ────────────────────────────────────────────
-function Section({ title, badge, children, defaultOpen = true }: {
-  title: string; badge?: string; children: React.ReactNode; defaultOpen?: boolean
+function Section({ title, badge, tooltip, children, defaultOpen = true }: {
+  title: string; badge?: string; tooltip?: string; children: React.ReactNode; defaultOpen?: boolean
 }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
     <div style={s.section}>
       <button style={s.sectionHdr} onClick={() => setOpen(o => !o)}>
-        <span style={s.sectionTitle}>{title}</span>
+        <span style={{ ...s.sectionTitle, display: 'inline-flex', alignItems: 'center' }}>
+          {title}
+          {tooltip && <InfoTip text={tooltip} />}
+        </span>
         {badge && <span style={s.badge}>{badge}</span>}
         <span style={s.chevron}>{open ? '▲' : '▼'}</span>
       </button>
@@ -269,7 +307,7 @@ export default function Report() {
   return (
     <div style={s.wrap}>
       <div style={s.hdr}>
-        <span style={s.hdrTitle}>레포트</span>
+        <span style={s.hdrTitle}>종목 분석</span>
         {lastFetched && (
           <span style={s.hdrTime}>{lastFetched.toLocaleTimeString('ko-KR')} 기준</span>
         )}
@@ -281,7 +319,11 @@ export default function Report() {
       {/* 날짜 범위 선택 바 */}
       <DateRangeBar preset={preset} onChange={p => setPreset(p)} />
 
-      <Section title="Stage 분류" badge={stageBadge}>
+      <Section
+        title="추세 단계"
+        badge={stageBadge}
+        tooltip="전 종목을 일봉 기준 3단계 추세로 분류합니다. Stage 1(상승 초기)이 매수 적기, Stage 2(고점권)는 조심, Stage 3(하락)은 관망."
+      >
         {preset === 'today'
           ? (stage ? <StageReport data={stage} /> : <div style={s.empty}>데이터 없음</div>)
           : (histStage
@@ -290,7 +332,11 @@ export default function Report() {
         }
       </Section>
 
-      <Section title="차트 스크리닝" badge={screenerBadge}>
+      <Section
+        title="강세 후보 발굴"
+        badge={screenerBadge}
+        tooltip="주봉 일목균형표 + 20주 이동평균 조건을 통과한 종목입니다. 기술적으로 강세 신호가 켜진 후보를 매주 스캔합니다."
+      >
         {preset === 'today'
           ? (screener ? <ScreenerReport data={screener} /> : <div style={s.empty}>데이터 없음</div>)
           : (histScreener
