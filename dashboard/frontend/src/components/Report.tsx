@@ -119,7 +119,12 @@ function StageReport({ data }: { data: StageData }) {
         ))}
         {peakout > 0 && (
           <div style={s.chip}>
-            <span style={s.chipLabel}>피크아웃</span>
+            <span style={s.chipLabel}>
+              고점 이탈
+              <span onClick={e => e.stopPropagation()}>
+                <InfoTip text="외국인·기관 동시 순매도 또는 윗꼬리+거래량 급증 감지. 단기 고점에서 매물 압력이 집중된 신호." />
+              </span>
+            </span>
             <span style={{ ...s.chipVal, color: tokens.semantic.up }}>{peakout}</span>
           </div>
         )}
@@ -132,9 +137,19 @@ function StageReport({ data }: { data: StageData }) {
             <table style={s.table}>
               <thead>
                 <tr>
-                  {['종목', '업종', '진입 고가', '거래량'].map(h => (
-                    <th key={h} style={s.th}>{h}</th>
-                  ))}
+                  {([
+                    '종목', '업종',
+                    { label: 'S1 고가', tip: 'Stage 1으로 분류된 날의 당일 고가. 진입 시점 가격 압박을 가늠하는 기준점.' },
+                    '거래량',
+                  ] as const).map(h => {
+                    const label = typeof h === 'string' ? h : h.label
+                    const tip   = typeof h === 'object' ? h.tip : undefined
+                    return (
+                      <th key={label} style={s.th}>
+                        {label}{tip && <InfoTip text={tip} />}
+                      </th>
+                    )
+                  })}
                 </tr>
               </thead>
               <tbody>

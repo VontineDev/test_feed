@@ -1,6 +1,28 @@
 import { useEffect, useState } from 'react'
 import { tokens } from '../tokens'
 
+function InfoTip({ text }: { text: string }) {
+  const [show, setShow] = useState(false)
+  return (
+    <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+      <span
+        style={{ cursor: 'help', color: tokens.tx.subtle, fontSize: 11, marginLeft: 4, userSelect: 'none' }}
+        onMouseEnter={() => setShow(true)}
+        onMouseLeave={() => setShow(false)}
+      >ⓘ</span>
+      {show && (
+        <span style={{
+          position: 'absolute', left: '110%', top: '50%', transform: 'translateY(-50%)',
+          background: tokens.bg.raised, border: `1px solid ${tokens.bd.emphasis}`,
+          color: tokens.tx.secondary, fontSize: 11, lineHeight: 1.5,
+          padding: '6px 10px', borderRadius: 4, whiteSpace: 'normal',
+          width: 220, zIndex: 200, pointerEvents: 'none',
+        }}>{text}</span>
+      )}
+    </span>
+  )
+}
+
 interface StageRow {
   classified_date: string
   stage: number
@@ -97,9 +119,19 @@ export default function StageHistoryPopup({ ticker, name, start, end, onClose }:
                   <table style={s.table}>
                     <thead>
                       <tr>
-                        {['날짜', 'Stage', '진입고가', '피크아웃'].map(h => (
-                          <th key={h} style={s.th}>{h}</th>
-                        ))}
+                        {([
+                          '날짜', 'Stage',
+                          { label: 'S1 고가', tip: 'Stage 1으로 분류된 날의 당일 고가. 진입 시점 가격 압박을 가늠하는 기준점.' },
+                          { label: '고점 이탈', tip: '외국인·기관 동시 순매도 또는 윗꼬리+거래량 급증 감지. 단기 고점에서 매물 압력이 집중된 신호.' },
+                        ] as const).map(h => {
+                          const label = typeof h === 'string' ? h : h.label
+                          const tip   = typeof h === 'object' ? h.tip : undefined
+                          return (
+                            <th key={label} style={s.th}>
+                              {label}{tip && <InfoTip text={tip} />}
+                            </th>
+                          )
+                        })}
                       </tr>
                     </thead>
                     <tbody>

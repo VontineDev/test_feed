@@ -70,9 +70,10 @@ export default function HistoryStageView({ items, start, end }: Props) {
           <table style={s.table}>
             <thead>
               <tr>
-                {['종목', '업종', '등장횟수', '최초등장', '최근등장', '현재단계', ''].map(h => (
+                {(['종목', '업종', '등장횟수', '최초등장', '최근등장', '현재단계'] as const).map(h => (
                   <th key={h} style={s.th}>{h}</th>
                 ))}
+                <th style={s.th} title="고점 이탈 — 외국인·기관 동시 순매도 또는 윗꼬리+거래량 급증 감지">⚠</th>
               </tr>
             </thead>
             <tbody>
