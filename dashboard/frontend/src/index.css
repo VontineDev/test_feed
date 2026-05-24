@@ -112,7 +112,27 @@ button:focus:not(:focus-visible) {
   }
 }
 
-/* ───────────── 데스크탑 레이아웃 (769px 이상) ───────────── */
+/* ───────────── Report split-view 모바일 대응 ───────────── */
+/* 데스크탑: 55%/45% 나란히, 모바일: 세로 스택 */
+@media (max-width: 768px) {
+  .report-split-container {
+    flex-wrap: wrap !important;
+    overflow: visible !important;
+  }
+  .report-split-left {
+    flex: none !important;
+    width: 100% !important;
+    border-right: none !important;
+    border-bottom: 1px solid #1e293b;
+  }
+  .report-split-right {
+    flex: none !important;
+    width: 100% !important;
+    min-height: 260px;
+  }
+}
+
+/* ───────────── 데스크탑 레이아��� (769px 이상) ───────────── */
 @media (min-width: 769px) {
   /* 모바일 전용 요소 숨김 */
   .app-mobile-nav {

@@ -369,9 +369,9 @@ export default function Report() {
       <DateRangeBar preset={preset} onChange={p => setPreset(p)} />
 
       {/* 콘텐츠 — 좌우 분할 */}
-      <div style={s.splitWrap}>
+      <div className="report-split-container" style={s.splitWrap}>
         {/* 왼쪽: 섹션 목록 */}
-        <div style={{
+        <div className="report-split-left" style={{
           ...s.splitLeft,
           flex: selectedTicker ? '0 0 55%' : 1,
           borderRight: selectedTicker ? `1px solid ${tokens.bd.default}` : undefined,
@@ -405,7 +405,7 @@ export default function Report() {
 
         {/* 오른쪽: 상세 패널 */}
         {selectedTicker && (
-          <div style={s.splitRight}>
+          <div className="report-split-right" style={s.splitRight}>
             <StageHistoryPopup
               ticker={selectedTicker}
               name={selectedName}
