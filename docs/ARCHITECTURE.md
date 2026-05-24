@@ -593,7 +593,7 @@ class ScreenResult:
 
 **거래대금 기준 (v0.9.3.0~)**: 거래량(`Volume`) 대신 `Volume × Close`(거래대금) 기준으로 전환. 소형주 과잉 선정 방지. `compare_tx_amt.py` 검증: MAE 1.38%, Max 3.55%.
 
-**피크아웃 탐지 (`check_peakout()`)**: Stage 3 진입 후 외국인·기관 연속 순매도 streak ≤ −2 AND 윗꼬리 캔들 패턴으로 고점 이탈 조기 경보.
+**고점 이탈 탐지 (`check_peakout()`)**: Stage 3 진입 후 외국인·기관 연속 순매도 streak ≤ −2 AND 윗꼬리 캔들 패턴으로 고점 이탈 조기 경보.
 
 **핵심 설계**:
 - ThreadPoolExecutor 내부에서 asyncpg 직접 호출 금지 — price_df, flow_df, s1_history 모두 진입 전에 배치 로드하여 전달 (learnings: asyncpg-threadpool-no-db)
@@ -604,7 +604,7 @@ class ScreenResult:
 | 함수 | 반환 | 설명 |
 |------|------|------|
 | `classify_stage(ticker, price_df, flow_df, s1_history, market)` | `int \| None` | 3단계 분류 (1/2/3/None) |
-| `check_peakout(ticker, flow_df, price_df)` | `bool` | Stage 3 피크아웃 신호 |
+| `check_peakout(ticker, flow_df, price_df)` | `bool` | Stage 3 고점 이탈 신호 |
 
 **자동 스케줄**: 매일 16:30 KST — `jobs/stage_job.py`에서 실행, 결과를 `stage_classifications` 테이블에 저장.
 
@@ -754,7 +754,7 @@ test_feed/
 │   ├── signal_detector.py         # LLM 매매 신호 감지 (JSON 구조화 출력)
 │   ├── chart_screener.py          # 주봉 Ichimoku+MA 스크리너 (KOSPI/KOSDAQ 전종목, 7조건)
 │   ├── screener_filters.py        # Stage 2 필터 프리셋
-│   ├── stage_classifier.py        # 일봉 3단계 분류기 — Stage 1/2/3 + 피크아웃 신호
+│   ├── stage_classifier.py        # 일봉 3단계 분류기 — Stage 1/2/3 + 고점 이탈 신호
 │   ├── backtest_engine.py         # 통합 백테스트 엔진 — ichimoku/stage/cross/stage2 4모드
 │   ├── volume_pattern.py          # 거래량 패턴 분석
 │   └── macro_tracker.py           # OLS 팩터 모델 — 6개 매크로 팩터 추적

@@ -92,7 +92,7 @@ analysis/                 # 분석·전략
   signal_detector.py      # LLM 매매 신호 감지
   chart_screener.py       # 주봉 차트 스크리너 (Ichimoku + MA, KOSPI/KOSDAQ 전종목)
   screener_filters.py     # 스크리너 필터 프리셋
-  stage_classifier.py     # 일봉 3단계 분류기 — Stage 1/2/3 분류 + 피크아웃 신호
+  stage_classifier.py     # 일봉 3단계 분류기 — Stage 1/2/3 분류 + 고점 이탈 신호
   backtest_engine.py      # 통합 백테스트 엔진 — ichimoku / stage / cross 3모드
   volume_pattern.py       # 거래량 패턴 분석
   macro_tracker.py        # OLS 팩터 모델 — 6개 매크로 팩터 추적
