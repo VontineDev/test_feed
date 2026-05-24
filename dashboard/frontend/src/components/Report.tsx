@@ -173,10 +173,10 @@ function ScreenerReport({ data }: { data: ScreenerData }) {
     <>
       <div style={s.chips}>
         {([
-          { f: 'all',      label: '통과',  val: data.total,    color: tokens.accent.blueSoft },
-          { f: 'enhanced', label: '강화',  val: data.enhanced, color: tokens.stage[2] },
-          { f: 'gapjum',   label: '갭점프', val: data.gapjum,   color: tokens.chart.cat.ichimoku },
-        ] as const).map(({ f, label, val, color }) => (
+          { f: 'all',      label: '통과',   val: data.total,    color: tokens.accent.blueSoft,       tooltip: '주봉 일목균형표 기준선 위 + 20주 이동평균 위 조건을 동시에 충족한 종목. 기본 강세 구조 확인.' },
+          { f: 'enhanced', label: '강화',   val: data.enhanced, color: tokens.stage[2],              tooltip: '통과 조건 + 전환선·기준선 정배열 + 구름대 위 종가 등 추가 조건 충족. 더 강한 강세 신호.' },
+          { f: 'gapjum',   label: '갭점프', val: data.gapjum,   color: tokens.chart.cat.ichimoku,    tooltip: '전주 대비 갭업(시가 > 전주 종가) 발생 종목. 수급 집중 또는 강세 돌파 신호일 수 있음.' },
+        ] as const).map(({ f, label, val, color, tooltip }) => (
           <button
             key={f}
             style={{
@@ -187,7 +187,10 @@ function ScreenerReport({ data }: { data: ScreenerData }) {
             }}
             onClick={() => setFilter(f)}
           >
-            <span style={s.chipLabel}>{label}</span>
+            <span style={{ ...s.chipLabel, display: 'inline-flex', alignItems: 'center' }}>
+              {label}
+              <span onClick={e => e.stopPropagation()}><InfoTip text={tooltip} /></span>
+            </span>
             <span style={{ ...s.chipVal, color }}>{val}</span>
           </button>
         ))}
