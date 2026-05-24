@@ -298,7 +298,7 @@ async def send_weekly_screener(
 
     if not results:
         message = (
-            f"📊 *주봉 차트 스크리닝 \\({esc(week)}\\)*\n\n"
+            f"📊 *강세 후보 발굴 \\({esc(week)}\\)*\n\n"
             f"이번 주 조건 통과 종목 없음"
         )
     else:
@@ -318,7 +318,7 @@ async def send_weekly_screener(
         from analysis.screener_filters import filter_summary
         f_sum = filter_summary(results)
         lines = [
-            f"📊 *주봉 차트 스크리닝 \\({esc(week)}\\)*",
+            f"📊 *강세 후보 발굴 \\({esc(week)}\\)*",
             f"통과: {len(results)}개 \\(정배열 {sum(1 for r in results if r.has_gapjum)}개\\)",
             f"🏷 저평가 {f_sum.get('저평가_우량주', 0)}개 \\| 성장 {f_sum.get('성장주', 0)}개 \\| 배당 {f_sum.get('배당주', 0)}개\n",
         ]

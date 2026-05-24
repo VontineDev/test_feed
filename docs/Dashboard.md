@@ -289,7 +289,7 @@ data: [{"id": 123, "direction": "BUY", "strength": 4, ...}]
 
 ### GET /api/history/ticker/{ticker}
 
-특정 종목의 Stage 분류 이력과 스크리너 등장 이력을 함께 반환합니다.
+특정 종목의 추세 단계 이력과 강세 후보 등장 이력을 함께 반환합니다.
 
 **경로 파라미터:** `ticker` — yfinance 심볼 (예: `005930.KS`)  
 **쿼리 파라미터:** `?start=2026-04-01&end=2026-05-20` (기본 14일)

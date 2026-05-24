@@ -337,7 +337,7 @@ footer {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>주봉 차트 스크리닝 리포트 {_html.escape(week_of)}</title>
+<title>강세 후보 발굴 리포트 {_html.escape(week_of)}</title>
 <style>
 {css}
 {page_css}
@@ -346,7 +346,7 @@ footer {
 </head>
 <body>
 <header>
-  <h1>주봉 차트 스크리닝 리포트 &nbsp;│&nbsp; {_html.escape(week_of)}</h1>
+  <h1>강세 후보 발굴 리포트 &nbsp;│&nbsp; {_html.escape(week_of)}</h1>
   <p class="meta">생성: {_html.escape(now_kst)} &nbsp;│&nbsp; 통과: {total}종목 (정배열 {gapjum_count}종목)</p>
   <p class="meta" style="margin-top:4px">필터: 저평가 우량주 {f_summary.get("저평가_우량주", 0)}개 &nbsp;│&nbsp; 성장주 {f_summary.get("성장주", 0)}개 &nbsp;│&nbsp; 배당주 {f_summary.get("배당주", 0)}개 &nbsp;│&nbsp; 가격건전성 {f_summary.get("가격건전성", 0)}개</p>
 </header>

@@ -41,8 +41,8 @@ python run_scheduler.py
 | `/today` | 오늘 카테고리별 수집 건수 + 최신 기사 5건 |
 | `/backtest <mode> <start> <end>` | 통합 백테스트 — ichimoku / stage / stage2 / cross 모드 |
 | `/watchlist` | 거래대금 워치리스트 즉시 조회 (온디맨드) |
-| `/screener` | 최신 주봉 차트 스크리닝 결과 (DM + 채널) |
-| `/scan` | 주봉 스크리닝 즉시 실행 (전 종목 실시간 스캔, 약 10~20분) |
+| `/screener` | 최신 강세 후보 발굴 결과 (DM + 채널) |
+| `/scan` | 강세 후보 즉시 스캔 (전 종목 실시간 스캔, 약 10~20분) |
 | `/paper` | 모의투자 오픈 포지션 현황 |
 | `/paper_perf` | 모의투자 누적 성과 (승률·수익·슬리피지) |
 | `/paper_exit <코드>` | 수동 강제 청산 |
