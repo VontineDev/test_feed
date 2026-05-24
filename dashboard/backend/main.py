@@ -797,7 +797,7 @@ def _fetch_top_kiwoom(n: int) -> dict:
             client = KiwoomClient(use_mock=False)
             client.inject_token(_get_kiwoom_token())
             items = client.fetch_top_volume(n=n)
-            return {"items": items, "fetched_at": time.strftime("%H:%M:%S")}
+            return {"items": items, "fetched_at": _time_module.strftime("%H:%M:%S")}
         except _requests.HTTPError as e:
             if e.response is not None and e.response.status_code == 401 and attempt == 0:
                 logger.warning("[top] 401 수신 — 토큰 무효화 후 재시도")
@@ -1390,7 +1390,7 @@ def _run_macro_analysis() -> dict:
     return {
         "snapshot":   snapshot,
         "stocks":     stocks,
-        "fetched_at": time.strftime("%H:%M:%S"),
+        "fetched_at": _time_module.strftime("%H:%M:%S"),
     }
 
 
