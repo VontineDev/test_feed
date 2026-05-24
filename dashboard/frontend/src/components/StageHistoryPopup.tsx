@@ -203,7 +203,7 @@ const s: Record<string, React.CSSProperties> = {
     background: tokens.bg.row, border: `1px solid ${tokens.bd.default}`, borderRadius: 10,
     display: 'flex', flexDirection: 'column',
     top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
-    width: 'min(480px, 95vw)', maxHeight: '80vh',
+    width: 'min(680px, 95vw)', maxHeight: '80vh',
     overflow: 'hidden',
   },
   header: {

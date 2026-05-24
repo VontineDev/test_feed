@@ -3,6 +3,7 @@ import { tokens } from '../tokens'
 import DateRangeBar, { DatePreset, computeRange } from './DateRangeBar'
 import HistoryStageView from './HistoryStageView'
 import HistoryScreenerView from './HistoryScreenerView'
+import StageHistoryPopup from './StageHistoryPopup'
 
 // ── 타입 ────────────────────────────────────────────────────
 type StageRow = { ticker: string; name: string; sector: string | null; s1_high: number | null; s1_volume: number | null; peakout_flag: boolean }
@@ -83,8 +84,9 @@ function Section({ title, badge, tooltip, children, defaultOpen = true }: {
 }
 
 // ── Stage 레포트 ─────────────────────────────────────────────
-function StageReport({ data }: { data: StageData }) {
+function StageReport({ data, start, end }: { data: StageData; start: string; end: string }) {
   const [activeStage, setActiveStage] = useState<1 | 2 | 3>(1)
+  const [popup, setPopup] = useState<{ ticker: string; name: string } | null>(null)
 
   const summary1 = data.summary.find(x => x.stage === 1)
   const summary2 = data.summary.find(x => x.stage === 2)
@@ -154,7 +156,11 @@ function StageReport({ data }: { data: StageData }) {
               </thead>
               <tbody>
                 {activeRows.map(r => (
-                  <tr key={r.ticker} style={{ background: r.peakout_flag ? '#1a0f0f' : 'transparent' }}>
+                  <tr
+                    key={r.ticker}
+                    style={{ background: r.peakout_flag ? '#1a0f0f' : 'transparent', cursor: 'pointer' }}
+                    onClick={() => setPopup({ ticker: r.ticker, name: r.name })}
+                  >
                     <td style={s.td}>
                       <div style={s.tickerName}>{r.name}</div>
                       <div style={s.tickerCode}>{r.ticker}{r.peakout_flag && ' ⚠️'}</div>
@@ -172,6 +178,16 @@ function StageReport({ data }: { data: StageData }) {
         </>
       ) : (
         <div style={s.empty}>Stage {activeStage} 종목 없음</div>
+      )}
+
+      {popup && (
+        <StageHistoryPopup
+          ticker={popup.ticker}
+          name={popup.name}
+          start={start}
+          end={end}
+          onClose={() => setPopup(null)}
+        />
       )}
     </>
   )
@@ -343,7 +359,7 @@ export default function Report() {
         tooltip="전 종목을 일봉 기준 3단계 추세로 분류합니다. Stage 1(상승 초기)이 매수 적기, Stage 2(고점권)는 조심, Stage 3(하락)은 관망."
       >
         {preset === 'today'
-          ? (stage ? <StageReport data={stage} /> : <div style={s.empty}>데이터 없음</div>)
+          ? (stage ? <StageReport data={stage} start={range.start} end={range.end} /> : <div style={s.empty}>데이터 없음</div>)
           : (histStage
               ? <HistoryStageView items={histStage.items} start={range.start} end={range.end} />
               : <div style={s.empty}>{loading ? '로딩…' : '데이터 없음'}</div>)
