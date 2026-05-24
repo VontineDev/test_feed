@@ -115,8 +115,8 @@ export default function PaperPortfolio() {
       {/* 포지션 + 이력 패널 */}
       {posOpen && (
         <>
-          <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
-            <div style={{
+          <div className="paper-split-container" style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
+            <div className="paper-split-left" style={{
               flex: selectedTicker ? '0 0 55%' : 1,
               minWidth: 0,
               overflowY: 'auto',
@@ -126,7 +126,7 @@ export default function PaperPortfolio() {
               <Positions onSelect={handleSelect} selectedTicker={selectedTicker} filterModel={filterModel} />
             </div>
             {selectedTicker && (
-              <div style={{ flex: '0 0 45%', minWidth: 0, overflowY: 'auto' }}>
+              <div className="paper-split-right" style={{ flex: '0 0 45%', minWidth: 0, overflowY: 'auto' }}>
                 <TickerHistory
                   ticker={selectedTicker}
                   name={selectedName}

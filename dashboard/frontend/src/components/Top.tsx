@@ -11,7 +11,7 @@ interface TopItem {
   eps?: number | null
 }
 
-const th: React.CSSProperties = { padding: '4px 8px', textAlign: 'left', fontWeight: 600 }
+const th: React.CSSProperties = { padding: '4px 8px', textAlign: 'left', fontWeight: 600, whiteSpace: 'nowrap' as const }
 const td: React.CSSProperties = { padding: '4px 8px' }
 const tdNum: React.CSSProperties = { padding: '4px 8px', textAlign: 'right' as const, fontVariantNumeric: 'tabular-nums' }
 
@@ -78,42 +78,44 @@ export default function Top() {
         </div>
       )}
 
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-        <thead>
-          <tr style={{ color: tokens.tx.muted, borderBottom: `1px solid ${tokens.bd.default}` }}>
-            <th style={th}>#</th>
-            <th style={th}>종목명</th>
-            <th style={{ ...th, textAlign: 'right' }}>현재가</th>
-            <th style={{ ...th, textAlign: 'right' }}>등락률</th>
-            <th style={{ ...th, textAlign: 'right' }}>거래대금</th>
-            <th style={{ ...th, textAlign: 'right' }}>EPS</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map(it => (
-            <tr key={it.ticker} style={{ borderBottom: `1px solid ${tokens.bg.row}` }}>
-              <td style={td}>{it.rank}</td>
-              <td style={td}>
-                {it.name}
-                <span style={{ color: tokens.tx.subtle, marginLeft: 4, fontSize: 10 }}>
-                  {it.ticker.replace(/_[A-Z]+$/, '')}
-                </span>
-              </td>
-              <td style={tdNum}>
-                {it.price.toLocaleString()}
-              </td>
-              {/* 한국식 등락 — pctTextColor 헬퍼 사용 */}
-              <td style={{ ...tdNum, color: pctTextColor(it.change_pct) }}>
-                {it.change_pct > 0 ? '+' : ''}{it.change_pct.toFixed(2)}%
-              </td>
-              <td style={tdNum}>{fmtAmt(it.amount)}</td>
-              <td style={{ ...tdNum, color: it.eps != null && it.eps < 0 ? tokens.semantic.up : undefined }}>
-                {it.eps != null ? it.eps.toLocaleString() : '—'}
-              </td>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+          <thead>
+            <tr style={{ color: tokens.tx.muted, borderBottom: `1px solid ${tokens.bd.default}` }}>
+              <th style={th}>#</th>
+              <th style={th}>종목명</th>
+              <th style={{ ...th, textAlign: 'right' }}>현재가</th>
+              <th style={{ ...th, textAlign: 'right' }}>등락률</th>
+              <th style={{ ...th, textAlign: 'right' }}>거래대금</th>
+              <th style={{ ...th, textAlign: 'right' }}>EPS</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {items.map(it => (
+              <tr key={it.ticker} style={{ borderBottom: `1px solid ${tokens.bg.row}` }}>
+                <td style={td}>{it.rank}</td>
+                <td style={td}>
+                  {it.name}
+                  <span style={{ color: tokens.tx.subtle, marginLeft: 4, fontSize: 10 }}>
+                    {it.ticker.replace(/_[A-Z]+$/, '')}
+                  </span>
+                </td>
+                <td style={tdNum}>
+                  {it.price.toLocaleString()}
+                </td>
+                {/* 한국식 등락 — pctTextColor 헬퍼 사용 */}
+                <td style={{ ...tdNum, color: pctTextColor(it.change_pct) }}>
+                  {it.change_pct > 0 ? '+' : ''}{it.change_pct.toFixed(2)}%
+                </td>
+                <td style={tdNum}>{fmtAmt(it.amount)}</td>
+                <td style={{ ...tdNum, color: it.eps != null && it.eps < 0 ? tokens.semantic.up : undefined }}>
+                  {it.eps != null ? it.eps.toLocaleString() : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
       {items.length === 0 && !loading && !error && (
         <div style={{ textAlign: 'center', color: tokens.tx.muted, marginTop: 40, fontSize: 12 }}>

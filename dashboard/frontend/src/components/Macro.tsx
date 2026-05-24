@@ -220,15 +220,16 @@ export default function Macro() {
           <div style={{ fontSize: 11, fontWeight: 700, color: tokens.tx.secondary, marginBottom: 6 }}>
             종목별 매크로 영향 점수 (현재 매크로 기준, 최근 5일)
           </div>
+          <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ color: tokens.tx.subtle, borderBottom: `1px solid ${tokens.bd.default}` }}>
-                <th style={{ padding: '4px 8px', textAlign: 'left',  fontWeight: 600 }}>#</th>
-                <th style={{ padding: '4px 8px', textAlign: 'left',  fontWeight: 600 }}>종목</th>
-                <th style={{ padding: '4px 8px', textAlign: 'right', fontWeight: 600 }}>점수</th>
-                <th style={{ padding: '4px 8px' }}>바</th>
-                <th style={{ padding: '4px 8px', textAlign: 'left',  fontWeight: 600 }}>판결</th>
-                <th style={{ padding: '4px 8px', textAlign: 'right', fontWeight: 600 }}>민감도</th>
+                <th style={{ padding: '4px 8px', textAlign: 'left',  fontWeight: 600, whiteSpace: 'nowrap' }}>#</th>
+                <th style={{ padding: '4px 8px', textAlign: 'left',  fontWeight: 600, whiteSpace: 'nowrap' }}>종목</th>
+                <th style={{ padding: '4px 8px', textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>점수</th>
+                <th style={{ padding: '4px 8px', whiteSpace: 'nowrap' }}>바</th>
+                <th style={{ padding: '4px 8px', textAlign: 'left',  fontWeight: 600, whiteSpace: 'nowrap' }}>판결</th>
+                <th style={{ padding: '4px 8px', textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>민감도</th>
               </tr>
             </thead>
             <tbody>
@@ -291,11 +292,12 @@ export default function Macro() {
                             5일기여: <span style={{ color: pctTextColor(s.macro_score_5d), fontVariantNumeric: 'tabular-nums' }}>{fmt(s.macro_score_5d, 2)}%</span> &nbsp;|&nbsp;
                             20일기여: <span style={{ color: pctTextColor(s.macro_score_20d), fontVariantNumeric: 'tabular-nums' }}>{fmt(s.macro_score_20d, 2)}%</span>
                           </div>
+                          <div style={{ overflowX: 'auto' }}>
                           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10 }}>
                             <thead>
                               <tr style={{ color: tokens.tx.subtle }}>
                                 {['팩터', '베타β', 't값', 'p값', '유의', '5일Δ', '5일기여'].map(h => (
-                                  <th key={h} style={{ padding: '2px 6px', textAlign: h === '팩터' || h === '유의' ? 'left' : 'right', fontWeight: 600 }}>{h}</th>
+                                  <th key={h} style={{ padding: '2px 6px', textAlign: h === '팩터' || h === '유의' ? 'left' : 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</th>
                                 ))}
                               </tr>
                             </thead>
@@ -335,6 +337,7 @@ export default function Macro() {
                               })}
                             </tbody>
                           </table>
+                          </div>
                           <div style={{ fontSize: 10, color: tokens.tx.subtle, marginTop: 6 }}>
                             * p&lt;0.1 &nbsp; ** p&lt;0.05 &nbsp; *** p&lt;0.01 &nbsp;|&nbsp;
                             5일기여 = β × 최근5일팩터변화
@@ -347,6 +350,7 @@ export default function Macro() {
               })}
             </tbody>
           </table>
+          </div>
 
           <div style={{ fontSize: 10, color: tokens.tx.subtle, marginTop: 8, lineHeight: 1.6 }}>
             <b>점수 해석:</b> 최근 5일 팩터 변화 × 종목 베타 합산 → tanh 정규화 (-100~+100).
