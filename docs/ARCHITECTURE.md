@@ -623,79 +623,140 @@ class ScreenResult:
 
 ## 4. 프로젝트 구조
 
+v0.9.6.0부터 루트 평면 구조 → 기능별 패키지로 재편. v0.9.8.1부터 `jobs/` 패키지 추가.
+
 ```
 test_feed/
 │
-├── run_scheduler.py               # 메인 실행 — RSS 피드 루프 + 봇 병렬 실행 / --once watchlist|stage 즉시 실행 지원
+├── run_scheduler.py               # 메인 진입점 — RSS 루프 + 봇 병렬 실행, --once 즉시 실행
+│                                  # 892줄 (v0.9.8.1~), 잡 로직은 jobs/ 에 위임
 │
-├── article_fetcher.py             # 기사 본문 크롤링 (멀티소스 + fallback)
-├── summarizer.py                  # 로컬 LLM 한글 요약 (Ollama → LM Studio)
-├── signal_detector.py             # LLM 매매 신호 감지 (JSON 구조화 출력)
-├── market_data.py                 # yfinance 시세 조회 + 교차분석 + Naver Finance 펀더멘털
-├── backtest.py                    # 판정 정확도 추적 + 백테스팅 리포트 (/backtest 명령어)
-├── db.py                          # PostgreSQL 연동 (asyncpg)
-├── chart_screener.py              # 주봉 Ichimoku+MA 스크리너 (KOSPI/KOSDAQ 전종목)
-├── screener_filters.py            # Stage 2 필터 프리셋 (v0.5.0.0~)
-├── stage_classifier.py            # 일봉 3단계 분류기 — Stage 1/2/3 + 피크아웃 신호 (v0.6.0.0~)
-├── backtest_engine.py             # 통합 백테스트 엔진 — ichimoku/stage/cross 3모드 (v0.7.0.0~)
-├── generate_html_report.py        # 차트 스크리닝 결과를 HTML 파일로 저장
-├── telegram_bot.py                # 봇 명령어 처리 (/status /signals /today /backtest /screener /help)
-├── telegram_notify.py             # 신호 알림 전송 + Ichimoku/Stage 비교 메시지
-├── volume_pattern.py              # 거래량 패턴 분석 (resolve_ticker, fetch_data, build_report)
-├── krx_sync.py                    # KRX 전체 종목 DB 동기화 (KOSPI+KOSDAQ ~2500종목)
-├── krx_openapi.py                 # KRX Open API REST 클라이언트 — OHLCV·종목마스터·지수 (v0.7.1.0~)
-├── krx_aftermarket_sync.py        # KRX 시간외 단일가 → aftermarket_snap 적재
-├── kiwoom_aftermarket_sync.py     # Kiwoom REST API 시간외 단일가 → aftermarket_snap 적재
-├── kiwoom_paper_trader.py         # 키움 모의투자 자동주문 — 4모델, paper_positions 테이블 (v0.9.0.0~)
-├── ohlcv_cache.py                 # OHLCV DB 캐시 레이어 (psycopg2, daily_ohlcv 테이블) (v0.7.1.0~)
-├── krx_flow_sync.py               # 외국인·기관 순매수 파이프라인 → daily_flow 테이블 (v0.7.1.0~)
-├── ticker_cache.py                # 종목명→yfinance 심볼 인메모리 캐시 (startup 로드, 20:00 KST 갱신)
+├── jobs/                          # 스케줄러 잡 패키지 (v0.9.8.1~)
+│   ├── stage_job.py               # daily_stage_job() — OHLCV 수집 + stage_classifications 저장
+│   ├── screener_job.py            # weekly_screener_job() — 전종목 Ichimoku 스캔 + HTML 리포트
+│   ├── infra_jobs.py              # daily_krx_refresh_job() + daily_flow_sync_job()
+│   ├── watchlist_job.py           # watchlist_brief_job() + build_watchlist_entries() 헬퍼
+│   └── paper_jobs.py              # paper_exit_checker_job() + paper_eod_sampler_job()
+│                                  # + paper_open_entry_job()
 │
-├── tests/
-│   ├── conftest.py                # pytest sys.path 설정
-│   ├── test_backtest.py           # pytest — 뉴스 백테스팅 로직
-│   ├── test_backtest_engine.py    # pytest — 통합 백테스트 엔진 (ichimoku/stage/cross)
-│   ├── test_exit_model.py         # pytest — TP1·트레일링·하드스탑 분할 청산 로직
-│   ├── test_telegram_routing.py   # pytest — 텔레그램 신호 라우팅 회귀
-│   ├── test_summarizer_regression_1.py # pytest — LLM 헬스체크·Qwen3 thinking 회귀
-│   ├── test_krx_sync.py           # pytest — KRX 동기화 + 티커 캐시
-│   ├── test_ticker_cache_integration.py # pytest — market_data·volume_pattern 캐시 통합
-│   ├── test_article_type.py       # pytest — 기사 유형 분류
-│   ├── test_db_dsn.py             # pytest — DB DSN 설정
-│   ├── test_macro_signal.py       # pytest — MACD/BB/MA 교차분석 스코어링
-│   ├── test_signal_prompt.py      # pytest — 신호 감지 프롬프트 · WATCH 임계값 회귀
-│   ├── test_chart_screener.py     # pytest — 스크리너 조건 A~G + KIND 섹터
-│   ├── test_screener_telegram_regression_1.py # pytest — 스크리너 텔레그램 포맷 회귀
-│   ├── test_fundamental.py        # pytest — PER/PBR/EPS 펀더멘털 레이어
-│   ├── test_generate_html_report.py # pytest — HTML 리포트 생성
-│   ├── test_stage_classifier.py   # pytest — 일봉 3단계 분류기
-│   ├── test_trade_integration.py  # pytest — trade_log GENERATED COLUMN DB 검증
-│   ├── test_trade_journal.py      # pytest — /buy /sell /port /pnl 거래 저널
-│   ├── test_volume_integration.py # pytest — _send_plain, fetch_data 시간대 회귀
-│   └── test_watchlist_brief.py    # pytest — 워치리스트 일보 포맷 + DB 헬퍼 (v0.7.3.0~)
+├── core/                          # 공유 유틸리티 (v0.9.6.0~)
+│   ├── db.py                      # asyncpg 커넥션 풀, 테이블 init, 모든 DB 헬퍼 함수
+│   ├── ticker_cache.py            # 종목명→yfinance 심볼 인메모리 캐시 + resolve_fuzzy()
+│   ├── ohlcv_cache.py             # OHLCV DB 캐시 레이어 (psycopg2, daily_ohlcv 테이블)
+│   └── article_fetcher.py         # 뉴스 기사 본문 크롤링 (소스별 파서 + fallback)
 │
-├── scripts/
+├── data/                          # 데이터 수집·동기화 (v0.9.6.0~)
+│   ├── market_data.py             # yfinance 시세 조회 + 교차분석 + Naver Finance 펀더멘털
+│   ├── krx_sync.py                # KRX 전체 종목 DB 동기화 (KOSPI+KOSDAQ ~2500종목)
+│   ├── krx_openapi.py             # KRX Open API REST 클라이언트 — OHLCV·종목마스터·지수
+│   ├── krx_flow_sync.py           # 외국인·기관 순매수 파이프라인 → daily_flow 테이블
+│   ├── krx_aftermarket_sync.py    # KRX 시간외 단일가 → aftermarket_snap 적재
+│   ├── kiwoom_aftermarket_sync.py # Kiwoom REST API 시간외 단일가 → aftermarket_snap 적재
+│   └── kiwoom_paper_trader.py     # 키움 모의투자 자동주문 — 4모델, paper_positions 테이블
+│
+├── analysis/                      # 분석·전략 (v0.9.6.0~)
+│   ├── signal_detector.py         # LLM 매매 신호 감지 (JSON 구조화 출력)
+│   ├── chart_screener.py          # 주봉 Ichimoku+MA 스크리너 (KOSPI/KOSDAQ 전종목, 7조건)
+│   ├── screener_filters.py        # Stage 2 필터 프리셋
+│   ├── stage_classifier.py        # 일봉 3단계 분류기 — Stage 1/2/3 + 피크아웃 신호
+│   ├── backtest_engine.py         # 통합 백테스트 엔진 — ichimoku/stage/cross/stage2 4모드
+│   ├── volume_pattern.py          # 거래량 패턴 분석
+│   └── macro_tracker.py           # OLS 팩터 모델 — 6개 매크로 팩터 추적
+│
+├── telegram/                      # 텔레그램 연동 (v0.9.6.0~)
+│   ├── telegram_bot.py            # 봇 명령어 처리 (long polling, /status /signals 등)
+│   ├── telegram_notify.py         # 신호 알림 전송 + 워치리스트 일보 + 스크리너 결과 포맷
+│   └── telegram_trade.py          # 매매 기록 명령어 처리 (/buy /sell /port /pnl)
+│
+├── reports/                       # 리포트·요약 (v0.9.6.0~)
+│   ├── summarizer.py              # 로컬 LLM 한글 요약 (Ollama → LM Studio 폴백)
+│   └── generate_html_report.py    # 주봉 스크리닝 HTML 리포트 생성 (섹터별·정배열별)
+│
+├── dashboard/                     # 웹 대시보드 (FastAPI + React)
+│   ├── backend/
+│   │   ├── main.py                # FastAPI 앱 — BasicAuth 미들웨어, 전체 API 엔드포인트
+│   │   └── database.py            # 대시보드 전용 DB 헬퍼
+│   └── frontend/
+│       ├── src/                   # React + TypeScript 소스
+│       │   └── components/        # Heatmap, Report, Top, PaperPortfolio, PaperAnalytics, Macro 등
+│       └── dist/                  # Vite 빌드 산출물 (백엔드가 정적 서빙)
+│
+├── tests/                         # pytest 테스트 (596개, v0.9.8.1 기준)
+│   ├── conftest.py
+│   ├── test_article_type.py       # 기사 유형 분류
+│   ├── test_backtest_engine.py    # 통합 백테스트 엔진 (ichimoku/stage/cross/stage2)
+│   ├── test_chart_screener.py     # 스크리너 조건 A~G + KIND 섹터
+│   ├── test_dashboard_top.py      # /top API 거래대금 상위 10
+│   ├── test_db_dsn.py             # DB DSN 설정
+│   ├── test_exit_model.py         # TP1·트레일링·하드스탑 분할 청산 로직
+│   ├── test_generate_html_report.py # HTML 리포트 생성
+│   ├── test_high_confidence.py    # HIGH CONFIDENCE 배지 + 게이팅
+│   ├── test_krx_flow_sync.py      # 외국인·기관 수급 파이프라인
+│   ├── test_krx_sync.py           # KRX 동기화 + 티커 캐시
+│   ├── test_macro_signal.py       # MACD/BB/MA 교차분석 스코어링
+│   ├── test_news_gating.py        # 뉴스 게이팅 — 스크리너 OR Stage 7d 이중 레이어
+│   ├── test_p3_remaining.py       # P3 백로그 항목 통합
+│   ├── test_paper_analytics.py    # 모의투자 성과분석 API + 프론트 pivotSeries
+│   ├── test_replay_stage2.py      # Stage 2 walk-forward 백테스트 재현 (25 tests)
+│   ├── test_resolution_diagnostics.py # 티커 해석 미스 카운터
+│   ├── test_resolve_fuzzy.py      # fuzzy 티커 매칭 (threshold=0.82)
+│   ├── test_scan_cmd.py           # /scan 명령어 즉시 스캔
+│   ├── test_screener_cmd.py       # /screener 명령어 회귀
+│   ├── test_screener_cmd_regression_1.py # asyncio.run __main__ 가드 회귀
+│   ├── test_screener_filters.py   # Stage 2 필터 프리셋
+│   ├── test_screener_ohlcv_regression.py # OHLCV 캐시 회귀
+│   ├── test_screener_telegram_regression_1.py # 스크리너 텔레그램 포맷 회귀
+│   ├── test_screener_telegram_regression_2.py
+│   ├── test_signal_prompt.py      # 신호 감지 프롬프트 · WATCH 임계값 회귀
+│   ├── test_stage_classifier.py   # 일봉 3단계 분류기
+│   ├── test_summarizer_regression_1.py # LLM 헬스체크·Qwen3 thinking 회귀
+│   ├── test_telegram_routing.py   # 텔레그램 신호 라우팅 회귀
+│   ├── test_trade_integration.py  # trade_log GENERATED COLUMN DB 검증
+│   ├── test_trade_journal.py      # /buy /sell /port /pnl 거래 저널
+│   ├── test_volume_integration.py # _send_plain, fetch_data 시간대 회귀
+│   ├── test_watchlist_brief.py    # 워치리스트 일보 포맷 + DB 헬퍼
+│   └── test_watchlist_features.py # vol_ratio_delta, retiring, Stage2 알림
+│
+├── scripts/                       # 운영 스크립트
 │   ├── register_tasks.ps1         # Windows 작업 스케줄러 통합 등록 (-Task all|crawler|aftermarket|dashboard)
-│   ├── restart_scheduler.bat      # NewsCrawler 재시작 (DB 스키마 변경 후 사용)
+│   ├── restart_scheduler.bat      # NewsCrawler 재시작
 │   ├── restart_dashboard.bat      # 대시보드 서버 재시작
-│   ├── start_dashboard_hidden.vbs # 창 없는 대시보드 시작 (VBScript)
-│   ├── start_dashboard_service.bat# 대시보드 서비스 래퍼
+│   ├── start_dashboard_hidden.vbs # 창 없는 백그라운드 대시보드 시작
+│   ├── start_dashboard_service.bat # 대시보드 서비스 래퍼
 │   ├── start_crawler.bat          # NewsCrawler 배치 실행
 │   ├── run_aftermarket_sync.bat   # 장후 동기화 실행
-│   └── run_sweep.py               # 파라미터 그리드서치 스위프 (288 조합)
+│   ├── duckdns_update.bat         # DuckDNS IP 업데이트
+│   └── run_sweep.py               # 백테스트 파라미터 그리드서치 (288 조합)
 │
-├── VERSION                        # 현재 버전 (SemVer 4자리)
-├── CHANGELOG.md                   # 변경 이력
-├── TODOS.md                       # 미결 작업 목록
-├── ARCHITECTURE.md                # 본 아키텍처 문서
-│
-├── .env.example                   # 환경변수 템플릿
-├── requirements.txt               # 의존성
-├── pytest.ini                     # testpaths = tests
+├── docs/                          # 문서
+│   ├── ARCHITECTURE.md            # 본 아키텍처 문서
+│   ├── TODOS.md                   # 미결 작업 목록
+│   ├── USER_MANUAL.md             # 설치부터 첫 알림까지 전체 가이드
+│   ├── Dashboard.md               # 웹 대시보드 개발·배포 가이드
+│   ├── DESIGN.md                  # 디자인 토큰 시스템 가이드
+│   ├── HTTPS-Setup.md             # Caddy HTTPS 설정 (Let's Encrypt + DuckDNS)
+│   ├── HowToBacktest.md           # 백테스트 엔진 사용 가이드
+│   ├── howto-screener.md          # 주봉 Ichimoku 스크리너 설정·Calibration
+│   ├── howto-stage-classifier.md  # 일봉 3단계 분류기 설정
+│   ├── howto-watchlist.md         # 거래대금 워치리스트 온디맨드 조회
+│   ├── explanation-signal-pipeline.md # 신호 파이프라인·게이팅·HIGH CONFIDENCE 설계
+│   ├── reference-env-vars.md      # 환경변수 전체 목록
+│   ├── reference-telegram-commands.md # Telegram 명령어 전체 목록
+│   └── krx openapi specs/         # KRX OpenAPI 스펙 문서 (본드·파생·주식·ETF 등)
 │
 ├── sql/
 │   ├── pgadmin_queries.sql        # DB 관리 쿼리
 │   └── rls_policies.sql           # RLS 정책 마이그레이션 (14 테이블 backend_all)
+│
+├── logs/                          # 로그 파일 (로테이션 포함)
+│
+├── VERSION                        # 현재 버전 (SemVer 4자리, 예: 0.9.8.1)
+├── CHANGELOG.md                   # 버전별 변경 이력
+├── README.md                      # 프로젝트 개요 + 빠른 시작
+├── CLAUDE.md                      # Claude Code 프로젝트 지침
+├── .env.example                   # 환경변수 템플릿
+├── requirements.txt               # Python 의존성
+└── pytest.ini                     # testpaths = tests
 ```
 
 ---
