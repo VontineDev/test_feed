@@ -96,6 +96,8 @@ CREATE TABLE IF NOT EXISTS scheduler_triggers (
 CREATE INDEX IF NOT EXISTS idx_sched_trig_status
     ON scheduler_triggers (status, requested_at ASC)
     WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_sched_stream
+    ON scheduler_triggers (requested_at DESC);
 """
 
 
@@ -524,7 +526,7 @@ async def _scheduler_stream_generator(request: Request) -> AsyncGenerator[str, N
                 break
         except Exception:
             break
-        await asyncio.sleep(3)
+        await asyncio.sleep(10)
         try:
             payload = await _fetch()
             if payload != last_payload:

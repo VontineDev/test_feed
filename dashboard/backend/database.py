@@ -22,8 +22,9 @@ async def get_pool() -> asyncpg.Pool:
         _pool = await asyncpg.create_pool(
             get_dsn(),
             min_size=2,
-            max_size=6,
+            max_size=20,             # 6 → 20: 10명 동시 사용 여유 (scheduler 8 + 20 = 28, Supabase 60 이내)
             statement_cache_size=0,  # Supabase PgBouncer 필수
+            command_timeout=30,      # 풀 포화 시 무한 대기 방지 — 30초 후 명시적 실패
         )
     return _pool
 
