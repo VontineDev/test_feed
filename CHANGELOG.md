@@ -19,6 +19,7 @@ All notable changes to this project will be documented in this file.
 - **종목분석 모바일 세로 스택 대응** (`dashboard/frontend/src/index.css`): 768px 이하에서 좌우 분할 패널이 세로 스택으로 전환되는 `report-split-*` 미디어쿼리 추가. 모의투자 `paper-split-*` 패턴과 동일.
 - **시작 스크립트 단일화** (`scripts/`): `restart_dashboard.bat`·`start_dashboard_hidden.vbs` 제거. `start_dashboard.ps1`이 수동 시작/재시작의 단일 진입점. Task Scheduler 자동 시작은 `start_dashboard_service.bat` 래퍼가 담당.
 - **대시보드 탭·섹션 이름 직관화** (`dashboard/frontend/src/tabs.ts`, `Report.tsx`): `레포트` 탭 → `종목 분석`, `Stage 분류` 섹션 → `추세 단계`, `차트 스크리닝` 섹션 → `강세 후보 발굴`. 처음 접하는 사용자도 탭 이름만으로 기능을 파악할 수 있도록 한국어 직관명으로 변경. `InfoTip` 컴포넌트(ⓘ)로 호버 시 동작 설명 팝업 표시.
+- **모의투자 성과분석 섹션 제거** (`PaperPortfolio.tsx`): 포지션 탭과 내용이 겹치던 성과분석(누적 P&L 커브·미실현 포지션 리더보드·모델 통계 테이블) 섹션 제거. CSV 다운로드 버튼은 포지션 섹션 헤더 우측으로 이전. `PaperAnalytics.tsx` 컴포넌트 및 관련 테스트 삭제. 번들 크기 350KB → 20KB(recharts 의존성 제거 효과).
 
 ### Fixed
 

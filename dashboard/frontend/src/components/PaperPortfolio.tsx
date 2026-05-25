@@ -3,7 +3,6 @@ import { tokens, pctTextColor } from '../tokens'
 import Positions from './Positions'
 import Scheduler from './Scheduler'
 import TickerHistory from './TickerHistory'
-import PaperAnalytics from './PaperAnalytics'
 
 interface PaperData {
   model_summary: Record<string, Record<string, { count: number; avg_return: number | null }>>
@@ -27,7 +26,6 @@ export default function PaperPortfolio() {
   const [filterModel, setFilterModel] = useState<string | null>(null)
   const splitRightRef = useRef<HTMLDivElement>(null)
   const [posOpen, setPosOpen] = useState(true)
-  const [analyticsOpen, setAnalyticsOpen] = useState(true)
 
   useEffect(() => {
     fetch('/api/report/paper')
@@ -50,6 +48,22 @@ export default function PaperPortfolio() {
     } else {
       setSelectedTicker(ticker)
       setSelectedName(name)
+    }
+  }
+
+  const handleExport = async () => {
+    try {
+      const res = await fetch('/api/paper/export')
+      if (!res.ok) throw new Error(res.statusText)
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `paper_positions_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.csv`
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 100)
+    } catch {
+      alert('CSV 다운로드 실패')
     }
   }
 
@@ -112,13 +126,16 @@ export default function PaperPortfolio() {
       )}
 
       {/* 포지션 섹션 헤더 */}
-      <button style={s.collapseHdr} onClick={() => setPosOpen(o => !o)}>
-        <span style={s.collapseTitle}>포지션</span>
-        {data && (
-          <span style={s.collapseBadge}>{data.open.length}건</span>
-        )}
-        <span style={s.chevron}>{posOpen ? '▲' : '▼'}</span>
-      </button>
+      <div style={s.collapseHdr}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, cursor: 'pointer' }} onClick={() => setPosOpen(o => !o)}>
+          <span style={s.collapseTitle}>포지션</span>
+          {data && (
+            <span style={s.collapseBadge}>{data.open.length}건</span>
+          )}
+          <span style={s.chevron}>{posOpen ? '▲' : '▼'}</span>
+        </div>
+        <button style={s.csvBtn} onClick={handleExport}>CSV</button>
+      </div>
 
       {/* 포지션 + 이력 패널 */}
       {posOpen && (
@@ -192,15 +209,6 @@ export default function PaperPortfolio() {
         </>
       )}
 
-      {/* 성과 분석 */}
-      <div style={analyticsOpen ? { flexShrink: 0, maxHeight: 420, overflowY: 'auto' } : { flexShrink: 0 }}>
-        <PaperAnalytics
-          onSelect={handleSelect}
-          collapsed={!analyticsOpen}
-          onToggle={() => setAnalyticsOpen(o => !o)}
-        />
-      </div>
-
       {/* 스케줄러 */}
       <div style={{ flexShrink: 0 }}>
         <Scheduler />
@@ -218,13 +226,22 @@ const s: Record<string, React.CSSProperties> = {
   statLbl: { fontSize: 9, color: tokens.tx.subtle, marginTop: 1, letterSpacing: '0.03em' },
   collapseHdr: {
     width: '100%', display: 'flex', alignItems: 'center', gap: 8,
-    padding: '7px 12px', background: 'none', border: 'none',
+    padding: '7px 12px',
     borderTop: `1px solid ${tokens.bd.default}`, borderBottom: `1px solid ${tokens.bd.default}`,
-    color: tokens.tx.secondary, cursor: 'pointer', textAlign: 'left', flexShrink: 0,
+    color: tokens.tx.secondary, flexShrink: 0,
   },
   collapseTitle: { fontWeight: 700, fontSize: 11, flex: 1 },
   collapseBadge: { background: tokens.bg.raised, color: tokens.tx.muted, fontSize: 10, padding: '2px 7px', borderRadius: 10 },
   chevron: { fontSize: 10, color: tokens.tx.subtle },
+  csvBtn: {
+    background: tokens.bg.raised,
+    border: `1px solid ${tokens.bd.emphasis}`,
+    borderRadius: 4,
+    color: tokens.tx.secondary,
+    cursor: 'pointer',
+    fontSize: 10,
+    padding: '2px 8px',
+  },
   th: { position: 'sticky', top: 0, background: tokens.bg.row, color: tokens.tx.subtle, padding: '5px 8px', textAlign: 'left', fontWeight: 600, whiteSpace: 'nowrap', borderRight: `1px solid ${tokens.bd.default}`, borderBottom: `1px solid ${tokens.bd.default}` },
   td: { padding: '5px 8px', borderBottom: `1px solid ${tokens.bd.default}`, borderRight: `1px solid ${tokens.bd.default}`, verticalAlign: 'middle' },
 }

@@ -4,6 +4,26 @@ Items deferred from code review and planning sessions.
 
 ---
 
+## P3: 모의투자 — 모델별 요약 카드 + Analytics 통계 테이블 통합
+
+**What:** `PaperPortfolio` 상단의 "모델별 요약" 카드(오픈·대기·청산 건수, 평균수익)와 `PaperAnalytics` 섹션 1의 모델 통계 테이블(거래/승패/승률/평균승패/실현누적/미실현)을 하나로 통합. 모델 카드 클릭 시 통계 행이 확장되는 형태로 재설계.
+
+**Why:** 현재 두 API(`/api/report/paper`, `/api/paper/curve`)에서 유사한 모델별 집계 데이터를 별도로 로드. 사용자 입장에서도 같은 정보가 두 군데 나뉘어 있어 혼란스럽다.
+
+**How to apply:**
+1. `/api/paper/curve` 응답에 `model_summary`(오픈/대기/청산 건수) 필드 병합 — 또는 `/api/report/paper`에 통계 필드 추가
+2. `PaperPortfolio` 상단 카드에 승률·실현누적 컬럼 추가, 클릭 시 전체 통계 행 펼침
+3. `PaperAnalytics` 모델 통계 테이블(섹션 1) 제거
+4. 불필요해진 API 호출 하나 제거
+
+**Pros:** API 호출 1회 감소. 모델별 정보가 한 곳으로. 스크롤 단축.
+**Cons:** 카드 UI가 복잡해짐. 백엔드 API 응답 구조 변경 필요.
+**Effort:** S (human: ~2h / CC: ~30min)
+**Priority:** P3
+**Depends on:** 없음
+
+---
+
 ## P3: MarketSummaryBanner — 앱 레벨 헤더로 승격 (Phase 2)
 
 **What:** `MarketSummaryBanner`를 `Heatmap.tsx` 내부에서 `App.tsx` 최상단 헤더로 이동. 모든 탭(히트맵·종목 분석·Top·모의투자·매크로)에서 항상 표시.
