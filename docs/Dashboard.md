@@ -293,14 +293,26 @@ KOSPI/KOSDAQ 지수 현재가 + 등락률을 반환합니다. KRX OpenAPI + yfin
 
 ```json
 {
-  "kospi":  { "close": 2650.12, "change_pct": 0.45, "prev_close": 2638.30, "status": "장마감" },
-  "kosdaq": { "close":  870.54, "change_pct": -0.12, "prev_close": 871.59, "status": "장마감" },
+  "market_status": "closed",
+  "is_realtime": false,
+  "kospi":  { "close": 2650.12, "change_pct": 0.45, "prev_close": 2638.30 },
+  "kosdaq": { "close":  870.54, "change_pct": -0.12, "prev_close": 871.59 },
   "sentiment": "보합",
-  "cached_at": "2026-05-24T17:05:00+09:00"
+  "sentiment_detail": "큰 방향성 없이 혼조",
+  "as_of": "2026-05-24T17:05:00+09:00"
 }
 ```
 
-**sentiment 값:** `강세` / `상승` / `보합` / `하락` / `급락` (KOSPI+KOSDAQ 등락률 가중 평균 기준)
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| `market_status` | string | `open` (장중) / `closed` (장마감·주말) |
+| `is_realtime` | bool | `true` = yfinance 장중 실시간, `false` = KRX 확정 종가 |
+| `kospi` / `kosdaq` | object\|null | 지수 없는 날 `null` |
+| `sentiment` | string | `강세` / `상승` / `보합` / `하락` / `급락` |
+| `sentiment_detail` | string | 한국어 한 줄 설명 |
+| `as_of` | string | ISO 8601 KST 타임스탬프 |
+
+**sentiment 판정:** KOSPI/KOSDAQ 등락률 단순 평균 기준. ±0.5% 이내 = 보합, ±2.0% 초과 = 강세/급락.
 
 `MarketSummaryBanner` 컴포넌트가 이 엔드포인트를 5분 주기로 폴링합니다.
 

@@ -4,17 +4,18 @@ Items deferred from code review and planning sessions.
 
 ---
 
-## P3: 모의투자 — 모델별 요약 카드 + Analytics 통계 테이블 통합
+## P3: 모의투자 — 모델별 요약 카드에 통계 통합
 
-**What:** `PaperPortfolio` 상단의 "모델별 요약" 카드(오픈·대기·청산 건수, 평균수익)와 `PaperAnalytics` 섹션 1의 모델 통계 테이블(거래/승패/승률/평균승패/실현누적/미실현)을 하나로 통합. 모델 카드 클릭 시 통계 행이 확장되는 형태로 재설계.
+**What:** `PaperPortfolio` 상단의 "모델별 요약" 카드(오픈·대기·청산 건수, 평균수익)에 승률·실현누적 통계를 추가. 모델 카드 클릭 시 통계 행이 확장되는 형태로 재설계.
 
-**Why:** 현재 두 API(`/api/report/paper`, `/api/paper/curve`)에서 유사한 모델별 집계 데이터를 별도로 로드. 사용자 입장에서도 같은 정보가 두 군데 나뉘어 있어 혼란스럽다.
+> **컨텍스트:** `PaperAnalytics.tsx` 컴포넌트(모델 통계 테이블·누적 P&L 커브·미실현 포지션 리더보드)는 v0.9.9.0에서 제거됨. 현재 `/api/paper/curve` 엔드포인트는 여전히 모델 통계를 반환하지만 프론트엔드에서 사용하지 않음.
+
+**Why:** `/api/report/paper`와 `/api/paper/curve` 두 API가 유사한 모델별 집계 데이터를 별도 로드. 카드에 통계가 없어 모델 성과를 확인하려면 별도 조회 필요.
 
 **How to apply:**
 1. `/api/paper/curve` 응답에 `model_summary`(오픈/대기/청산 건수) 필드 병합 — 또는 `/api/report/paper`에 통계 필드 추가
 2. `PaperPortfolio` 상단 카드에 승률·실현누적 컬럼 추가, 클릭 시 전체 통계 행 펼침
-3. `PaperAnalytics` 모델 통계 테이블(섹션 1) 제거
-4. 불필요해진 API 호출 하나 제거
+3. 불필요해진 `/api/paper/curve` API 호출 제거 (프론트엔드 미사용 상태)
 
 **Pros:** API 호출 1회 감소. 모델별 정보가 한 곳으로. 스크롤 단축.
 **Cons:** 카드 UI가 복잡해짐. 백엔드 API 응답 구조 변경 필요.
