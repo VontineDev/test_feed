@@ -4,6 +4,7 @@ import DateRangeBar, { DatePreset, computeRange } from './DateRangeBar'
 import HistoryStageView from './HistoryStageView'
 import HistoryScreenerView from './HistoryScreenerView'
 import StageHistoryPopup from './StageHistoryPopup'
+import InfoTip from './InfoTip'
 
 // ── 타입 ────────────────────────────────────────────────────
 type StageRow = { ticker: string; name: string; sector: string | null; s1_high: number | null; s1_volume: number | null; peakout_flag: boolean }
@@ -27,41 +28,6 @@ interface ScreenerData {
 // ── 유틸 ────────────────────────────────────────────────────
 const fmt = (v: number | null | undefined, digits = 0) =>
   v == null ? '—' : v.toLocaleString('ko-KR', { maximumFractionDigits: digits })
-
-// ── 툴팁 ─────────────────────────────────────────────────────
-function InfoTip({ text }: { text: string }) {
-  const [show, setShow] = useState(false)
-  return (
-    <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
-      <span
-        style={{ cursor: 'help', color: tokens.tx.subtle, fontSize: 11, marginLeft: 4, userSelect: 'none' }}
-        onMouseEnter={() => setShow(true)}
-        onMouseLeave={() => setShow(false)}
-      >ⓘ</span>
-      {show && (
-        <span style={{
-          position: 'absolute',
-          left: '110%',
-          top: '50%',
-          transform: 'translateY(-50%)',
-          background: tokens.bg.raised,
-          border: `1px solid ${tokens.bd.emphasis}`,
-          color: tokens.tx.secondary,
-          fontSize: 11,
-          lineHeight: 1.5,
-          padding: '6px 10px',
-          borderRadius: 4,
-          whiteSpace: 'normal',
-          width: 240,
-          zIndex: 100,
-          pointerEvents: 'none',
-        }}>
-          {text}
-        </span>
-      )}
-    </span>
-  )
-}
 
 // ── 섹션 컨테이너 ────────────────────────────────────────────
 function Section({ title, badge, tooltip, children, defaultOpen = true }: {
