@@ -27,9 +27,10 @@ import json
 import logging
 import os
 import secrets
-import time
+import time as _time_module
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -75,6 +76,12 @@ _TOP_LOCK = asyncio.Lock()
 _MACRO_CACHE: dict = {"data": None, "expires": 0.0}
 _MACRO_TTL = 600  # 10분 (yfinance 다운로드 비용 고려)
 _MACRO_LOCK = asyncio.Lock()
+
+# ── 시장 지수 캐시 (5분) ─────────────────────────────────────
+_MARKET_INDEX_CACHE: dict = {"data": None, "expires": 0.0}
+_MARKET_INDEX_TTL = 300  # 5분
+_MARKET_INDEX_LOCK = asyncio.Lock()
+_KST = ZoneInfo("Asia/Seoul")
 
 
 # ── lifespan ──────────────────────────────────────────────────
@@ -186,7 +193,7 @@ async def _fetch_current_prices(
     """
     if not tickers:
         return {}
-    now = time.time()
+    now = _time_module.time()
     if _POS_PRICE_CACHE["data"] and now < _POS_PRICE_CACHE["expires"]:
         return _POS_PRICE_CACHE["data"]
 
@@ -298,7 +305,7 @@ async def _build_heatmap_data() -> list[dict]:
 # ── GET /api/heatmap ──────────────────────────────────────────
 @app.get("/api/heatmap")
 async def get_heatmap():
-    now = time.time()
+    now = _time_module.time()
     # 가격 캐시 만료 시 stage 구조 유지하고 가격만 갱신
     if _HEATMAP_CACHE["data"] and now < _HEATMAP_CACHE["expires"]:
         return {"data": _HEATMAP_CACHE["data"], "cached": True}
@@ -759,7 +766,7 @@ async def get_paper_report():
 def _get_kiwoom_token() -> str:
     """키움 OAuth 토큰 반환 (23h 캐시, 만료 시 재발급)."""
     global _KIWOOM_TOKEN, _KIWOOM_TOKEN_TS
-    now = time.time()
+    now = _time_module.time()
     if _KIWOOM_TOKEN and now - _KIWOOM_TOKEN_TS < _KIWOOM_TOKEN_TTL:
         return _KIWOOM_TOKEN
     appkey = os.environ.get("KIWOOM_APPKEY")
@@ -790,7 +797,7 @@ def _fetch_top_kiwoom(n: int) -> dict:
             client = KiwoomClient(use_mock=False)
             client.inject_token(_get_kiwoom_token())
             items = client.fetch_top_volume(n=n)
-            return {"items": items, "fetched_at": time.strftime("%H:%M:%S")}
+            return {"items": items, "fetched_at": _time_module.strftime("%H:%M:%S")}
         except _requests.HTTPError as e:
             if e.response is not None and e.response.status_code == 401 and attempt == 0:
                 logger.warning("[top] 401 수신 — 토큰 무효화 후 재시도")
@@ -808,11 +815,11 @@ async def get_top(n: int = 50, refresh: bool = False):
     EPS는 Naver Finance에서 병렬 조회 후 각 항목에 추가.
     """
     n = min(max(n, 1), 100)
-    now = time.time()
+    now = _time_module.time()
     if not refresh and _TOP_CACHE["data"] and now < _TOP_CACHE["expires"]:
         return _TOP_CACHE["data"]
     async with _TOP_LOCK:
-        now = time.time()
+        now = _time_module.time()
         if not refresh and _TOP_CACHE["data"] and now < _TOP_CACHE["expires"]:
             return _TOP_CACHE["data"]
         try:
@@ -1383,8 +1390,125 @@ def _run_macro_analysis() -> dict:
     return {
         "snapshot":   snapshot,
         "stocks":     stocks,
-        "fetched_at": time.strftime("%H:%M:%S"),
+        "fetched_at": _time_module.strftime("%H:%M:%S"),
     }
+
+
+def _market_sentiment(
+    kospi_pct: float | None,
+    kosdaq_pct: float | None,
+) -> tuple[str, str]:
+    """KOSPI/KOSDAQ 등락률 → (sentiment, detail) 규칙 기반 분류."""
+    if kospi_pct is None and kosdaq_pct is None:
+        return "정보없음", "지수 데이터 로딩 실패"
+
+    available = [p for p in (kospi_pct, kosdaq_pct) if p is not None]
+    avg = sum(available) / len(available)
+    both = kospi_pct is not None and kosdaq_pct is not None
+
+    if avg >= 2.0:
+        detail = "코스피/코스닥 모두 급등 — 매수세 강함" if both else "지수 급등 — 매수세 강함 (코스피 기준)"
+        return "강세", detail
+    elif avg >= 0.5:
+        return "상승", f"시장 전반 오름세{'' if both else ' (코스피 기준)'}"
+    elif avg >= -0.5:
+        return "보합", f"큰 방향성 없이 혼조{'' if both else ' (코스피 기준)'}"
+    elif avg >= -2.0:
+        return "하락", f"시장 전반 내림세{'' if both else ' (코스피 기준)'}"
+    else:
+        detail = "코스피/코스닥 모두 하락폭 커짐" if both else "지수 급락 — 낙폭 확대 (코스피 기준)"
+        return "급락", detail
+
+
+@app.get("/api/market_index")
+async def get_market_index():
+    """KOSPI / KOSDAQ 지수 등락률 + 시장 감성 (5분 캐시).
+
+    장중: yfinance ^KS11/^KQ11 현재가 + KRX BASPRC_IDX(기준가) → change_pct 계산.
+    장마감/주말: KRX OpenAPI 확정값.
+    응답: {market_status, is_realtime, kospi, kosdaq, sentiment, sentiment_detail, as_of}
+    """
+    now = _time_module.time()
+    async with _MARKET_INDEX_LOCK:
+        if _MARKET_INDEX_CACHE["data"] and now < _MARKET_INDEX_CACHE["expires"]:
+            return _MARKET_INDEX_CACHE["data"]
+
+    now_kst = datetime.now(_KST)
+    is_open = (
+        now_kst.weekday() < 5
+        and time(9, 0) <= now_kst.time() < time(15, 31)
+    )
+    bas_dd = now_kst.strftime("%Y%m%d")
+
+    def _fetch_krx():
+        try:
+            from data.krx_openapi import get_client as _krx_client
+            client = _krx_client()
+            return (
+                client.get_kospi_index_ohlcv(bas_dd),
+                client.get_kosdaq_index_ohlcv(bas_dd),
+            )
+        except Exception as e:
+            logger.warning("[market_index] KRX 조회 실패: %s", e)
+            return None, None
+
+    def _fetch_realtime():
+        try:
+            import yfinance as _yf
+            hist = _yf.download(["^KS11", "^KQ11"], period="1d", interval="1m",
+                                auto_adjust=True, progress=False, threads=True)
+            if hist.empty:
+                return None, None
+            close_df = hist["Close"]
+            ks = float(close_df["^KS11"].dropna().iloc[-1]) if "^KS11" in close_df.columns else None
+            kq = float(close_df["^KQ11"].dropna().iloc[-1]) if "^KQ11" in close_df.columns else None
+            return ks, kq
+        except Exception as e:
+            logger.warning("[market_index] yfinance 실시간 조회 실패: %s", e)
+            return None, None
+
+    krx_kospi, krx_kosdaq = await asyncio.to_thread(_fetch_krx)
+
+    is_realtime = False
+    kospi_close = krx_kospi["close"] if krx_kospi else None
+    kosdaq_close = krx_kosdaq["close"] if krx_kosdaq else None
+
+    if is_open and (krx_kospi or krx_kosdaq):
+        rt_ks, rt_kq = await asyncio.to_thread(_fetch_realtime)
+        if rt_ks:
+            kospi_close = rt_ks
+            is_realtime = True
+        if rt_kq:
+            kosdaq_close = rt_kq
+            is_realtime = True
+
+    def _pct(close, prev):
+        if close and prev and prev > 0:
+            return round((close - prev) / prev * 100, 2)
+        return None
+
+    kospi_prev  = krx_kospi["prev_close"]  if krx_kospi  else None
+    kosdaq_prev = krx_kosdaq["prev_close"] if krx_kosdaq else None
+    kospi_pct   = _pct(kospi_close,  kospi_prev)
+    kosdaq_pct  = _pct(kosdaq_close, kosdaq_prev)
+
+    sentiment, sentiment_detail = _market_sentiment(kospi_pct, kosdaq_pct)
+
+    result = {
+        "market_status":    "open" if is_open else "closed",
+        "is_realtime":      is_realtime,
+        "kospi":  {"change_pct": kospi_pct,  "close": kospi_close,  "prev_close": kospi_prev}  if kospi_close  else None,
+        "kosdaq": {"change_pct": kosdaq_pct, "close": kosdaq_close, "prev_close": kosdaq_prev} if kosdaq_close else None,
+        "sentiment":        sentiment,
+        "sentiment_detail": sentiment_detail,
+        "as_of":            now_kst.isoformat(),
+    }
+
+    async with _MARKET_INDEX_LOCK:
+        _MARKET_INDEX_CACHE["data"] = result
+        _MARKET_INDEX_CACHE["expires"] = _time_module.time() + _MARKET_INDEX_TTL
+
+    return result
 
 
 @app.get("/api/macro")
@@ -1395,12 +1519,12 @@ async def get_macro(refresh: bool = False):
     최초 호출 시 yfinance 다운로드로 30~60초 소요.
     이후 캐시에서 즉시 반환.
     """
-    now = time.time()
+    now = _time_module.time()
     if not refresh and _MACRO_CACHE["data"] and now < _MACRO_CACHE["expires"]:
         return {**_MACRO_CACHE["data"], "cached": True}
 
     async with _MACRO_LOCK:
-        now = time.time()
+        now = _time_module.time()
         if not refresh and _MACRO_CACHE["data"] and now < _MACRO_CACHE["expires"]:
             return {**_MACRO_CACHE["data"], "cached": True}
         try:

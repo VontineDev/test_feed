@@ -30,10 +30,10 @@ PostgreSQL (Supabase)
 
 | 탭 | 컴포넌트 | 기능 |
 |----|----------|------|
-| 히트맵 | `Heatmap.tsx` | 당일 거래대금 상위 50종목(Kiwoom ka10032). 셀 크기=실제 거래대금, 색상=등락률. Stage 분류 종목은 컬러 테두리 오버레이. 5분 자동갱신 |
-| 레포트 | `Report.tsx` | Stage 분류 결과 + 차트 스크리닝 결과. 날짜 범위 선택(오늘/-3일/-1주/-2주/-1달)으로 이력 조회 가능. 종목 클릭 시 Stage·스크리너 이력 팝업 |
+| 히트맵 | `Heatmap.tsx` | 당일 거래대금 상위 50종목(Kiwoom ka10032). 셀 크기=실제 거래대금, 색상=등락률. Stage 분류 종목은 컬러 테두리 오버레이. 5분 자동갱신. 상단에 `MarketSummaryBanner` — KOSPI/KOSDAQ 지수 + 시장 심리 한마디 표시 |
+| 종목 분석 | `Report.tsx` | 추세 단계(Stage 분류) + 강세 후보 발굴(차트 스크리닝) 결과. 날짜 범위 선택(오늘/-3일/-1주/-2주/-1달)으로 이력 조회 가능. 종목 클릭 시 우측 패널 분할(55%/45%)로 Stage·스크리너 이력 표시; 같은 종목 재클릭 또는 날짜 변경 시 패널 닫힘. 768px 이하 모바일에서는 세로 스택 전환. 섹션 헤더 ⓘ 호버 시 기능 설명 팝업 |
 | Top | `Top.tsx` | 당일 거래대금 상위 20종목. Kiwoom ka10032 API, 5분 캐시 |
-| 모의투자 | `PaperPortfolio.tsx` | 모델별 요약 + 실시간 포지션(60s 갱신) + 청산 이력 + 스케줄러 컨트롤 + 성과분석(누적 P&L 커브·미실현 리더보드·CSV 다운로드). 모델 카드 클릭으로 포지션 필터링 |
+| 모의투자 | `PaperPortfolio.tsx` | 모델별 요약 + 실시간 포지션(60s 갱신) + 청산 이력 + CSV 다운로드(포지션 헤더 버튼) + 스케줄러 컨트롤. 모델 카드 클릭으로 포지션 필터링 |
 | 매크로 | `Macro.tsx` | OLS 팩터 모델 6개 매크로 팩터(USD/KRW·기준금리·KOSPI 52주 고저비·VIX·구리/금 비율·10Y-2Y 스프레드) 추적. `--scenario` CLI로 시나리오별 시뮬레이션 가능 |
 | 시그널 (우측 패널/모바일) | `SignalFeed.tsx` | 실시간 매매 신호 SSE 스트림. 15초 폴링 |
 
@@ -287,9 +287,40 @@ data: [{"id": 123, "direction": "BUY", "strength": 4, ...}]
 
 ---
 
+### GET /api/market_index
+
+KOSPI/KOSDAQ 지수 현재가 + 등락률을 반환합니다. KRX OpenAPI + yfinance 혼합 조회, 5분 TTL 캐시.
+
+```json
+{
+  "market_status": "closed",
+  "is_realtime": false,
+  "kospi":  { "close": 2650.12, "change_pct": 0.45, "prev_close": 2638.30 },
+  "kosdaq": { "close":  870.54, "change_pct": -0.12, "prev_close": 871.59 },
+  "sentiment": "보합",
+  "sentiment_detail": "큰 방향성 없이 혼조",
+  "as_of": "2026-05-24T17:05:00+09:00"
+}
+```
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| `market_status` | string | `open` (장중) / `closed` (장마감·주말) |
+| `is_realtime` | bool | `true` = yfinance 장중 실시간, `false` = KRX 확정 종가 |
+| `kospi` / `kosdaq` | object\|null | 지수 없는 날 `null` |
+| `sentiment` | string | `강세` / `상승` / `보합` / `하락` / `급락` |
+| `sentiment_detail` | string | 한국어 한 줄 설명 |
+| `as_of` | string | ISO 8601 KST 타임스탬프 |
+
+**sentiment 판정:** KOSPI/KOSDAQ 등락률 단순 평균 기준. ±0.5% 이내 = 보합, ±2.0% 초과 = 강세/급락.
+
+`MarketSummaryBanner` 컴포넌트가 이 엔드포인트를 5분 주기로 폴링합니다.
+
+---
+
 ### GET /api/history/ticker/{ticker}
 
-특정 종목의 Stage 분류 이력과 스크리너 등장 이력을 함께 반환합니다.
+특정 종목의 추세 단계 이력과 강세 후보 등장 이력을 함께 반환합니다.
 
 **경로 파라미터:** `ticker` — yfinance 심볼 (예: `005930.KS`)  
 **쿼리 파라미터:** `?start=2026-04-01&end=2026-05-20` (기본 14일)
@@ -314,7 +345,7 @@ data: [{"id": 123, "direction": "BUY", "strength": 4, ...}]
 
 ### GET /api/paper/curve
 
-모델별 누적 P&L 시계열, 집계 통계, ticker_name_map, 미실현 포지션 현재가를 단일 응답으로 반환합니다. `PaperAnalytics` 컴포넌트가 호출합니다.
+모델별 누적 P&L 시계열, 집계 통계, ticker_name_map, 미실현 포지션 현재가를 단일 응답으로 반환합니다.
 
 **응답:**
 ```json
@@ -412,7 +443,7 @@ uvicorn main:app --port 8000
 768px 이하에서 다음과 같이 작동합니다:
 
 - 데스크탑 레이아웃(`app-desktop-layout`) 숨김
-- 하단 탭바(`MobileNav`) 표시 — 히트맵·레포트·Top·모의투자·시그널 5탭
+- 하단 탭바(`MobileNav`) 표시 — 히트맵·종목 분석·Top·모의투자·시그널 5탭
 - 탭별 컴포넌트가 전체 화면을 차지
 - 히트맵은 `.heatmap-root` CSS 클래스로 명시적 높이 부여(`100svh - 42px - 56px`) — `ResponsiveTreeMap`이 높이를 필요로 하기 때문
 

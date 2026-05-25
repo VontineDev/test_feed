@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { tokens } from '../tokens'
+import InfoTip from './InfoTip'
 
 interface StageRow {
   classified_date: string
@@ -22,6 +23,7 @@ interface Props {
   start: string
   end: string
   onClose: () => void
+  mode?: 'modal' | 'panel'
 }
 
 const STAGE_COLOR: Record<number, string> = {
@@ -33,7 +35,7 @@ const STAGE_COLOR: Record<number, string> = {
 const fmt = (v: number | null | undefined, digits = 0) =>
   v == null ? '—' : v.toLocaleString('ko-KR', { maximumFractionDigits: digits })
 
-export default function StageHistoryPopup({ ticker, name, start, end, onClose }: Props) {
+export default function StageHistoryPopup({ ticker, name, start, end, onClose, mode = 'modal' }: Props) {
   const [stageHistory, setStageHistory] = useState<StageRow[]>([])
   const [screenerHistory, setScreenerHistory] = useState<ScreenerRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -59,13 +61,8 @@ export default function StageHistoryPopup({ ticker, name, start, end, onClose }:
       })
   }, [ticker, start, end])
 
-  return (
-    <>
-      {/* 배경 오버레이 */}
-      <div style={s.overlay} onClick={onClose} />
-
-      {/* 팝업 패널 */}
-      <div style={s.panel}>
+  const content = (
+    <div style={mode === 'panel' ? s.panelInline : s.panel}>
         {/* 헤더 */}
         <div style={s.header}>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -97,9 +94,19 @@ export default function StageHistoryPopup({ ticker, name, start, end, onClose }:
                   <table style={s.table}>
                     <thead>
                       <tr>
-                        {['날짜', 'Stage', '진입고가', '피크아웃'].map(h => (
-                          <th key={h} style={s.th}>{h}</th>
-                        ))}
+                        {([
+                          '날짜', 'Stage',
+                          { label: 'S1 고가', tip: 'Stage 1으로 분류된 날의 당일 고가. 진입 시점 가격 압박을 가늠하는 기준점.' },
+                          { label: '고점 이탈', tip: '외국인·기관 동시 순매도 또는 윗꼬리+거래량 급증 감지. 단기 고점에서 매물 압력이 집중된 신호.' },
+                        ] as const).map(h => {
+                          const label = typeof h === 'string' ? h : h.label
+                          const tip   = typeof h === 'object' ? h.tip : undefined
+                          return (
+                            <th key={label} style={s.th}>
+                              {label}{tip && <InfoTip text={tip} width={220} zIndex={200} />}
+                            </th>
+                          )
+                        })}
                       </tr>
                     </thead>
                     <tbody>
@@ -124,9 +131,9 @@ export default function StageHistoryPopup({ ticker, name, start, end, onClose }:
               )}
 
               {/* 스크리너 이력 */}
-              <div style={{ ...s.sectionTitle, marginTop: 14 }}>차트 스크리너 이력</div>
+              <div style={{ ...s.sectionTitle, marginTop: 14 }}>강세 후보 이력</div>
               {screenerHistory.length === 0 ? (
-                <div style={s.empty}>스크리너 이력 없음</div>
+                <div style={s.empty}>강세 후보 이력 없음</div>
               ) : (
                 <div style={s.tableWrap}>
                   <table style={s.table}>
@@ -158,6 +165,13 @@ export default function StageHistoryPopup({ ticker, name, start, end, onClose }:
           )}
         </div>
       </div>
+  )
+
+  if (mode === 'panel') return content
+  return (
+    <>
+      <div style={s.overlay} onClick={onClose} />
+      {content}
     </>
   )
 }
@@ -171,7 +185,13 @@ const s: Record<string, React.CSSProperties> = {
     background: tokens.bg.row, border: `1px solid ${tokens.bd.default}`, borderRadius: 10,
     display: 'flex', flexDirection: 'column',
     top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
-    width: 'min(480px, 95vw)', maxHeight: '80vh',
+    width: 'min(680px, 95vw)', maxHeight: '80vh',
+    overflow: 'hidden',
+  },
+  panelInline: {
+    display: 'flex', flexDirection: 'column',
+    width: '100%', height: '100%',
+    background: tokens.bg.row,
     overflow: 'hidden',
   },
   header: {

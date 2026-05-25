@@ -155,26 +155,54 @@ class KRXOpenAPIClient:
         return self._get("/idx/kospi_dd_trd", bas_dd)
 
     def get_kospi_index_ohlcv(self, bas_dd: str) -> Optional[dict]:
-        """KOSPI (종합지수) 하루 OHLCV → daily_ohlcv 저장용.
+        """KOSPI (종합지수) 하루 OHLCV + prev_close → market_index 용.
 
-        반환: {symbol, market, date, open, high, low, close, volume}
+        반환: {symbol, market, date, open, high, low, close, volume, prev_close}
         """
         rows = self.get_kospi_index(bas_dd)
-        # "KOSPI" 종합지수 행만 사용
         for row in rows:
             if row.get("IDX_NM", "") == "KOSPI":
                 close = _to_float(row.get("CLSPRC_IDX"))
                 if close is None:
                     return None
                 return {
-                    "symbol": "^KS11",
-                    "market": "IDX",
-                    "date":   _parse_date(bas_dd),
-                    "open":   _to_float(row.get("OPNPRC_IDX")),
-                    "high":   _to_float(row.get("HGPRC_IDX")),
-                    "low":    _to_float(row.get("LWPRC_IDX")),
-                    "close":  close,
-                    "volume": _to_int(row.get("ACC_TRDVOL")),
+                    "symbol":     "^KS11",
+                    "market":     "IDX",
+                    "date":       _parse_date(bas_dd),
+                    "open":       _to_float(row.get("OPNPRC_IDX")),
+                    "high":       _to_float(row.get("HGPRC_IDX")),
+                    "low":        _to_float(row.get("LWPRC_IDX")),
+                    "close":      close,
+                    "volume":     _to_int(row.get("ACC_TRDVOL")),
+                    "prev_close": _to_float(row.get("BASPRC_IDX")),
+                }
+        return None
+
+    def get_kosdaq_index(self, bas_dd: str) -> list[dict]:
+        """KOSDAQ 지수 시세 (IDX_NM, CLSPRC_IDX 등)."""
+        return self._get("/idx/ksq_dd_trd", bas_dd)
+
+    def get_kosdaq_index_ohlcv(self, bas_dd: str) -> Optional[dict]:
+        """KOSDAQ (종합지수) 하루 OHLCV + prev_close → market_index 용.
+
+        반환: {symbol, market, date, open, high, low, close, volume, prev_close}
+        """
+        rows = self.get_kosdaq_index(bas_dd)
+        for row in rows:
+            if row.get("IDX_NM", "") in ("코스닥", "코스닥종합", "KOSDAQ"):
+                close = _to_float(row.get("CLSPRC_IDX"))
+                if close is None:
+                    return None
+                return {
+                    "symbol":     "^KQ11",
+                    "market":     "IDX",
+                    "date":       _parse_date(bas_dd),
+                    "open":       _to_float(row.get("OPNPRC_IDX")),
+                    "high":       _to_float(row.get("HGPRC_IDX")),
+                    "low":        _to_float(row.get("LWPRC_IDX")),
+                    "close":      close,
+                    "volume":     _to_int(row.get("ACC_TRDVOL")),
+                    "prev_close": _to_float(row.get("BASPRC_IDX")),
                 }
         return None
 

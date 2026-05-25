@@ -46,6 +46,67 @@ Line 예측/미실현: strokeWidth 1, strokeDasharray="4 2"
 - 로딩: "…" 텍스트 · 스피너 ✕
 - 에러: 인라인 빨강 텍스트 11–12px
 
+### 분할 패널 패턴 (Master–Detail Split)
+
+목록에서 행을 선택하면 오른쪽(또는 아래)에 상세 패널이 열리는 패턴.
+모의투자(PaperPortfolio) · 종목분석(Report) 탭에서 사용 중.
+
+**구조 (3-클래스)**
+```tsx
+const splitRightRef = useRef<HTMLDivElement>(null)
+
+// 패널 열릴 때 자동 스크롤 (모바일 세로 스택 대응)
+useEffect(() => {
+  if (selected && splitRightRef.current) {
+    splitRightRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }
+}, [selected])
+
+<div className="XXX-split-container"  style={{ flex:1, display:'flex', overflow:'hidden', minHeight:0 }}>
+  <div className="XXX-split-left"     style={{ flex: selected ? '0 0 55%' : 1, minWidth:0, overflowY:'auto', transition:'flex 0.15s',
+                                                borderRight: selected ? `1px solid ${tokens.bd.default}` : undefined }}>
+    {/* 목록 */}
+  </div>
+  {selected && (
+    <div ref={splitRightRef} className="XXX-split-right" style={{ flex:'0 0 45%', minWidth:0, overflowY:'auto' }}>
+      {/* 상세 패널 */}
+    </div>
+  )}
+</div>
+```
+
+**모바일 대응 (index.css에 추가)**
+```css
+@media (max-width: 768px) {
+  .XXX-split-container { flex-wrap: wrap !important; overflow: visible !important; }
+  .XXX-split-left      { flex: none !important; width: 100% !important;
+                         border-right: none !important; border-bottom: 1px solid #1e293b; }
+  .XXX-split-right     { flex: none !important; width: 100% !important; min-height: 260px; }
+}
+```
+
+**슬라이드인 애니메이션 (index.css에 한 번만 추가 — 전역 공유)**
+```css
+@keyframes split-panel-enter        { from { opacity:0; transform:translateX(10px); } to { opacity:1; transform:translateX(0); } }
+@keyframes split-panel-enter-mobile { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+
+.XXX-split-right { animation: split-panel-enter 0.15s ease-out; }
+
+@media (max-width: 768px) {
+  .XXX-split-right { animation: split-panel-enter-mobile 0.2s ease-out; }
+}
+```
+> 이미 `report-split-right`, `paper-split-right`에 적용돼 있으므로 신규 컴포넌트는
+> `.XXX-split-right` 셀렉터만 기존 규칙에 추가하면 된다.
+
+**규칙**
+- `XXX`는 탭/컴포넌트 이름으로 교체 (`paper`, `report` 등)
+- 선택 토글: 같은 행 재클릭 시 패널 닫힘, 프리셋·날짜 변경 시 자동 닫힘
+- 상세 패널이 팝업(모달)을 겸하는 경우 `mode='panel'` prop으로 분기
+  (`StageHistoryPopup` 참고 — overlay 없이 부모 영역 채우는 방식)
+- `scrollIntoView` + 슬라이드인은 세트로 항상 함께 적용할 것:
+  스크롤은 모바일에서 패널을 화면에 가져오고, 애니메이션은 데스크탑에서 열림을 인지시킴
+
 ### 레이아웃
 - 컴포넌트 루트는 flex-column · height 100%
 - 모바일에서 컴포넌트 자체 스크롤 금지 (.app-mobile-layout이 스크롤)

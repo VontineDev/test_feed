@@ -8,8 +8,8 @@ Long polling 방식으로 명령어를 수신하고 DB 조회 결과를 응답.
     /signals  — 최근 매매 신호 10건 (BUY/SELL/WATCH)
     /today    — 오늘 수집된 기사 요약 (카테고리별 건수 + 최신 5건)
     /backtest  — 통합 백테스트 (ichimoku / stage / cross 모드)
-    /screener  — 최신 주봉 차트 스크리닝 결과 (DB 조회, 명령어 발신자에게만 전송)
-    /scan      — 주봉 스크리닝 즉시 실행 (전 종목 실시간 스캔, 결과 저장 후 발신자에게 전송)
+    /screener  — 최신 강세 후보 발굴 결과 (DB 조회, 명령어 발신자에게만 전송)
+    /scan      — 강세 후보 즉시 스캔 (전 종목 실시간 스캔, 결과 저장 후 발신자에게 전송)
     /buy       — 진입 기록 (거래 저널)
     /sell      — 청산 기록 (FIFO)
     /port      — 보유 현황 + 미실현 P&L
@@ -149,6 +149,31 @@ async def _handle_status(http: httpx.AsyncClient, chat_id: str, pool) -> None:
                 "SELECT COUNT(*) FROM trade_signals WHERE detected_at >= NOW() - INTERVAL '24 hours'"
             )
 
+    # 시장 현황 (KRX 직접 호출 — 대시보드 독립적)
+    market_line = ""
+    try:
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo as _ZI
+        from data.krx_openapi import get_client as _krx_client
+        _kst = _ZI("Asia/Seoul")
+        _bas = _dt.now(_kst).strftime("%Y%m%d")
+        _client = _krx_client()
+        _ks = _client.get_kospi_index_ohlcv(_bas)
+        _kq = _client.get_kosdaq_index_ohlcv(_bas)
+
+        def _fmt(label: str, d: dict | None) -> str:
+            if not d or not d.get("close") or not d.get("prev_close"):
+                return ""
+            pct = (d["close"] - d["prev_close"]) / d["prev_close"] * 100
+            arrow = "▲" if pct > 0 else "▼" if pct < 0 else "–"
+            return f"{label} {arrow}{abs(pct):.2f}%"
+
+        parts = [s for s in (_fmt("코스피", _ks), _fmt("코스닥", _kq)) if s]
+        if parts:
+            market_line = f"📈 시장: {esc(' / '.join(parts))}"
+    except Exception as _e:
+        logger.debug("[status] 시장 현황 조회 실패: %s", _e)
+
     lines = [
         "📡 *크롤러 상태*",
         "",
@@ -158,6 +183,8 @@ async def _handle_status(http: httpx.AsyncClient, chat_id: str, pool) -> None:
         f"🎯 최근 24h 신호: {esc(str(signal_count))}건",
         f"🌐 피드: Reuters \\+ Investing \\+ CNBC",
     ]
+    if market_line:
+        lines.insert(2, market_line)
     await _send(http, chat_id, "\n".join(lines))
 
 
@@ -492,7 +519,7 @@ async def _handle_top(http: httpx.AsyncClient, chat_id: str, args: list[str]) ->
 
 
 async def _handle_screener(http: httpx.AsyncClient, chat_id: str, pool) -> None:
-    """/screener — 최신 주봉 차트 스크리닝 결과 (DB 조회 후 DM + 채널 동시 발송)"""
+    """/screener — 최신 강세 후보 발굴 결과 (DB 조회 후 DM + 채널 동시 발송)"""
     if not pool:
         await _send(http, chat_id, "DB 미연결 상태입니다\\.")
         return
@@ -503,7 +530,7 @@ async def _handle_screener(http: httpx.AsyncClient, chat_id: str, pool) -> None:
     week, rows = await load_chart_signals_latest(pool)
     if not rows:
         await _send(http, chat_id,
-            "스크리닝 결과가 없습니다\\.\n매주 일요일 20:30에 업데이트됩니다\\.")
+            "강세 후보 결과가 없습니다\\.\n매주 일요일 20:30에 업데이트됩니다\\.")
         return
 
     results = [
@@ -529,18 +556,18 @@ async def _handle_screener(http: httpx.AsyncClient, chat_id: str, pool) -> None:
 
 
 async def _handle_scan(http: httpx.AsyncClient, chat_id: str, pool) -> None:
-    """/scan — 주봉 스크리닝 즉시 실행 (전 종목 실시간 스캔, 결과 저장 후 발신자에게 전송)"""
+    """/scan — 강세 후보 즉시 스캔 (전 종목 실시간 스캔, 결과 저장 후 발신자에게 전송)"""
     if not pool:
         await _send(http, chat_id, "DB 미연결 상태입니다\\.")
         return
 
     if _scan_lock.locked():
-        await _send(http, chat_id, "⏳ 스크리닝이 이미 실행 중입니다\\. 완료 후 결과가 전송됩니다\\.")
+        await _send(http, chat_id, "⏳ 강세 후보 스캔이 이미 실행 중입니다\\. 완료 후 결과가 전송됩니다\\.")
         return
 
     async with _scan_lock:
         await _send(http, chat_id,
-            "🔍 주봉 스크리닝 시작\\.\\.\\.\n전 종목 실시간 스캔 중 \\(약 10\\~20분 소요\\)\\.")
+            "🔍 강세 후보 스캔 시작\\.\\.\\.\n전 종목 실시간 스캔 중 \\(약 10\\~20분 소요\\)\\.")
         try:
             from analysis.chart_screener import run_weekly_screen
             from core.db import save_chart_signals
@@ -832,8 +859,8 @@ async def _handle_help(http: httpx.AsyncClient, chat_id: str) -> None:
         "  예\\) /backtest ichimoku 2025\\-01\\-01 2026\\-01\\-01",
         "  모드\\: ichimoku \\| stage \\| cross",
         "/top — 당일 거래금액 상위 10 \\(KOSPI\\+KOSDAQ\\)",
-        "/screener — 최신 주봉 차트 스크리닝 결과 \\(DB 조회\\)",
-        "/scan — 주봉 스크리닝 즉시 실행 \\(전 종목 실시간 스캔, 약 10\\~20분\\)",
+        "/screener — 최신 강세 후보 발굴 결과 \\(DB 조회\\)",
+        "/scan — 강세 후보 즉시 스캔 \\(전 종목 실시간 스캔, 약 10\\~20분\\)",
         "/watchlist — 거래대금 워치리스트 즉시 조회",
         "/paper — 모의투자 오픈 포지션 현황",
         "/paper\\_perf — 모의투자 누적 성과 \\(승률·수익·슬리피지\\)",
@@ -934,8 +961,8 @@ async def _register_commands(http: httpx.AsyncClient) -> None:
         {"command": "today",    "description": "오늘 수집 현황 + 최신 기사"},
         {"command": "backtest", "description": "통합 백테스트 (이치모쿠/3단계/교차) — /backtest ichimoku 2025-01-01 2026-01-01"},
         {"command": "top",       "description": "당일 거래금액 상위 10 (KOSPI+KOSDAQ)"},
-        {"command": "screener", "description": "최신 주봉 차트 스크리닝 결과 (DB 조회)"},
-        {"command": "scan",     "description": "주봉 스크리닝 즉시 실행 (전 종목 실시간 스캔)"},
+        {"command": "screener", "description": "최신 강세 후보 발굴 결과 (DB 조회)"},
+        {"command": "scan",     "description": "강세 후보 즉시 스캔 (전 종목 실시간 스캔)"},
         {"command": "buy",      "description": "진입 기록 — /buy 005930 70000 100 [YYYYMMDD]"},
         {"command": "sell",     "description": "청산 기록 (FIFO) — /sell 005930 73500"},
         {"command": "port",     "description": "보유 현황 + 미실현 P&L"},

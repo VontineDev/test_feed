@@ -1,8 +1,10 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { tokens } from '../tokens'
 import DateRangeBar, { DatePreset, computeRange } from './DateRangeBar'
 import HistoryStageView from './HistoryStageView'
 import HistoryScreenerView from './HistoryScreenerView'
+import StageHistoryPopup from './StageHistoryPopup'
+import InfoTip from './InfoTip'
 
 // ── 타입 ────────────────────────────────────────────────────
 type StageRow = { ticker: string; name: string; sector: string | null; s1_high: number | null; s1_volume: number | null; peakout_flag: boolean }
@@ -28,14 +30,17 @@ const fmt = (v: number | null | undefined, digits = 0) =>
   v == null ? '—' : v.toLocaleString('ko-KR', { maximumFractionDigits: digits })
 
 // ── 섹션 컨테이너 ────────────────────────────────────────────
-function Section({ title, badge, children, defaultOpen = true }: {
-  title: string; badge?: string; children: React.ReactNode; defaultOpen?: boolean
+function Section({ title, badge, tooltip, children, defaultOpen = true }: {
+  title: string; badge?: string; tooltip?: string; children: React.ReactNode; defaultOpen?: boolean
 }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
     <div style={s.section}>
       <button style={s.sectionHdr} onClick={() => setOpen(o => !o)}>
-        <span style={s.sectionTitle}>{title}</span>
+        <span style={{ ...s.sectionTitle, display: 'inline-flex', alignItems: 'center' }}>
+          {title}
+          {tooltip && <InfoTip text={tooltip} />}
+        </span>
         {badge && <span style={s.badge}>{badge}</span>}
         <span style={s.chevron}>{open ? '▲' : '▼'}</span>
       </button>
@@ -45,7 +50,7 @@ function Section({ title, badge, children, defaultOpen = true }: {
 }
 
 // ── Stage 레포트 ─────────────────────────────────────────────
-function StageReport({ data }: { data: StageData }) {
+function StageReport({ data, selectedTicker, onSelect }: { data: StageData; selectedTicker: string | null; onSelect: (ticker: string, name: string) => void }) {
   const [activeStage, setActiveStage] = useState<1 | 2 | 3>(1)
 
   const summary1 = data.summary.find(x => x.stage === 1)
@@ -81,7 +86,12 @@ function StageReport({ data }: { data: StageData }) {
         ))}
         {peakout > 0 && (
           <div style={s.chip}>
-            <span style={s.chipLabel}>피크아웃</span>
+            <span style={s.chipLabel}>
+              고점 이탈
+              <span onClick={e => e.stopPropagation()}>
+                <InfoTip text="외국인·기관 동시 순매도 또는 윗꼬리+거래량 급증 감지. 단기 고점에서 매물 압력이 집중된 신호." />
+              </span>
+            </span>
             <span style={{ ...s.chipVal, color: tokens.semantic.up }}>{peakout}</span>
           </div>
         )}
@@ -94,14 +104,31 @@ function StageReport({ data }: { data: StageData }) {
             <table style={s.table}>
               <thead>
                 <tr>
-                  {['종목', '업종', '진입 고가', '거래량'].map(h => (
-                    <th key={h} style={s.th}>{h}</th>
-                  ))}
+                  {([
+                    '종목', '업종',
+                    { label: 'S1 고가', tip: 'Stage 1으로 분류된 날의 당일 고가. 진입 시점 가격 압박을 가늠하는 기준점.' },
+                    '거래량',
+                  ] as const).map(h => {
+                    const label = typeof h === 'string' ? h : h.label
+                    const tip   = typeof h === 'object' ? h.tip : undefined
+                    return (
+                      <th key={label} style={s.th}>
+                        {label}{tip && <InfoTip text={tip} />}
+                      </th>
+                    )
+                  })}
                 </tr>
               </thead>
               <tbody>
                 {activeRows.map(r => (
-                  <tr key={r.ticker} style={{ background: r.peakout_flag ? '#1a0f0f' : 'transparent' }}>
+                  <tr
+                    key={r.ticker}
+                    style={{
+                      background: r.ticker === selectedTicker ? tokens.bg.active : r.peakout_flag ? '#1a0f0f' : 'transparent',
+                      cursor: 'pointer',
+                    }}
+                    onClick={() => onSelect(r.ticker, r.name)}
+                  >
                     <td style={s.td}>
                       <div style={s.tickerName}>{r.name}</div>
                       <div style={s.tickerCode}>{r.ticker}{r.peakout_flag && ' ⚠️'}</div>
@@ -120,12 +147,13 @@ function StageReport({ data }: { data: StageData }) {
       ) : (
         <div style={s.empty}>Stage {activeStage} 종목 없음</div>
       )}
+
     </>
   )
 }
 
 // ── 스크리너 레포트 ──────────────────────────────────────────
-function ScreenerReport({ data }: { data: ScreenerData }) {
+function ScreenerReport({ data, selectedTicker, onSelect }: { data: ScreenerData; selectedTicker: string | null; onSelect: (ticker: string, name: string) => void }) {
   const [filter, setFilter] = useState<'all' | 'enhanced' | 'gapjum'>('all')
   const filtered = data.items.filter(r =>
     filter === 'all' ? true : filter === 'enhanced' ? r.is_enhanced : r.has_gapjum
@@ -135,10 +163,10 @@ function ScreenerReport({ data }: { data: ScreenerData }) {
     <>
       <div style={s.chips}>
         {([
-          { f: 'all',      label: '통과',  val: data.total,    color: tokens.accent.blueSoft },
-          { f: 'enhanced', label: '강화',  val: data.enhanced, color: tokens.stage[2] },
-          { f: 'gapjum',   label: '갭점프', val: data.gapjum,   color: tokens.chart.cat.ichimoku },
-        ] as const).map(({ f, label, val, color }) => (
+          { f: 'all',      label: '통과',   val: data.total,    color: tokens.accent.blueSoft,       tooltip: '주봉 일목균형표 기준선 위 + 20주 이동평균 위 조건을 동시에 충족한 종목. 기본 강세 구조 확인.' },
+          { f: 'enhanced', label: '강화',   val: data.enhanced, color: tokens.stage[2],              tooltip: '통과 조건 + 전환선·기준선 정배열 + 구름대 위 종가 등 추가 조건 충족. 더 강한 강세 신호.' },
+          { f: 'gapjum',   label: '갭점프', val: data.gapjum,   color: tokens.chart.cat.ichimoku,    tooltip: '전주 대비 갭업(시가 > 전주 종가) 발생 종목. 수급 집중 또는 강세 돌파 신호일 수 있음.' },
+        ] as const).map(({ f, label, val, color, tooltip }) => (
           <button
             key={f}
             style={{
@@ -149,7 +177,10 @@ function ScreenerReport({ data }: { data: ScreenerData }) {
             }}
             onClick={() => setFilter(f)}
           >
-            <span style={s.chipLabel}>{label}</span>
+            <span style={{ ...s.chipLabel, display: 'inline-flex', alignItems: 'center' }}>
+              {label}
+              <span onClick={e => e.stopPropagation()}><InfoTip text={tooltip} /></span>
+            </span>
             <span style={{ ...s.chipVal, color }}>{val}</span>
           </button>
         ))}
@@ -166,7 +197,11 @@ function ScreenerReport({ data }: { data: ScreenerData }) {
           </thead>
           <tbody>
             {filtered.map(r => (
-              <tr key={r.ticker}>
+              <tr
+                key={r.ticker}
+                style={{ background: r.ticker === selectedTicker ? tokens.bg.active : 'transparent', cursor: 'pointer' }}
+                onClick={() => onSelect(r.ticker, r.name)}
+              >
                 <td style={s.td}>
                   <div style={s.tickerName}>{r.name}</div>
                   <div style={s.tickerCode}>{r.ticker}</div>
@@ -224,6 +259,11 @@ export default function Report() {
   const [loading, setLoading] = useState(false)
   const [lastFetched, setLastFetched] = useState<Date | null>(null)
 
+  // 우측 패널 선택 상태
+  const [selectedTicker, setSelectedTicker] = useState<string | null>(null)
+  const [selectedName, setSelectedName] = useState<string>('')
+  const splitRightRef = useRef<HTMLDivElement>(null)
+
   const range = useMemo(() => computeRange(preset), [preset])
 
   const load = useCallback(async () => {
@@ -263,13 +303,34 @@ export default function Report() {
 
   useEffect(() => { load() }, [load])
 
+  // 프리셋 변경 시 패널 닫기
+  useEffect(() => { setSelectedTicker(null); setSelectedName('') }, [preset])
+
+  // 패널 열릴 때 화면에 보이도록 스크롤 (모바일 세로 스택 대응)
+  useEffect(() => {
+    if (selectedTicker && splitRightRef.current) {
+      splitRightRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
+  }, [selectedTicker])
+
+  const handleSelect = (ticker: string, name: string) => {
+    if (selectedTicker === ticker) {
+      setSelectedTicker(null)
+      setSelectedName('')
+    } else {
+      setSelectedTicker(ticker)
+      setSelectedName(name)
+    }
+  }
+
   const stageBadge = preset === 'today' ? (stage?.date ?? undefined) : `${range.start}~${range.end}`
   const screenerBadge = preset === 'today' ? (screener?.week ?? undefined) : `${range.start}~${range.end}`
 
   return (
     <div style={s.wrap}>
+      {/* 헤더 */}
       <div style={s.hdr}>
-        <span style={s.hdrTitle}>레포트</span>
+        <span style={s.hdrTitle}>종목 분석</span>
         {lastFetched && (
           <span style={s.hdrTime}>{lastFetched.toLocaleTimeString('ko-KR')} 기준</span>
         )}
@@ -281,30 +342,65 @@ export default function Report() {
       {/* 날짜 범위 선택 바 */}
       <DateRangeBar preset={preset} onChange={p => setPreset(p)} />
 
-      <Section title="Stage 분류" badge={stageBadge}>
-        {preset === 'today'
-          ? (stage ? <StageReport data={stage} /> : <div style={s.empty}>데이터 없음</div>)
-          : (histStage
-              ? <HistoryStageView items={histStage.items} start={range.start} end={range.end} />
-              : <div style={s.empty}>{loading ? '로딩…' : '데이터 없음'}</div>)
-        }
-      </Section>
+      {/* 콘텐츠 — 좌우 분할 */}
+      <div className="report-split-container" style={s.splitWrap}>
+        {/* 왼쪽: 섹션 목록 */}
+        <div className="report-split-left" style={{
+          ...s.splitLeft,
+          flex: selectedTicker ? '0 0 55%' : 1,
+          borderRight: selectedTicker ? `1px solid ${tokens.bd.default}` : undefined,
+        }}>
+          <Section
+            title="추세 단계"
+            badge={stageBadge}
+            tooltip="전 종목을 일봉 기준 3단계 추세로 분류합니다. Stage 1(상승 초기)이 매수 적기, Stage 2(고점권)는 조심, Stage 3(하락)은 관망."
+          >
+            {preset === 'today'
+              ? (stage ? <StageReport data={stage} selectedTicker={selectedTicker} onSelect={handleSelect} /> : <div style={s.empty}>데이터 없음</div>)
+              : (histStage
+                  ? <HistoryStageView items={histStage.items} start={range.start} end={range.end} selectedTicker={selectedTicker} onSelect={handleSelect} />
+                  : <div style={s.empty}>{loading ? '로딩…' : '데이터 없음'}</div>)
+            }
+          </Section>
 
-      <Section title="차트 스크리닝" badge={screenerBadge}>
-        {preset === 'today'
-          ? (screener ? <ScreenerReport data={screener} /> : <div style={s.empty}>데이터 없음</div>)
-          : (histScreener
-              ? <HistoryScreenerView items={histScreener.items} start={range.start} end={range.end} />
-              : <div style={s.empty}>{loading ? '로딩…' : '데이터 없음'}</div>)
-        }
-      </Section>
+          <Section
+            title="강세 후보 발굴"
+            badge={screenerBadge}
+            tooltip="주봉 일목균형표 + 20주 이동평균 조건을 통과한 종목입니다. 기술적으로 강세 신호가 켜진 후보를 매주 스캔합니다."
+          >
+            {preset === 'today'
+              ? (screener ? <ScreenerReport data={screener} selectedTicker={selectedTicker} onSelect={handleSelect} /> : <div style={s.empty}>데이터 없음</div>)
+              : (histScreener
+                  ? <HistoryScreenerView items={histScreener.items} start={range.start} end={range.end} selectedTicker={selectedTicker} onSelect={handleSelect} />
+                  : <div style={s.empty}>{loading ? '로딩…' : '데이터 없음'}</div>)
+            }
+          </Section>
+        </div>
+
+        {/* 오른쪽: 상세 패널 */}
+        {selectedTicker && (
+          <div ref={splitRightRef} className="report-split-right" style={s.splitRight}>
+            <StageHistoryPopup
+              ticker={selectedTicker}
+              name={selectedName}
+              start={range.start}
+              end={range.end}
+              onClose={() => { setSelectedTicker(null); setSelectedName('') }}
+              mode="panel"
+            />
+          </div>
+        )}
+      </div>
     </div>
   )
 }
 
 // ── 스타일 ───────────────────────────────────────────────────
 const s: Record<string, React.CSSProperties> = {
-  wrap: { height: '100%', overflowY: 'auto', fontSize: 12, color: tokens.tx.secondary, boxSizing: 'border-box' },
+  wrap: { height: '100%', display: 'flex', flexDirection: 'column', fontSize: 12, color: tokens.tx.secondary, boxSizing: 'border-box', overflow: 'hidden' },
+  splitWrap: { flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 },
+  splitLeft: { minWidth: 0, overflowY: 'auto', transition: 'flex 0.15s' },
+  splitRight: { flex: '0 0 45%', minWidth: 0, overflowY: 'auto' },
 
   hdr: { display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderBottom: `1px solid ${tokens.bd.default}`, flexShrink: 0 },
   hdrTitle: { fontWeight: 700, fontSize: 13, flex: 1 },

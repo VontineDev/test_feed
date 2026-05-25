@@ -1,4 +1,4 @@
-﻿@echo off
+@echo off
 chcp 65001 >nul
 cd /d C:\Users\1\test_feed\dashboard\backend
 for /f "usebackq tokens=1,* delims==" %%a in ("C:\Users\1\test_feed\.env") do (

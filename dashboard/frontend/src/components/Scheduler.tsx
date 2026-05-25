@@ -10,8 +10,8 @@ interface TriggerRecord {
 }
 
 const JOB_LABELS: Record<string, string> = {
-  stage: 'Stage 분류',
-  screener: '차트 스크리너',
+  stage: '추세 단계',
+  screener: '강세 후보',
   paper_sample: '모의투자 샘플링',
 }
 

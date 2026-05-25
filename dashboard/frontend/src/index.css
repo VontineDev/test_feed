@@ -85,6 +85,37 @@ button:focus:not(:focus-visible) {
   }
 }
 
+/* ───────────── MarketSummaryBanner 모바일 대응 ───────────── */
+@media (max-width: 768px) {
+  .market-banner-tip {
+    display: none;
+  }
+}
+
+/* ───────────── 분할 패널 슬라이드인 애니메이션 ───────────── */
+/* 데스크탑: 오른쪽에서 살짝 밀려 들어옴 */
+@keyframes split-panel-enter {
+  from { opacity: 0; transform: translateX(10px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+/* 모바일: 아래에서 살짝 올라옴 */
+@keyframes split-panel-enter-mobile {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.report-split-right,
+.paper-split-right {
+  animation: split-panel-enter 0.15s ease-out;
+}
+
+@media (max-width: 768px) {
+  .report-split-right,
+  .paper-split-right {
+    animation: split-panel-enter-mobile 0.2s ease-out;
+  }
+}
+
 /* ───────────── PaperPortfolio split-view 모바일 대응 ───────────── */
 /* 데스크탑: 55%/45% 나란히, 모바일: 세로 스택 */
 @media (max-width: 768px) {
@@ -105,7 +136,27 @@ button:focus:not(:focus-visible) {
   }
 }
 
-/* ───────────── 데스크탑 레이아웃 (769px 이상) ───────────── */
+/* ───────────── Report split-view 모바일 대응 ───────────── */
+/* 데스크탑: 55%/45% 나란히, 모바일: 세로 스택 */
+@media (max-width: 768px) {
+  .report-split-container {
+    flex-wrap: wrap !important;
+    overflow: visible !important;
+  }
+  .report-split-left {
+    flex: none !important;
+    width: 100% !important;
+    border-right: none !important;
+    border-bottom: 1px solid #1e293b;
+  }
+  .report-split-right {
+    flex: none !important;
+    width: 100% !important;
+    min-height: 260px;
+  }
+}
+
+/* ───────────── 데스크탑 레이아��� (769px 이상) ───────────── */
 @media (min-width: 769px) {
   /* 모바일 전용 요소 숨김 */
   .app-mobile-nav {

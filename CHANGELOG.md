@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.9.0] - 2026-05-24
+
+### Added
+
+- **MarketSummaryBanner 컴포넌트** (`dashboard/frontend/src/components/MarketSummaryBanner.tsx`): 히트맵 상단에 KOSPI/KOSDAQ 지수 + 시장 심리 한마디를 표시하는 초보자 친화적 배너. 장마감/장없는날 상태 구분, 5분 자동 갱신, 모바일 팁 숨김(`market-banner-tip`).
+- **`/api/market_index` 엔드포인트** (`dashboard/backend/main.py`): KRX OpenAPI + yfinance 혼합으로 KOSPI/KOSDAQ 지수 조회. `asyncio.Lock` 기반 5분 TTL 캐시, `_market_sentiment()` 순수 함수로 강세/상승/보합/하락/급락 5단계 판정.
+- **KOSDAQ 지수 KRX 조회** (`data/krx_openapi.py`): `get_kosdaq_index()` / `get_kosdaq_index_ohlcv()` 신규, KOSPI `prev_close`(`BASPRC_IDX`) 필드 추가.
+- **텔레그램 `/status` 시장 현황** (`telegram/telegram_bot.py`): KRX 클라이언트 직접 호출로 KOSPI/KOSDAQ 등락률을 대시보드 HTTP 의존 없이 표시.
+
+### Changed
+
+- **종목분석 상세 보기 우측 패널 방식으로 전환** (`dashboard/frontend/src/components/Report.tsx`, `StageHistoryPopup.tsx`): 모달 오버레이 팝업 방식에서 모의투자 탭과 동일한 Master–Detail 분할 패널 방식으로 변경. 종목 클릭 시 목록이 55%로 수축하고 우측에 45% 상세 패널 슬라이드인. 같은 종목 재클릭·날짜 범위 변경 시 패널 닫힘. `StageHistoryPopup`에 `mode='panel'` prop 추가로 오버레이 없이 부모 영역 채우기 지원.
+- **종목분석 팝업 너비 확대** (`StageHistoryPopup.tsx`): 모달 모드 최대 너비 480px → 680px.
+- **오늘 필터 종목 상세 연결** (`Report.tsx`): 추세 단계·강세 후보 발굴 두 섹션 모두 종목 클릭 이벤트와 `StageHistoryPopup` 연결. 이전에는 "오늘" 날짜 범위에서 클릭해도 팝업이 열리지 않던 문제 수정.
+- **종목분석 모바일 세로 스택 대응** (`dashboard/frontend/src/index.css`): 768px 이하에서 좌우 분할 패널이 세로 스택으로 전환되는 `report-split-*` 미디어쿼리 추가. 모의투자 `paper-split-*` 패턴과 동일.
+- **시작 스크립트 단일화** (`scripts/`): `restart_dashboard.bat`·`start_dashboard_hidden.vbs` 제거. `start_dashboard.ps1`이 수동 시작/재시작의 단일 진입점. Task Scheduler 자동 시작은 `start_dashboard_service.bat` 래퍼가 담당.
+- **대시보드 탭·섹션 이름 직관화** (`dashboard/frontend/src/tabs.ts`, `Report.tsx`): `레포트` 탭 → `종목 분석`, `Stage 분류` 섹션 → `추세 단계`, `차트 스크리닝` 섹션 → `강세 후보 발굴`. 처음 접하는 사용자도 탭 이름만으로 기능을 파악할 수 있도록 한국어 직관명으로 변경. `InfoTip` 컴포넌트(ⓘ)로 호버 시 동작 설명 팝업 표시.
+- **모의투자 성과분석 섹션 제거** (`PaperPortfolio.tsx`): 포지션 탭과 내용이 겹치던 성과분석(누적 P&L 커브·미실현 포지션 리더보드·모델 통계 테이블) 섹션 제거. CSV 다운로드 버튼은 포지션 섹션 헤더 우측으로 이전. `PaperAnalytics.tsx` 컴포넌트 및 관련 테스트 삭제. 번들 크기 350KB → 20KB(recharts 의존성 제거 효과).
+
+### Fixed
+
+- **종목분석 이력 필터 우측 패널 미작동** (`dashboard/frontend/src/components/HistoryStageView.tsx`, `HistoryScreenerView.tsx`): `-3일/-1주/-2주/-1달` 필터에서 종목 클릭 시 우측 패널이 열리지 않던 버그. 두 컴포넌트가 내부 `popup` state로 구식 모달 방식으로 동작하고 있었음. `selectedTicker`/`onSelect` prop으로 부모(`Report`) 패널 상태와 통합하여 모든 날짜 필터에서 동작 통일.
+- **`time` 모듈 이름 충돌** (`dashboard/backend/main.py`): `from datetime import time`이 `import time` 모듈을 shadow하여 캐시 TTL 계산(`time.time()`)이 `TypeError`로 실패하던 버그. `import time as _time_module`로 해결.
+- **TOP/Macro/Heatmap `time.strftime` 오류** (`dashboard/backend/main.py`): `_fetch_top_kiwoom`(L800)·`_run_macro_analysis`(L1393)에서 `time.strftime()`이 `datetime.time` 클래스의 언바운드 메서드로 해석되어 세 탭 모두 "API 오류" 표시. `_time_module.strftime()`으로 수정.
+
 ## [0.9.8.1] - 2026-05-24
 
 ### Security

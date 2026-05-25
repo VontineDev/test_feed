@@ -41,8 +41,8 @@ python run_scheduler.py
 | `/today` | 오늘 카테고리별 수집 건수 + 최신 기사 5건 |
 | `/backtest <mode> <start> <end>` | 통합 백테스트 — ichimoku / stage / stage2 / cross 모드 |
 | `/watchlist` | 거래대금 워치리스트 즉시 조회 (온디맨드) |
-| `/screener` | 최신 주봉 차트 스크리닝 결과 (DM + 채널) |
-| `/scan` | 주봉 스크리닝 즉시 실행 (전 종목 실시간 스캔, 약 10~20분) |
+| `/screener` | 최신 강세 후보 발굴 결과 (DM + 채널) |
+| `/scan` | 강세 후보 즉시 스캔 (전 종목 실시간 스캔, 약 10~20분) |
 | `/paper` | 모의투자 오픈 포지션 현황 |
 | `/paper_perf` | 모의투자 누적 성과 (승률·수익·슬리피지) |
 | `/paper_exit <코드>` | 수동 강제 청산 |
@@ -92,7 +92,7 @@ analysis/                 # 분석·전략
   signal_detector.py      # LLM 매매 신호 감지
   chart_screener.py       # 주봉 차트 스크리너 (Ichimoku + MA, KOSPI/KOSDAQ 전종목)
   screener_filters.py     # 스크리너 필터 프리셋
-  stage_classifier.py     # 일봉 3단계 분류기 — Stage 1/2/3 분류 + 피크아웃 신호
+  stage_classifier.py     # 일봉 3단계 분류기 — Stage 1/2/3 분류 + 고점 이탈 신호
   backtest_engine.py      # 통합 백테스트 엔진 — ichimoku / stage / cross 3모드
   volume_pattern.py       # 거래량 패턴 분석
   macro_tracker.py        # OLS 팩터 모델 — 6개 매크로 팩터 추적
@@ -113,15 +113,14 @@ dashboard/                # 웹 대시보드 (FastAPI + React)
 tests/                    # pytest 테스트 (601개)
 docs/                     # 문서
 scripts/                  # 운영 스크립트
-  restart_dashboard.bat   # 대시보드 서버 재시작
+  start_dashboard.ps1     # 대시보드 서버 시작/재시작 (단일 진입점)
   start_crawler.bat       # 크롤러 직접 실행
   run_aftermarket_sync.bat # 장후 동기화 실행
   duckdns_update.bat      # DuckDNS IP 업데이트
   restart_scheduler.bat   # Windows 작업 스케줄러 NewsCrawler 재시작
   run_sweep.py            # 백테스트 파라미터 그리드서치
   register_tasks.ps1      # Windows 작업 스케줄러 통합 등록 (-Task all|crawler|aftermarket|dashboard)
-  start_dashboard_hidden.vbs   # 창 없는 대시보드 시작 (VBScript)
-  start_dashboard_service.bat  # 대시보드 서비스 래퍼
+  start_dashboard_service.bat  # 대시보드 서비스 래퍼 (Task Scheduler용)
 sql/                      # DB 스키마 마이그레이션
   rls_policies.sql        # RLS 정책 마이그레이션 (14 테이블 backend_all, pgAdmin/Supabase SQL 에디터 실행)
 logs/                     # 로그 파일
@@ -160,10 +159,10 @@ KRX_PW=your_krx_password
 ## 대시보드 실행
 
 ```bash
-scripts\restart_dashboard.bat   # 백엔드 서버 시작 (http://localhost:8000)
+scripts\start_dashboard.ps1   # 백엔드 서버 시작/재시작 (http://localhost:8000)
 ```
 
-탭 구성: 히트맵 · 레포트 · Top · 모의투자 · 매크로
+탭 구성: 히트맵 · 종목 분석 · Top · 모의투자 · 매크로
 
 ## 테스트 실행
 
@@ -199,4 +198,4 @@ pytest tests/test_watchlist_brief.py -v
 
 ## 버전
 
-현재 버전: `0.9.8.1` — [CHANGELOG](CHANGELOG.md) 참고
+현재 버전: `0.9.9.0` — [CHANGELOG](CHANGELOG.md) 참고
