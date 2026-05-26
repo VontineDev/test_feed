@@ -1,4 +1,4 @@
-> 최종 검증 버전: **v0.9.0.0** | 운영 환경: Windows 11 + Python 3.11
+> 최종 검증 버전: **v0.9.9.1** | 운영 환경: Windows 11 + Python 3.11
 
 # 한국 주식 퀀트 신호 시스템 — 사용 설명서
 
@@ -248,13 +248,17 @@ DUCK_DNS_DOMAIN=yoursubdomain   # vtrading 예시
 DUCK_DNS_TOKEN=your-token       # duckdns.org에서 발급
 ```
 
-**3. Basic Auth** (외부 노출 시 권장):
+**3. 역할 기반 인증** (외부 노출 시 권장):
 ```dotenv
-# .env에 추가
-DASHBOARD_USER=admin
-DASHBOARD_PASSWORD=강력한비밀번호
+# .env에 추가 — 관리자 계정 (스케줄러 트리거 포함 전체 권한)
+ADMIN_USER=admin
+ADMIN_PASSWORD=강력한비밀번호
+
+# 선택 — 읽기 전용 계정 (스케줄러 트리거 불가)
+# DASHBOARD_USER=viewer
+# DASHBOARD_PASSWORD=뷰어비밀번호
 ```
-`localhost/127.0.0.1`에서는 인증 없이 접근 가능합니다.
+`ADMIN_USER` 미설정 시 `DASHBOARD_USER`도 관리자 권한으로 취급합니다. 둘 다 미설정 시 인증 없이 접근 가능합니다(로컬 개발 전용).
 
 ### 스케줄러 트리거 동작 원리
 
@@ -269,7 +273,8 @@ DASHBOARD_PASSWORD=강력한비밀번호
 | `GET` | `/api/heatmap` | Stage 히트맵 데이터 (30분 캐시) |
 | `GET` | `/api/positions` | 오픈·대기 포지션 목록 |
 | `GET` | `/api/signals/stream` | 신호 SSE 스트림 |
-| `POST` | `/api/scheduler/trigger` | 잡 수동 트리거 (`{"job": "stage"\|"screener"\|"paper_sample"}`) |
+| `GET` | `/api/market_index` | KOSPI/KOSDAQ 지수 + 시장 심리 (5분 TTL 캐시) |
+| `POST` | `/api/scheduler/trigger` | 잡 수동 트리거 (`{"job": "stage"\|"screener"\|"paper_sample"}`) — **admin 전용** |
 | `GET` | `/api/scheduler/status` | 최근 트리거 이력 10건 |
 
 ---

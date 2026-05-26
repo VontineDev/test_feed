@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.9.1] - 2026-05-26
+
+### Added
+
+- **역할 기반 인증** (`dashboard/backend/main.py`): `_BasicAuthMiddleware`를 역할 기반으로 확장. `ADMIN_USER`/`ADMIN_PASSWORD` → `role=admin` (쓰기 권한), `DASHBOARD_USER`/`DASHBOARD_PASSWORD` → `role=user` (읽기 전용). `ADMIN_USER` 미설정 시 `DASHBOARD_USER`도 admin 취급하여 하위 호환성 유지. `POST /api/scheduler/trigger`에 admin 가드 추가 — 일반 사용자가 잡 중복 트리거로 DB 부하를 유발하는 경로 차단.
+
+### Changed
+
+- **uvicorn 크래시 즉시 재시작** (`scripts/start_dashboard_service.bat`): uvicorn 종료 후 5초 대기 후 즉시 재시작하는 내부 restart 루프 추가. 기존 Task Scheduler 1분 대기 방식보다 서비스 복구가 빠름. 재시작 타임스탬프를 `dashboard.log`에 기록.
+- **Task Scheduler 등록 시 HKCU Run 키 자동 정리** (`scripts/register_tasks.ps1`): `Register-DashboardTask` 실행 시 레지스트리 `HKCU\...\Run`의 `TradingDashboard` 항목을 자동 제거. Task Scheduler AtLogOn으로 단일 관리.
+- **asyncpg 연결 풀 확장** (`dashboard/backend/database.py`): `max_size` 6 → 20, `command_timeout=30` 추가. 10명 동시 접속 시 `pool.acquire()` 큐 누적 방지. 스케줄러 풀(8) 합산 28개 — Supabase 60 연결 한도 이내.
+- **스케줄러 스트림 폴링 최적화** (`dashboard/backend/main.py`): `/api/scheduler/stream` 폴링 인터벌 3s → 10s. 10명 기준 200쿼리/분 → 60쿼리/분 (70% 감소). `idx_sched_stream` 인덱스 추가로 SeqScan 방지.
+
 ## [0.9.9.0] - 2026-05-24
 
 ### Added

@@ -118,6 +118,27 @@ KRX 세션 쿠키는 24시간 후 만료됩니다. 만료 시 `krx_flow_sync.py`
 
 ---
 
+## 대시보드 인증
+
+웹 대시보드(`dashboard/backend/main.py`)는 역할 기반 인증을 지원합니다.
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `ADMIN_USER` | *(없음)* | 관리자 계정 이름. 설정 시 스케줄러 트리거 등 쓰기 API 접근 가능 |
+| `ADMIN_PASSWORD` | *(없음)* | 관리자 비밀번호 |
+| `DASHBOARD_USER` | *(없음)* | 일반 사용자 계정 이름. 읽기 전용 (스케줄러 트리거 불가) |
+| `DASHBOARD_PASSWORD` | *(없음)* | 일반 사용자 비밀번호 |
+
+**역할 우선순위:**
+- `ADMIN_USER`/`ADMIN_PASSWORD` 설정 → `role=admin` (쓰기 권한)
+- `DASHBOARD_USER`/`DASHBOARD_PASSWORD` 설정 → `role=user` (읽기 전용)
+- `ADMIN_USER` 미설정 시 `DASHBOARD_USER`도 admin 취급 (하위 호환)
+- 둘 다 미설정 → 인증 비활성화 (로컬 개발 환경)
+
+외부 HTTPS 접근 시 Caddy basicauth와 병행 사용을 권장합니다. [HTTPS-Setup.md](HTTPS-Setup.md) 참고.
+
+---
+
 ## 빠른 진단
 
 환경변수가 제대로 로드되었는지 확인:

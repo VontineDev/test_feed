@@ -154,6 +154,14 @@ KRX_SESSION=your_jsessionid_cookie   # JSESSIONID (필수)
 KRX_VISITOR=your_smvisitorid_cookie  # __smVisitorID (선택)
 KRX_ID=your_krx_id
 KRX_PW=your_krx_password
+
+# (선택) 대시보드 역할 기반 인증 (외부 접근 시 권장)
+# ADMIN_USER/ADMIN_PASSWORD → 관리자 (스케줄러 트리거 포함 전체 권한)
+# DASHBOARD_USER/DASHBOARD_PASSWORD → 일반 사용자 (읽기 전용)
+ADMIN_USER=admin
+ADMIN_PASSWORD=강력한비밀번호
+# DASHBOARD_USER=viewer
+# DASHBOARD_PASSWORD=뷰어비밀번호
 ```
 
 ## 대시보드 실행
@@ -198,4 +206,4 @@ pytest tests/test_watchlist_brief.py -v
 
 ## 버전
 
-현재 버전: `0.9.9.0` — [CHANGELOG](CHANGELOG.md) 참고
+현재 버전: `0.9.9.1` — [CHANGELOG](CHANGELOG.md) 참고
