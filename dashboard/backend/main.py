@@ -56,6 +56,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 # ── 캐시 (히트맵/Top 5분, 포지션 현재가 5분) ─────────────────
 _HEATMAP_CACHE: dict = {"data": None, "expires": 0.0}
+_HEATMAP_LOCK = asyncio.Lock()
 _PRICE_TTL = 300     # 5분
 
 # ── 포지션 현재가 캐시 — {ticker: current_price_float} (5분) ──
@@ -83,6 +84,20 @@ _MARKET_INDEX_CACHE: dict = {"data": None, "expires": 0.0}
 _MARKET_INDEX_TTL = 300  # 5분
 _MARKET_INDEX_LOCK = asyncio.Lock()
 _KST = ZoneInfo("Asia/Seoul")
+
+
+async def _bg_refresh(cache: dict, lock: asyncio.Lock, fetch_fn, ttl: float, label: str) -> None:
+    """stale-while-revalidate: 백그라운드에서 캐시를 갱신한다. 실패 시 stale 유지."""
+    async with lock:
+        if cache["data"] and _time_module.time() < cache["expires"]:
+            return  # 락 대기 중 이미 다른 태스크가 갱신 완료
+        try:
+            data = await fetch_fn()
+            cache["data"] = data
+            cache["expires"] = _time_module.time() + ttl
+            logger.info("[cache] %s 갱신 완료", label)
+        except Exception as e:
+            logger.warning("[cache] %s 백그라운드 갱신 실패 — stale 유지: %s", label, e)
 
 
 # ── lifespan ──────────────────────────────────────────────────
@@ -326,19 +341,27 @@ async def _build_heatmap_data() -> list[dict]:
 @app.get("/api/heatmap")
 async def get_heatmap():
     now = _time_module.time()
-    # 가격 캐시 만료 시 stage 구조 유지하고 가격만 갱신
     if _HEATMAP_CACHE["data"] and now < _HEATMAP_CACHE["expires"]:
         return {"data": _HEATMAP_CACHE["data"], "cached": True}
-    try:
-        data = await _build_heatmap_data()
-        _HEATMAP_CACHE["data"] = data
-        _HEATMAP_CACHE["expires"] = now + _PRICE_TTL
-        return {"data": data, "cached": False}
-    except Exception as e:
-        logger.error("[heatmap] 빌드 실패: %s", e)
-        if _HEATMAP_CACHE["data"]:
-            return {"data": _HEATMAP_CACHE["data"], "cached": True, "stale": True}
-        raise HTTPException(status_code=500, detail="heatmap unavailable")
+    if _HEATMAP_CACHE["data"]:
+        # stale 데이터 있음 — 즉시 반환하고 백그라운드에서 갱신
+        if not _HEATMAP_LOCK.locked():
+            asyncio.create_task(_bg_refresh(
+                _HEATMAP_CACHE, _HEATMAP_LOCK, _build_heatmap_data, _PRICE_TTL, "heatmap"
+            ))
+        return {"data": _HEATMAP_CACHE["data"], "cached": True, "stale": True}
+    # 최초 기동: 데이터 없음 — 한 번만 대기
+    async with _HEATMAP_LOCK:
+        if _HEATMAP_CACHE["data"] and _time_module.time() < _HEATMAP_CACHE["expires"]:
+            return {"data": _HEATMAP_CACHE["data"], "cached": True}
+        try:
+            data = await _build_heatmap_data()
+            _HEATMAP_CACHE["data"] = data
+            _HEATMAP_CACHE["expires"] = _time_module.time() + _PRICE_TTL
+            return {"data": data, "cached": False}
+        except Exception as e:
+            logger.error("[heatmap] 빌드 실패: %s", e)
+            raise HTTPException(status_code=500, detail="heatmap unavailable")
 
 
 # ── GET /api/positions ────────────────────────────────────────
@@ -840,13 +863,38 @@ async def get_top(n: int = 50, refresh: bool = False):
     now = _time_module.time()
     if not refresh and _TOP_CACHE["data"] and now < _TOP_CACHE["expires"]:
         return _TOP_CACHE["data"]
+    if not refresh and _TOP_CACHE["data"]:
+        # stale 데이터 있음 — 즉시 반환하고 백그라운드에서 갱신
+        if not _TOP_LOCK.locked():
+            async def _fetch_top_with_eps() -> dict:
+                data = await asyncio.to_thread(_fetch_top_kiwoom, 20)
+                items = data.get("items", [])
+                try:
+                    fund_results = await asyncio.wait_for(
+                        asyncio.gather(
+                            *[asyncio.to_thread(_fetch_fundamental, it["ticker"]) for it in items],
+                            return_exceptions=True,
+                        ),
+                        timeout=8.0,
+                    )
+                    for it, fund in zip(items, fund_results):
+                        it["eps"] = fund.get("eps") if isinstance(fund, dict) else None
+                except Exception:
+                    for it in items:
+                        it.setdefault("eps", None)
+                data["items"] = items
+                return data
+            asyncio.create_task(_bg_refresh(
+                _TOP_CACHE, _TOP_LOCK, _fetch_top_with_eps, _TOP_TTL, "top"
+            ))
+        return {**_TOP_CACHE["data"], "stale": True}
+    # 최초 기동 또는 강제 refresh: 한 번만 대기
     async with _TOP_LOCK:
         now = _time_module.time()
         if not refresh and _TOP_CACHE["data"] and now < _TOP_CACHE["expires"]:
             return _TOP_CACHE["data"]
         try:
             data = await asyncio.to_thread(_fetch_top_kiwoom, n)
-            # EPS 병렬 조회 (Naver Finance) — 실패 시 None으로 폴백
             items = data.get("items", [])
             try:
                 fund_results = await asyncio.wait_for(
@@ -866,7 +914,7 @@ async def get_top(n: int = 50, refresh: bool = False):
                     it.setdefault("eps", None)
             data["items"] = items
             _TOP_CACHE["data"] = data
-            _TOP_CACHE["expires"] = now + _TOP_TTL
+            _TOP_CACHE["expires"] = _time_module.time() + _TOP_TTL
             return data
         except Exception as e:
             logger.warning("[top] Kiwoom API 오류: %s", e)
@@ -1442,19 +1490,8 @@ def _market_sentiment(
         return "급락", detail
 
 
-@app.get("/api/market_index")
-async def get_market_index():
-    """KOSPI / KOSDAQ 지수 등락률 + 시장 감성 (5분 캐시).
-
-    장중: yfinance ^KS11/^KQ11 현재가 + KRX BASPRC_IDX(기준가) → change_pct 계산.
-    장마감/주말: KRX OpenAPI 확정값.
-    응답: {market_status, is_realtime, kospi, kosdaq, sentiment, sentiment_detail, as_of}
-    """
-    now = _time_module.time()
-    async with _MARKET_INDEX_LOCK:
-        if _MARKET_INDEX_CACHE["data"] and now < _MARKET_INDEX_CACHE["expires"]:
-            return _MARKET_INDEX_CACHE["data"]
-
+async def _fetch_market_index_data() -> dict:
+    """KOSPI/KOSDAQ 지수 데이터를 실제로 조회하는 순수 fetch 함수."""
     now_kst = datetime.now(_KST)
     is_open = (
         now_kst.weekday() < 5
@@ -1516,7 +1553,7 @@ async def get_market_index():
 
     sentiment, sentiment_detail = _market_sentiment(kospi_pct, kosdaq_pct)
 
-    result = {
+    return {
         "market_status":    "open" if is_open else "closed",
         "is_realtime":      is_realtime,
         "kospi":  {"change_pct": kospi_pct,  "close": kospi_close,  "prev_close": kospi_prev}  if kospi_close  else None,
@@ -1526,11 +1563,34 @@ async def get_market_index():
         "as_of":            now_kst.isoformat(),
     }
 
+
+@app.get("/api/market_index")
+async def get_market_index():
+    """KOSPI / KOSDAQ 지수 등락률 + 시장 감성 (5분 캐시).
+
+    장중: yfinance ^KS11/^KQ11 현재가 + KRX BASPRC_IDX(기준가) → change_pct 계산.
+    장마감/주말: KRX OpenAPI 확정값.
+    응답: {market_status, is_realtime, kospi, kosdaq, sentiment, sentiment_detail, as_of}
+    """
+    now = _time_module.time()
+    if _MARKET_INDEX_CACHE["data"] and now < _MARKET_INDEX_CACHE["expires"]:
+        return _MARKET_INDEX_CACHE["data"]
+    if _MARKET_INDEX_CACHE["data"]:
+        # stale 데이터 있음 — 즉시 반환하고 백그라운드에서 갱신
+        if not _MARKET_INDEX_LOCK.locked():
+            asyncio.create_task(_bg_refresh(
+                _MARKET_INDEX_CACHE, _MARKET_INDEX_LOCK,
+                _fetch_market_index_data, _MARKET_INDEX_TTL, "market_index"
+            ))
+        return _MARKET_INDEX_CACHE["data"]
+    # 최초 기동: 한 번만 대기
     async with _MARKET_INDEX_LOCK:
+        if _MARKET_INDEX_CACHE["data"] and _time_module.time() < _MARKET_INDEX_CACHE["expires"]:
+            return _MARKET_INDEX_CACHE["data"]
+        result = await _fetch_market_index_data()
         _MARKET_INDEX_CACHE["data"] = result
         _MARKET_INDEX_CACHE["expires"] = _time_module.time() + _MARKET_INDEX_TTL
-
-    return result
+        return result
 
 
 @app.get("/api/macro")
@@ -1544,7 +1604,16 @@ async def get_macro(refresh: bool = False):
     now = _time_module.time()
     if not refresh and _MACRO_CACHE["data"] and now < _MACRO_CACHE["expires"]:
         return {**_MACRO_CACHE["data"], "cached": True}
-
+    if not refresh and _MACRO_CACHE["data"]:
+        # stale 데이터 있음 — 즉시 반환하고 백그라운드에서 갱신
+        if not _MACRO_LOCK.locked():
+            asyncio.create_task(_bg_refresh(
+                _MACRO_CACHE, _MACRO_LOCK,
+                lambda: asyncio.to_thread(_run_macro_analysis),
+                _MACRO_TTL, "macro"
+            ))
+        return {**_MACRO_CACHE["data"], "cached": True, "stale": True}
+    # 최초 기동 또는 강제 refresh: 한 번만 대기
     async with _MACRO_LOCK:
         now = _time_module.time()
         if not refresh and _MACRO_CACHE["data"] and now < _MACRO_CACHE["expires"]:
@@ -1552,7 +1621,7 @@ async def get_macro(refresh: bool = False):
         try:
             data = await asyncio.to_thread(_run_macro_analysis)
             _MACRO_CACHE["data"] = data
-            _MACRO_CACHE["expires"] = now + _MACRO_TTL
+            _MACRO_CACHE["expires"] = _time_module.time() + _MACRO_TTL
             return {**data, "cached": False}
         except Exception as e:
             logger.error("[macro] 분석 실패: %s", e)
