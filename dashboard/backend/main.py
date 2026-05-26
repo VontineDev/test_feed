@@ -54,6 +54,21 @@ from data.market_data import _fetch_fundamental  # noqa: E402
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
+# ── 외부 API 전용 스레드 풀 ──────────────────────────────────
+# yfinance/Kiwoom/KRX 호출을 기본 executor와 분리.
+# max_workers=4: 외부 API가 느려도 이벤트 루프와 일반 요청에 영향 없음.
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+_EXT_EXECUTOR = _ThreadPoolExecutor(max_workers=4, thread_name_prefix="ext-api")
+
+
+async def _ext_thread(fn, *args, timeout: float):
+    """외부 API 전용 풀에서 동기 함수를 실행한다. timeout 초 초과 시 TimeoutError."""
+    loop = asyncio.get_running_loop()
+    return await asyncio.wait_for(
+        loop.run_in_executor(_EXT_EXECUTOR, fn, *args),
+        timeout=timeout,
+    )
+
 # ── 캐시 (히트맵/Top 5분, 포지션 현재가 5분) ─────────────────
 _HEATMAP_CACHE: dict = {"data": None, "expires": 0.0}
 _HEATMAP_LOCK = asyncio.Lock()
@@ -129,7 +144,7 @@ async def _warmup_caches() -> None:
     tasks = [
         _bg_refresh(_HEATMAP_CACHE, _HEATMAP_LOCK, _build_heatmap_data, _PRICE_TTL, "heatmap"),
         _bg_refresh(_MARKET_INDEX_CACHE, _MARKET_INDEX_LOCK, _fetch_market_index_data, _MARKET_INDEX_TTL, "market_index"),
-        _bg_refresh(_MACRO_CACHE, _MACRO_LOCK, lambda: asyncio.to_thread(_run_macro_analysis), _MACRO_TTL, "macro"),
+        _bg_refresh(_MACRO_CACHE, _MACRO_LOCK, lambda: _ext_thread(_run_macro_analysis, timeout=90.0), _MACRO_TTL, "macro"),
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for label, exc in zip(["heatmap", "market_index", "macro"], results):
@@ -159,6 +174,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_warmup_caches())
 
     yield
+    _EXT_EXECUTOR.shutdown(wait=False)
     await close_pool()
     logger.info("DB 풀 종료")
 
@@ -281,7 +297,11 @@ async def _fetch_current_prices(
             logger.warning("[prices] 현재가 조회 실패: %s", e)
         return result
 
-    prices = await asyncio.to_thread(_fetch)
+    try:
+        prices = await _ext_thread(_fetch, timeout=20.0)
+    except asyncio.TimeoutError:
+        logger.warning("[prices] yfinance 타임아웃 (20s) — 빈 결과 반환")
+        prices = {}
     if update_cache:
         _POS_PRICE_CACHE["data"] = prices
         _POS_PRICE_CACHE["expires"] = now + _PRICE_TTL
@@ -293,10 +313,7 @@ async def _fetch_current_prices(
 async def _build_heatmap_data() -> list[dict]:
     # 1. Kiwoom top 50 조회 (15초 타임아웃)
     try:
-        top_data = await asyncio.wait_for(
-            asyncio.to_thread(_fetch_top_kiwoom, 50),
-            timeout=15.0,
-        )
+        top_data = await _ext_thread(_fetch_top_kiwoom, 50, timeout=15.0)
         kiwoom_items = top_data.get("items", [])
     except (asyncio.TimeoutError, Exception) as e:
         logger.warning("[heatmap] Kiwoom 조회 실패, Stage 분류 폴백: %s", e)
@@ -899,7 +916,7 @@ async def get_top(n: int = 50, refresh: bool = False):
         # stale 데이터 있음 — 즉시 반환하고 백그라운드에서 갱신
         if not _TOP_LOCK.locked():
             async def _fetch_top_with_eps() -> dict:
-                data = await asyncio.to_thread(_fetch_top_kiwoom, 20)
+                data = await _ext_thread(_fetch_top_kiwoom, 20, timeout=15.0)
                 items = data.get("items", [])
                 try:
                     fund_results = await asyncio.wait_for(
@@ -926,7 +943,7 @@ async def get_top(n: int = 50, refresh: bool = False):
         if not refresh and _TOP_CACHE["data"] and now < _TOP_CACHE["expires"]:
             return _TOP_CACHE["data"]
         try:
-            data = await asyncio.to_thread(_fetch_top_kiwoom, n)
+            data = await _ext_thread(_fetch_top_kiwoom, n, timeout=15.0)
             items = data.get("items", [])
             try:
                 fund_results = await asyncio.wait_for(
@@ -1565,14 +1582,22 @@ async def _fetch_market_index_data() -> dict:
             logger.warning("[market_index] yfinance 실시간 조회 실패: %s", e)
             return None, None
 
-    krx_kospi, krx_kosdaq = await asyncio.to_thread(_fetch_krx)
+    try:
+        krx_kospi, krx_kosdaq = await _ext_thread(_fetch_krx, timeout=15.0)
+    except asyncio.TimeoutError:
+        logger.warning("[market_index] KRX 타임아웃 (15s)")
+        krx_kospi, krx_kosdaq = None, None
 
     is_realtime = False
     kospi_close = krx_kospi["close"] if krx_kospi else None
     kosdaq_close = krx_kosdaq["close"] if krx_kosdaq else None
 
     if is_open and (krx_kospi or krx_kosdaq):
-        rt_ks, rt_kq = await asyncio.to_thread(_fetch_realtime)
+        try:
+            rt_ks, rt_kq = await _ext_thread(_fetch_realtime, timeout=20.0)
+        except asyncio.TimeoutError:
+            logger.warning("[market_index] yfinance 실시간 타임아웃 (20s)")
+            rt_ks, rt_kq = None, None
         if rt_ks:
             kospi_close = rt_ks
             is_realtime = True
@@ -1648,7 +1673,7 @@ async def get_macro(refresh: bool = False):
         if not _MACRO_LOCK.locked():
             asyncio.create_task(_bg_refresh(
                 _MACRO_CACHE, _MACRO_LOCK,
-                lambda: asyncio.to_thread(_run_macro_analysis),
+                lambda: _ext_thread(_run_macro_analysis, timeout=90.0),
                 _MACRO_TTL, "macro"
             ))
         return {**_MACRO_CACHE["data"], "cached": True, "stale": True}
@@ -1658,7 +1683,7 @@ async def get_macro(refresh: bool = False):
         if not refresh and _MACRO_CACHE["data"] and now < _MACRO_CACHE["expires"]:
             return {**_MACRO_CACHE["data"], "cached": True}
         try:
-            data = await asyncio.to_thread(_run_macro_analysis)
+            data = await _ext_thread(_run_macro_analysis, timeout=90.0)
             _MACRO_CACHE["data"] = data
             _MACRO_CACHE["expires"] = _time_module.time() + _MACRO_TTL
             return {**data, "cached": False}
