@@ -91,7 +91,7 @@ export default function Top() {
             </tr>
           </thead>
           <tbody>
-            {items.map(it => (
+            {items.filter(it => it.amount > 0).map(it => (
               <tr key={it.ticker} style={{ borderBottom: `1px solid ${tokens.bg.row}` }}>
                 <td style={td}>{it.rank}</td>
                 <td style={td}>

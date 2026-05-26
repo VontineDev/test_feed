@@ -1,4 +1,4 @@
-> 최종 검증 버전: **v0.9.9.1** | 운영 환경: Windows 11 + Python 3.11
+> 최종 검증 버전: **v0.9.9.2** | 운영 환경: Windows 11 + Python 3.11
 
 # 한국 주식 퀀트 신호 시스템 — 사용 설명서
 
@@ -266,6 +266,15 @@ ADMIN_PASSWORD=강력한비밀번호
 `run_scheduler.py` 가 30초마다 이 행을 감지해 해당 잡을 실행하고 `done`으로 갱신합니다.  
 따라서 **`run_scheduler.py`가 실행 중이어야** 버튼이 실제로 동작합니다.
 
+### 피드백 위젯
+
+헤더 오른쪽 끝 **피드백** 버튼을 클릭하면 모달이 열립니다.
+
+- 텍스트 입력 후 전송하면 Telegram(`TELEGRAM_CHAT_ID`)으로 메시지가 발송됩니다.
+- **현재 화면 스크린샷 첨부** 체크박스를 켜면 화면을 캡처해 이미지로 함께 전송합니다.
+- 발신자 역할(`admin` / `user`)이 메시지에 포함되어 누가 보냈는지 식별할 수 있습니다.
+- `TELEGRAM_TOKEN`과 `TELEGRAM_CHAT_ID`가 `.env`에 설정되어 있어야 동작합니다.
+
 ### API 엔드포인트 요약
 
 | 메서드 | 경로 | 설명 |
@@ -276,6 +285,7 @@ ADMIN_PASSWORD=강력한비밀번호
 | `GET` | `/api/market_index` | KOSPI/KOSDAQ 지수 + 시장 심리 (5분 TTL 캐시) |
 | `POST` | `/api/scheduler/trigger` | 잡 수동 트리거 (`{"job": "stage"\|"screener"\|"paper_sample"}`) — **admin 전용** (user 계정에서 실행 시 "관리자 전용 기능입니다" 알림) |
 | `GET` | `/api/scheduler/status` | 최근 트리거 이력 10건 |
+| `POST` | `/api/feedback` | 피드백 텍스트 + 스크린샷(base64 JPEG) → Telegram 전송. `TELEGRAM_TOKEN`·`TELEGRAM_CHAT_ID` 필수 |
 
 ---
 

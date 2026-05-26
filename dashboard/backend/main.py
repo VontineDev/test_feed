@@ -15,6 +15,7 @@ dashboard/backend/main.py
   GET  /api/history/stage        — 기간별 Stage 분류 집계 (이력 트래킹)
   GET  /api/history/screener     — 기간별 스크리너 집계 (이력 트래킹)
   GET  /api/history/ticker/{t}   — 종목별 Stage+스크리너 이력
+  POST /api/feedback             — 피드백 텍스트+스크린샷 → Telegram 전송
 
 개발: uvicorn main:app --reload --port 8000
 프로덕션: npm run build → FastAPI가 ../frontend/dist 서빙
@@ -1559,6 +1560,49 @@ async def get_macro(refresh: bool = False):
                 return {**_MACRO_CACHE["data"], "cached": True, "stale": True,
                         "error": "분석 오류 — 이전 데이터 표시 중"}
             raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── POST /api/feedback ───────────────────────────────────────
+class FeedbackBody(BaseModel):
+    text: str
+    screenshot: str | None = None  # base64 JPEG
+
+
+@app.post("/api/feedback")
+async def post_feedback(request: Request, body: FeedbackBody):
+    token = os.environ.get("TELEGRAM_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if not token or not chat_id:
+        raise HTTPException(status_code=503, detail="Telegram 미설정")
+
+    role = getattr(request.state, "role", "admin")
+    caption = f"[피드백] ({role})\n{body.text[:900]}"
+
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            if body.screenshot:
+                img_bytes = base64.b64decode(body.screenshot)
+                r = await client.post(
+                    f"https://api.telegram.org/bot{token}/sendPhoto",
+                    data={"chat_id": chat_id, "caption": caption},
+                    files={"photo": ("screenshot.jpg", img_bytes, "image/jpeg")},
+                )
+            else:
+                r = await client.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={"chat_id": chat_id, "text": caption},
+                )
+        if r.status_code != 200:
+            logger.error("[feedback] Telegram 전송 실패: %s", r.text)
+            raise HTTPException(status_code=502, detail="Telegram 전송 실패")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("[feedback] 전송 오류: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {"status": "sent"}
 
 
 # ── React 정적 파일 서빙 (프로덕션) ──────────────────────────

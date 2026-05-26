@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.9.2] - 2026-05-26
+
+### Added
+
+- **피드백 위젯** (`dashboard/frontend/src/components/Feedback.tsx`, `dashboard/backend/main.py`): 헤더 오른쪽 끝 "피드백" 버튼 클릭 시 모달이 열리며, 텍스트 입력 + 선택적 스크린샷(html2canvas)을 Telegram으로 전송. `POST /api/feedback` 엔드포인트 신설 — 스크린샷 있으면 `sendPhoto`, 없으면 `sendMessage`. html2canvas는 동적 import로 lazy 로드되어 번들 크기 영향 없음. 발신자 역할(admin/user)이 캡션에 포함되어 누가 보냈는지 식별 가능.
+
+### Fixed
+
+- **장 미개장 시 거래대금 상위 탭 빈 항목 표시** (`data/kiwoom_aftermarket_sync.py`, `dashboard/frontend/src/components/Top.tsx`): 09:00 개장 전 키움 ka10032 API가 종목명은 채워주지만 현재가·거래대금을 0으로 반환할 때, 0원/0%/0억인 의미 없는 행들이 표에 나타나던 문제 수정. `fetch_top_volume`에서 거래대금 0 행을 건너뛰도록 수정하고, `Top.tsx` 렌더링에도 `amount > 0` 필터를 추가해 이중으로 방어.
+
 ## [0.9.9.1] - 2026-05-26
 
 ### Added

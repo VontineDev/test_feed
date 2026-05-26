@@ -1,5 +1,6 @@
 import { Suspense, lazy, useState } from 'react'
 import MobileNav from './components/MobileNav'
+import Feedback from './components/Feedback'
 import { TAB_CONFIG, DEFAULT_TAB, type TabKey, type MobileTabKey } from './tabs'
 import { tokens } from './tokens'
 
@@ -10,8 +11,9 @@ const Loading = () => (
 )
 
 export default function App() {
-  const [leftTab, setLeftTab]     = useState<TabKey>(DEFAULT_TAB)
-  const [mobileTab, setMobileTab] = useState<MobileTabKey>(DEFAULT_TAB)
+  const [leftTab, setLeftTab]         = useState<TabKey>(DEFAULT_TAB)
+  const [mobileTab, setMobileTab]     = useState<MobileTabKey>(DEFAULT_TAB)
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
 
   return (
     <div style={styles.root} className="app-root">
@@ -26,6 +28,7 @@ export default function App() {
           Trading Dashboard
         </span>
         <span style={styles.sub} className="app-header-sub">KOSPI + KOSDAQ Stage 시스템</span>
+        <button style={styles.feedbackBtn} onClick={() => setFeedbackOpen(true)}>피드백</button>
       </header>
 
       {/* 데스크탑 레이아웃 */}
@@ -65,6 +68,7 @@ export default function App() {
       </div>
 
       <MobileNav active={mobileTab} onChange={setMobileTab} />
+      <Feedback open={feedbackOpen} onClose={() => setFeedbackOpen(false)} />
     </div>
   )
 }
@@ -89,4 +93,9 @@ const styles: Record<string, React.CSSProperties> = {
   tabContent: { flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' },
   sidebar: { width: 340, display: 'flex', flexDirection: 'column', overflowY: 'auto', flexShrink: 0 },
   panel: { flex: 1, minHeight: 200, borderBottom: `1px solid ${tokens.bd.default}`, overflow: 'auto' },
+  feedbackBtn: {
+    marginLeft: 'auto', background: 'none', border: `1px solid ${tokens.bd.emphasis}`,
+    color: tokens.tx.muted, borderRadius: 5, padding: '5px 12px',
+    cursor: 'pointer', fontSize: 12, fontWeight: 600, flexShrink: 0,
+  },
 }
