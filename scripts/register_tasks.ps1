@@ -117,7 +117,7 @@ function Register-DashboardTask {
     $BackendDir    = "$ProjectDir\dashboard\backend"
     $WrapperScript = "$ScriptsDir\start_dashboard_service.bat"
 
-    # pause 없는 서비스 전용 래퍼 — task scheduler가 종료를 감지해 재시작 가능
+    # 크래시 자동 재시작 루프 — uvicorn 종료 시 5초 후 재시작 (Task Scheduler 의존 없이 즉시 복구)
     @"
 @echo off
 chcp 65001 >nul
@@ -125,7 +125,12 @@ cd /d $BackendDir
 for /f "usebackq tokens=1,* delims==" %%a in ("$ProjectDir\.env") do (
     if not "%%a"=="" if not "%%b"=="" set %%a=%%b
 )
+:restart
+echo [%date% %time%] uvicorn start >> "$LogDir\dashboard.log"
 "$PythonExe" -m uvicorn main:app --host 0.0.0.0 --port 8000 --log-level warning >> "$LogDir\dashboard.log" 2>&1
+echo [%date% %time%] uvicorn exited, restarting in 5s >> "$LogDir\dashboard.log"
+timeout /t 5 /nobreak >nul
+goto restart
 "@ | Set-Content -Path $WrapperScript -Encoding UTF8
 
     $existing = schtasks /Query /TN $TaskName 2>$null
@@ -156,6 +161,13 @@ for /f "usebackq tokens=1,* delims==" %%a in ("$ProjectDir\.env") do (
     Write-Host "  확인:     schtasks /Query /TN $TaskName /FO LIST"
     Write-Host "  수동실행: schtasks /Run /TN $TaskName"
     Write-Host "  중지:     schtasks /End /TN $TaskName"
+
+    # HKCU Run 키의 VBS 래퍼 제거 — Task Scheduler AtLogOn으로 단일 관리
+    $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+    if (Get-ItemProperty -Path $runKey -Name $TaskName -ErrorAction SilentlyContinue) {
+        Remove-ItemProperty -Path $runKey -Name $TaskName
+        Write-Host "  [HKCU Run] '$TaskName' VBS 래퍼 항목 제거 (Task Scheduler 단독 관리)"
+    }
 }
 
 # ── 실행 ────────────────────────────────────────────────────────────
