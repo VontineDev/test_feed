@@ -274,7 +274,7 @@ ADMIN_PASSWORD=강력한비밀번호
 | `GET` | `/api/positions` | 오픈·대기 포지션 목록 |
 | `GET` | `/api/signals/stream` | 신호 SSE 스트림 |
 | `GET` | `/api/market_index` | KOSPI/KOSDAQ 지수 + 시장 심리 (5분 TTL 캐시) |
-| `POST` | `/api/scheduler/trigger` | 잡 수동 트리거 (`{"job": "stage"\|"screener"\|"paper_sample"}`) — **admin 전용** |
+| `POST` | `/api/scheduler/trigger` | 잡 수동 트리거 (`{"job": "stage"\|"screener"\|"paper_sample"}`) — **admin 전용** (user 계정에서 실행 시 "관리자 전용 기능입니다" 알림) |
 | `GET` | `/api/scheduler/status` | 최근 트리거 이력 10건 |
 
 ---

@@ -9,11 +9,12 @@ Caddy를 사용해 `vtrading.duckdns.org`에 Let's Encrypt HTTPS를 자동으로
   │ :443 HTTPS (Let's Encrypt 자동 인증서)
   ▼
 Caddy (C:\caddy\)
-  │ basicauth — 브라우저 네이티브 인증 다이얼로그
   │ reverse_proxy localhost:8000
   ▼
 FastAPI (localhost:8000)
-  │ localhost → auth 면제
+  │ _BasicAuthMiddleware — 역할 기반 인증
+  │   ADMIN_USER → role=admin (스케줄러 트리거 등 쓰기 권한)
+  │   DASHBOARD_USER → role=user (읽기 전용)
   ▼
 Trading Dashboard (React dist)
 ```
@@ -21,8 +22,8 @@ Trading Dashboard (React dist)
 **왜 Caddy인가?**  
 Caddy는 Let's Encrypt 인증서 발급·갱신을 자동으로 처리합니다. 90일 갱신을 직접 관리할 필요가 없습니다. DuckDNS DNS 플러그인이 내장되어 있어 포트 80 없이 DNS-01 챌린지로 인증서를 발급합니다.
 
-**왜 basicauth를 FastAPI가 아닌 Caddy에서 처리하는가?**  
-FastAPI는 `localhost`에서 오는 요청을 auth 없이 통과시킵니다(코드: `main.py:149`). Caddy가 프록시를 통해 FastAPI에 연결하면 FastAPI 입장에서는 모두 localhost 접속이므로 인증이 우회됩니다. 따라서 인증은 반드시 Caddy 레이어에서 처리해야 합니다.
+**왜 인증을 FastAPI에서 처리하는가?**  
+FastAPI `_BasicAuthMiddleware`가 역할 기반 인증(admin/user)을 직접 처리합니다. Caddy basicauth를 FastAPI 앞단에 추가하면 Caddy에 등록된 계정만 FastAPI까지 도달할 수 있어 `ADMIN_USER`처럼 Caddy가 모르는 계정은 항상 401을 받는 이중 인증 충돌이 발생합니다. 인증은 FastAPI 단일 레이어에서 처리하는 것이 올바릅니다.
 
 ---
 
@@ -53,13 +54,11 @@ vtrading.duckdns.org {
         propagation_timeout -1
     }
 
-    basic_auth {
-        admin $2a$14$tHdZT7fIobl/Pc/IPmLmCu279QRjarPifyVEUhxHJF8dtX8Sjzpcq
-    }
-
     reverse_proxy 127.0.0.1:8000
 }
 ```
+
+> **basicauth를 Caddyfile에 추가하지 마세요.** 인증은 FastAPI `_BasicAuthMiddleware`가 처리합니다. Caddy basicauth를 중복 추가하면 Caddy에 등록되지 않은 계정(`ADMIN_USER` 등)이 401 루프에 빠집니다. [reference-env-vars.md#대시보드-인증](reference-env-vars.md#대시보드-인증) 참고.
 
 `propagation_timeout -1`은 DNS 전파 확인을 건너뜁니다. ISP가 DuckDNS 네임서버(35.182.183.211:53)로의 아웃바운드 포트 53를 차단하기 때문입니다. 챌린지 레코드는 DuckDNS API가 정상 생성하므로 실제 발급에는 문제없습니다.
 
@@ -82,17 +81,14 @@ Write-Output "PID: $($proc.Id)"
 
 ---
 
-## How-to: basicauth 비밀번호 변경
+## How-to: 대시보드 비밀번호 변경
 
-1. 새 bcrypt 해시 생성:
+인증은 FastAPI가 처리합니다. `.env`의 `ADMIN_PASSWORD` 또는 `DASHBOARD_PASSWORD`를 변경한 뒤 uvicorn을 재시작하세요.
 
-   ```powershell
-   & "C:\caddy\caddy.exe" hash-password --plaintext "새비밀번호"
-   ```
-
-2. `C:\caddy\Caddyfile`의 `basicauth` 블록 수정 — `$2a$...` 해시를 교체합니다.
-
-3. Caddy 재시작 (위 명령 참조).
+```powershell
+# uvicorn 재시작 (start_dashboard.ps1 사용)
+.\scripts\start_dashboard.ps1
+```
 
 ---
 
@@ -115,10 +111,7 @@ Invoke-WebRequest -Uri $url -OutFile "C:\caddy\caddy.exe" -UseBasicParsing
 ### 2단계: Caddyfile 작성
 
 ```powershell
-# 비밀번호 해시 생성
-$hash = & "C:\caddy\caddy.exe" hash-password --plaintext "원하는비밀번호"
-
-# Caddyfile 생성
+# Caddyfile 생성 (인증은 FastAPI가 처리 — basicauth 블록 불필요)
 @"
 yourdomain.duckdns.org {
     tls {
@@ -127,14 +120,12 @@ yourdomain.duckdns.org {
         propagation_timeout -1
     }
 
-    basicauth {
-        admin $hash
-    }
-
     reverse_proxy localhost:8000
 }
 "@ | Out-File "C:\caddy\Caddyfile" -Encoding UTF8
 ```
+
+대시보드 인증 계정은 `.env`의 `ADMIN_USER`/`ADMIN_PASSWORD`, `DASHBOARD_USER`/`DASHBOARD_PASSWORD`로 설정합니다. ([reference-env-vars.md#대시보드-인증](reference-env-vars.md#대시보드-인증) 참고)
 
 ### 3단계: 시작 스크립트 작성
 

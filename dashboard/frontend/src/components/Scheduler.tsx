@@ -90,6 +90,14 @@ export default function Scheduler() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ job }),
       })
+      if (r.status === 403) {
+        alert('관리자 전용 기능입니다. 관리자 계정으로 로그인해 주세요.')
+        return
+      }
+      if (!r.ok) {
+        alert(`요청 실패 (${r.status})`)
+        return
+      }
       const j = await r.json()
       if (j.status === 'already_queued') {
         alert(`${JOB_LABELS[job]}: 이미 대기 중입니다`)

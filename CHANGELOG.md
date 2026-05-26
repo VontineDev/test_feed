@@ -8,6 +8,11 @@ All notable changes to this project will be documented in this file.
 
 - **역할 기반 인증** (`dashboard/backend/main.py`): `_BasicAuthMiddleware`를 역할 기반으로 확장. `ADMIN_USER`/`ADMIN_PASSWORD` → `role=admin` (쓰기 권한), `DASHBOARD_USER`/`DASHBOARD_PASSWORD` → `role=user` (읽기 전용). `ADMIN_USER` 미설정 시 `DASHBOARD_USER`도 admin 취급하여 하위 호환성 유지. `POST /api/scheduler/trigger`에 admin 가드 추가 — 일반 사용자가 잡 중복 트리거로 DB 부하를 유발하는 경로 차단.
 
+### Fixed
+
+- **Caddy basicauth 이중 인증 충돌 제거** (`C:\caddy\Caddyfile`): Caddy `basic_auth` 블록과 FastAPI `_BasicAuthMiddleware`가 동시에 활성화되어 `ADMIN_USER`(realAdmin 등) 계정이 Caddy 레이어에서 401 루프에 빠지던 문제 수정. Caddyfile에서 `basic_auth` 블록을 제거하고 인증을 FastAPI 단일 레이어로 통합.
+- **스케줄러 트리거 403 피드백 누락** (`dashboard/frontend/src/components/Scheduler.tsx`): user 역할 계정에서 스케줄러 트리거 버튼을 누르면 서버가 403을 반환했으나 프론트엔드가 응답을 조용히 무시하여 아무 반응이 없었던 문제 수정. 이제 "관리자 전용 기능입니다. 관리자 계정으로 로그인해 주세요." 알림을 표시합니다.
+
 ### Changed
 
 - **uvicorn 크래시 즉시 재시작** (`scripts/start_dashboard_service.bat`): uvicorn 종료 후 5초 대기 후 즉시 재시작하는 내부 restart 루프 추가. 기존 Task Scheduler 1분 대기 방식보다 서비스 복구가 빠름. 재시작 타임스탬프를 `dashboard.log`에 기록.

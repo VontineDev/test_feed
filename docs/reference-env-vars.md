@@ -135,7 +135,7 @@ KRX 세션 쿠키는 24시간 후 만료됩니다. 만료 시 `krx_flow_sync.py`
 - `ADMIN_USER` 미설정 시 `DASHBOARD_USER`도 admin 취급 (하위 호환)
 - 둘 다 미설정 → 인증 비활성화 (로컬 개발 환경)
 
-외부 HTTPS 접근 시 Caddy basicauth와 병행 사용을 권장합니다. [HTTPS-Setup.md](HTTPS-Setup.md) 참고.
+Caddy basicauth와 병행 사용하지 마세요. 두 인증 레이어가 충돌하여 Caddy에 없는 계정(`ADMIN_USER` 등)이 401 루프에 빠집니다. HTTPS 설정은 [HTTPS-Setup.md](HTTPS-Setup.md) 참고.
 
 ---
 
