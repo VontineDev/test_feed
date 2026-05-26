@@ -125,8 +125,8 @@ describe('generateVerdict', () => {
 // ── generateBanner ────────────────────────────────────────────
 
 const makeSnap = (z: number, change5d = 1.0): FactorSnap => ({
-  name: '', current: 1300, change_1d: 0.1, change_5d: change5d,
-  change_20d: 0.5, change_60d: 2.0, z_score_60d: z,
+  name: '', current: 1300, change_1d: 0.1, change_3d: 0.3, change_5d: change5d,
+  change_10d: 0.4, change_20d: 0.5, change_60d: 2.0, z_score_60d: z,
 })
 
 const emptySnapshot = () =>

@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.9.3] - 2026-05-27
+
+### Changed
+
+- **FactorCard 레이아웃 개선** (`dashboard/frontend/src/components/Macro.tsx`): 현재가와 1일 등락률을 같은 행에 나란히 표시(flexbox `alignItems: baseline`). 이전에는 현재가가 별도 행에 작게 표시되어 가독성이 낮았음. 추세 표시 기간을 기존 5d·20d에서 1일·3일·10일 3단계로 변경하여 단기 모멘텀 파악 용이.
+- **팩터 스냅샷 3d·10d 기간 추가** (`analysis/macro_tracker.py`, `dashboard/frontend/src/components/Macro.utils.ts`): `get_macro_snapshot()` 반환 dict에 `change_3d`, `change_10d` 필드 추가. `FactorSnap` 인터페이스와 테스트 목(mock)도 동기화.
+- **EWY 팩터 해석 변경** (`analysis/macro_tracker.py`, `dashboard/frontend/src/components/Macro.utils.ts`, `docs/ARCHITECTURE.md`): `export` 팩터를 "수출 모멘텀 대리변수"에서 "미장 한국 투자심리 대리변수(iShares MSCI Korea ETF)"로 재정의. EWY는 미국 시장에 상장된 한국 주식 ETF로, 외국인 수급 유입/이탈 방향을 반영. 라벨(`FACTOR_LABELS`, `FACTOR_SHORT_LABELS`), 1줄 해석(`FACTOR_CARD_INTERPRET`), 섹터 영향(`FACTOR_IMPACT_UP`) 전면 갱신.
+- **종목별 매크로 분석 주식 목록 동적화** (`dashboard/backend/main.py`): `_run_macro_analysis()`가 정적 `DEFAULT_TICKERS` 대신 3-tier fallback으로 종목 목록 결정. ① 오늘 실시간 히트맵 캐시 TOP 20 → ② `aftermarket_snap` DB 전날 거래대금 TOP 20(신규 `_fetch_prev_top20_sync()` 함수) → ③ `DEFAULT_TICKERS`. 캐시 비어있는 장 초반·주말에도 전날 거래대금 기준 종목으로 분석.
+
 ## [0.9.9.2] - 2026-05-26
 
 ### Added

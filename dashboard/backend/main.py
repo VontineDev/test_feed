@@ -1479,10 +1479,58 @@ async def get_ticker_history(
 
 
 # ── GET /api/macro ────────────────────────────────────────────
+
+def _fetch_prev_top20_sync() -> dict[str, str] | None:
+    """aftermarket_snap 최근 영업일 거래대금 TOP 20 → {ticker: name}. 실패 시 None."""
+    try:
+        import psycopg2
+        from core.db import get_dsn as _get_dsn
+        conn = psycopg2.connect(_get_dsn())
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT a.ticker,
+                           COALESCE(tn.name_ko, SPLIT_PART(a.ticker, '.', 1)) AS name
+                    FROM   aftermarket_snap a
+                    LEFT JOIN ticker_names tn ON tn.ticker = a.ticker
+                    WHERE  a.trade_date = (SELECT MAX(trade_date) FROM aftermarket_snap)
+                      AND  a.after_value IS NOT NULL
+                      AND  a.after_value > 0
+                    ORDER  BY a.after_value DESC
+                    LIMIT  20
+                """)
+                rows = cur.fetchall()
+        finally:
+            conn.close()
+        if not rows:
+            return None
+        result = {row[0]: row[1] for row in rows if row[0]}
+        logger.info("[macro] aftermarket_snap 전일 TOP %d 종목 로드", len(result))
+        return result if result else None
+    except Exception as e:
+        logger.warning("[macro] aftermarket_snap 조회 실패: %s", e)
+        return None
+
+
 def _run_macro_analysis() -> dict:
     """MacroTracker 분석 실행 (동기, asyncio.to_thread에서 호출)."""
+    # 1순위: 오늘 실시간 히트맵 캐시 TOP 20
+    heatmap_items: list[dict] = _HEATMAP_CACHE.get("data") or []
+    if len(heatmap_items) >= 5:
+        live_tickers = {
+            item["ticker"]: item["name"]
+            for item in heatmap_items[:20]
+            if item.get("ticker") and item.get("name")
+        }
+        logger.info("[macro] 히트맵 TOP %d 종목으로 분석", len(live_tickers))
+    else:
+        # 2순위: aftermarket_snap 전날 TOP 20
+        live_tickers = _fetch_prev_top20_sync()
+        if live_tickers is None:
+            logger.info("[macro] 전일 aftermarket 없음 — DEFAULT_TICKERS 사용")
+
     tracker = MacroTracker(period="2y", min_obs=60)
-    tracker.fit(_MACRO_TICKERS)
+    tracker.fit(live_tickers)
 
     snapshot = tracker.snapshot()
 

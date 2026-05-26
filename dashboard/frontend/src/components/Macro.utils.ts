@@ -4,7 +4,9 @@ export interface FactorSnap {
   name: string
   current: number
   change_1d: number
+  change_3d: number
   change_5d: number
+  change_10d: number
   change_20d: number
   change_60d: number
   z_score_60d: number
@@ -32,11 +34,11 @@ export const FACTOR_KEYS = ['rate', 'fx', 'oil', 'vix', 'dxy', 'export']
 
 export const FACTOR_LABELS: Record<string, string> = {
   rate: '미국10년금리', fx: 'USD/KRW', oil: '브렌트유',
-  vix: 'VIX', dxy: '달러인덱스', export: '수출EWY',
+  vix: 'VIX', dxy: '달러인덱스', export: 'iShares MSCI Korea ETF',
 }
 
 export const FACTOR_SHORT_LABELS: Record<string, string> = {
-  rate: '금리', fx: '환율', oil: '유가', vix: 'VIX', dxy: '달러', export: '수출',
+  rate: '금리', fx: '환율', oil: '유가', vix: 'VIX', dxy: '달러', export: 'EWY',
 }
 
 export const FACTOR_UNITS: Record<string, string> = {
@@ -50,7 +52,7 @@ export const FACTOR_CARD_INTERPRET: Record<string, { up: string; down: string }>
   oil:    { up: '유가 상승 — 정유·에너지 수혜, 항공·운수 부담', down: '유가 하락 — 항공·운수 유리, 정유 마진 압박' },
   vix:    { up: '공포 증가 — 전반적 위험자산 부담',            down: '공포 완화 — 위험선호 회복' },
   dxy:    { up: '달러 강세 — 신흥국 자본 유출 우려',           down: '달러 약세 — 신흥국·원자재 유리' },
-  export: { up: '한국 수출 호조 — 수출·제조업 수혜',           down: '한국 수출 둔화 — 내수·서비스 상대적 유리' },
+  export: { up: 'EWY 상승 — 미장 투자심리 개선, 외국인 수급 유입 기대', down: 'EWY 하락 — 미장 한국 기피, 외국인 이탈 압력' },
 }
 
 export const FACTOR_IMPACT_UP: Record<string, { good: string; bad: string }> = {
@@ -59,7 +61,7 @@ export const FACTOR_IMPACT_UP: Record<string, { good: string; bad: string }> = {
   oil:    { good: '정유·에너지', bad: '항공·운수' },
   vix:    { good: '방어주',    bad: '전반적 위험자산' },
   dxy:    { good: '달러자산',  bad: '신흥국·원자재' },
-  export: { good: '수출·제조', bad: '내수·서비스' },
+  export: { good: '외국인 수급 수혜주', bad: '외국인 이탈 취약주' },
 }
 
 export function getFactorState(z: number): { text: string; borderColor: string } {

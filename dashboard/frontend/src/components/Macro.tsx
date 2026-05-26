@@ -55,16 +55,26 @@ const FactorCard = ({ factorKey: k, snap }: { factorKey: string; snap: FactorSna
     return (
       <div className="macro-skeleton" style={{
         background: tokens.bg.raised, border: `1px solid ${tokens.bd.emphasis}`,
-        borderRadius: 6, padding: '10px', height: 86,
+        borderRadius: 6, padding: '10px', height: 90,
       }} />
     )
   }
 
   const state = getFactorState(snap.z_score_60d)
-  const dir = snap.change_5d > 0 ? '▲' : snap.change_5d < 0 ? '▼' : '→'
+  const ref = snap.change_1d  // 카드 기준 등락은 1일
+  const dir = ref > 0 ? '▲' : ref < 0 ? '▼' : '→'
   const interpretText = snap.change_5d >= 0
     ? FACTOR_CARD_INTERPRET[k]?.up ?? ''
     : FACTOR_CARD_INTERPRET[k]?.down ?? ''
+
+  const currentStr = k === 'fx'
+    ? snap.current.toFixed(1)
+    : k === 'rate'
+    ? snap.current.toFixed(2) + '%'
+    : snap.current.toFixed(2)
+
+  const fmtTrend = (v: number) =>
+    (v >= 0 ? '+' : '') + v.toFixed(k === 'rate' ? 3 : 2) + FACTOR_UNITS[k]
 
   return (
     <div style={{
@@ -74,6 +84,7 @@ const FactorCard = ({ factorKey: k, snap }: { factorKey: string; snap: FactorSna
       padding: '8px 10px',
       cursor: 'default',
     }}>
+      {/* 라벨 + 상태 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
         <span style={{ fontSize: 11, fontWeight: 700, color: tokens.tx.secondary }}>
           {FACTOR_LABELS[k]}
@@ -82,20 +93,26 @@ const FactorCard = ({ factorKey: k, snap }: { factorKey: string; snap: FactorSna
           {state.text}
         </span>
       </div>
-      <div style={{
-        fontSize: 15, fontWeight: 700, fontVariantNumeric: 'tabular-nums',
-        color: pctTextColor(snap.change_5d),
-        marginBottom: 4,
-      }}>
-        {dir} {Math.abs(snap.change_5d).toFixed(k === 'rate' ? 2 : 1)}{FACTOR_UNITS[k]}
+      {/* 현재가 + 1일 등락 (같은 행) */}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 3 }}>
+        <span style={{ fontSize: 14, fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: tokens.tx.primary }}>
+          {currentStr}
+        </span>
+        <span style={{ fontSize: 13, fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: pctTextColor(ref) }}>
+          {dir} {Math.abs(ref).toFixed(k === 'rate' ? 3 : 2)}{FACTOR_UNITS[k]}
+        </span>
       </div>
+      {/* 해석 */}
       <div style={{ fontSize: 10, color: tokens.tx.muted, lineHeight: 1.4, marginBottom: 4 }}>
         {interpretText}
       </div>
-      <div style={{ fontSize: 9, color: tokens.tx.separator, fontVariantNumeric: 'tabular-nums' }}>
-        현재 {snap.current.toFixed(k === 'fx' ? 1 : 3)}{k === 'rate' ? '%' : ''}
-        &nbsp;|&nbsp;
-        1일 {fmt(snap.change_1d, k === 'rate' ? 3 : 2)}{FACTOR_UNITS[k]}
+      {/* 추세: 1일 / 3일 / 10일 */}
+      <div style={{ display: 'flex', gap: 6, fontSize: 9, color: tokens.tx.separator, fontVariantNumeric: 'tabular-nums' }}>
+        <span>1일 <span style={{ color: pctTextColor(snap.change_1d) }}>{fmtTrend(snap.change_1d)}</span></span>
+        <span style={{ color: tokens.bd.emphasis }}>|</span>
+        <span>3일 <span style={{ color: pctTextColor(snap.change_3d ?? 0) }}>{fmtTrend(snap.change_3d ?? 0)}</span></span>
+        <span style={{ color: tokens.bd.emphasis }}>|</span>
+        <span>10일 <span style={{ color: pctTextColor(snap.change_10d ?? 0) }}>{fmtTrend(snap.change_10d ?? 0)}</span></span>
       </div>
     </div>
   )
@@ -218,7 +235,7 @@ export default function Macro() {
       {stocks.length > 0 && (
         <div>
           <div style={{ fontSize: 11, fontWeight: 700, color: tokens.tx.secondary, marginBottom: 6 }}>
-            종목별 매크로 영향 점수 (현재 매크로 기준, 최근 5일)
+            종목별 매크로 영향 점수 (오늘 거래대금 TOP 20 · 현재 매크로 기준)
           </div>
           <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>

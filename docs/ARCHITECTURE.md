@@ -648,7 +648,7 @@ class ScreenResult:
 | oil | `BZ=F` | 브렌트유 선물 |
 | vix | `^VIX` | 공포지수 |
 | dxy | `DX-Y.NYB` | 달러인덱스 |
-| export | `EWY` | 한국 수출 프록시 ETF |
+| export | `EWY` | 미장 한국 투자심리 ETF (iShares MSCI Korea) — 외국인 수급 대리변수 |
 
 **모델 수식**:
 ```

@@ -10,7 +10,7 @@ macro_tracker.py — 매크로 요인 추적 및 개별 주식 영향 평가 모
   oil    : 브렌트유 선물 BZ=F          — 에너지비용·인플레이션
   vix    : VIX 공포지수 ^VIX          — 위험선호·글로벌 리스크온/오프
   dxy    : 달러인덱스 DX-Y.NYB        — 신흥국 자본 유출입
-  export : 한국수출 프록시 EWY ETF     — 한국 수출 모멘텀 대리변수
+  export : iShares MSCI Korea ETF (EWY) — 미장 한국 투자심리 대리변수
 
 모델:
   r_주식[t] = α + β_rate·Δrate[t] + β_fx·Δfx[t] + β_oil·Δoil[t]
@@ -29,7 +29,7 @@ macro_tracker.py — 매크로 요인 추적 및 개별 주식 영향 평가 모
     β_oil  < 0   → 유가 상승 시 주가 하락   (항공·화학·운수·소비재)
     β_vix  < 0   → 공포 증가 시 주가 하락   (대부분 위험자산)
     β_dxy  < 0   → 달러 강세 시 주가 하락   (신흥국 자본유출 수혜)
-    β_export > 0 → 한국 수출 호조 시 수혜   (수출·제조)
+    β_export > 0 → EWY 상승(미장 한국 투자심리 개선) 시 수혜   (외국인 수급 수혜주)
 
   매크로 영향 점수 (Macro Score, -100 ~ +100):
     최근 5일 팩터 변화 × 해당 종목 베타 합산 → tanh 정규화
@@ -83,7 +83,7 @@ MACRO_NAMES: dict[str, str] = {
     "oil":    "브렌트유(%)",
     "vix":    "VIX(%)",
     "dxy":    "달러인덱스(%)",
-    "export": "수출프록시EWY(%)",
+    "export": "EWY 미장한국ETF(%)",
 }
 
 FACTOR_GUIDE: dict[str, tuple[str, str]] = {
@@ -92,7 +92,7 @@ FACTOR_GUIDE: dict[str, tuple[str, str]] = {
     "oil":    ("유가↑ 수혜: 정유·에너지·소재", "유가↑ 피해: 항공·화학·운수"),
     "vix":    ("VIX↑ 수혜: 방어주·금(safe-haven)", "VIX↑ 피해: 성장·소형·신흥국"),
     "dxy":    ("달러↑ 수혜: 달러자산 보유", "달러↑ 피해: 신흥국 자본유출"),
-    "export": ("수출↑ 수혜: 반도체·제조·수출", "수출↓ 피해: 수출 의존 산업"),
+    "export": ("EWY↑ 수혜: 외국인 수급 유입 수혜주", "EWY↓ 피해: 외국인 이탈 취약 종목"),
 }
 
 # 기본 분석 대상 (KOSPI/KOSDAQ 주요 종목)
@@ -346,7 +346,9 @@ def get_macro_snapshot(macro_prices: pd.DataFrame) -> dict:
             "name":       MACRO_NAMES.get(col, col),
             "current":    round(curr, 4),
             "change_1d":  _chg(1),
+            "change_3d":  _chg(3),
             "change_5d":  _chg(5),
+            "change_10d": _chg(10),
             "change_20d": _chg(20),
             "change_60d": _chg(60),
             "z_score_60d": z60,
