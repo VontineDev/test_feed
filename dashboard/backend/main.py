@@ -85,6 +85,9 @@ _MARKET_INDEX_TTL = 300  # 5분
 _MARKET_INDEX_LOCK = asyncio.Lock()
 _KST = ZoneInfo("Asia/Seoul")
 
+# ── SSE 연결 카운터 ──────────────────────────────────────────
+_SSE_CONNECTIONS: dict[str, int] = {"signals": 0, "scheduler": 0}
+
 
 async def _bg_refresh(cache: dict, lock: asyncio.Lock, fetch_fn, ttl: float, label: str) -> None:
     """stale-while-revalidate: 백그라운드에서 캐시를 갱신한다. 실패 시 stale 유지."""
@@ -117,8 +120,28 @@ CREATE INDEX IF NOT EXISTS idx_sched_stream
 """
 
 
+_STARTUP_TIME: float = 0.0
+
+
+async def _warmup_caches() -> None:
+    """서버 기동 시 캐시를 미리 채워 cold start 지연을 방지한다."""
+    logger.info("[warmup] 캐시 사전 로딩 시작")
+    tasks = [
+        _bg_refresh(_HEATMAP_CACHE, _HEATMAP_LOCK, _build_heatmap_data, _PRICE_TTL, "heatmap"),
+        _bg_refresh(_MARKET_INDEX_CACHE, _MARKET_INDEX_LOCK, _fetch_market_index_data, _MARKET_INDEX_TTL, "market_index"),
+        _bg_refresh(_MACRO_CACHE, _MACRO_LOCK, lambda: asyncio.to_thread(_run_macro_analysis), _MACRO_TTL, "macro"),
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for label, exc in zip(["heatmap", "market_index", "macro"], results):
+        if isinstance(exc, Exception):
+            logger.warning("[warmup] %s 실패 (무시): %s", label, exc)
+    logger.info("[warmup] 완료")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _STARTUP_TIME
+    _STARTUP_TIME = _time_module.time()
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(_INIT_SQL)
@@ -131,8 +154,9 @@ async def lifespan(app: FastAPI):
         await conn.execute("ALTER TABLE ticker_names ENABLE ROW LEVEL SECURITY")
     logger.info("DB 풀 준비 완료")
 
-    # 오늘 stage 종목 중 이름 캐시 없는 것 채우기 (백그라운드)
+    # 종목 이름 시드 + 캐시 사전 로딩 (백그라운드)
     asyncio.create_task(_seed_ticker_names(pool))
+    asyncio.create_task(_warmup_caches())
 
     yield
     await close_pool()
@@ -478,14 +502,18 @@ def _signal_to_dict(r) -> dict:
 
 @app.get("/api/signals/stream")
 async def signals_stream(request: Request):
-    return StreamingResponse(
-        _signal_generator(request),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    _SSE_CONNECTIONS["signals"] += 1
+    try:
+        return StreamingResponse(
+            _signal_generator(request),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    finally:
+        _SSE_CONNECTIONS["signals"] = max(0, _SSE_CONNECTIONS["signals"] - 1)
 
 
 # ── POST /api/scheduler/trigger ───────────────────────────────
@@ -581,11 +609,15 @@ async def _scheduler_stream_generator(request: Request) -> AsyncGenerator[str, N
 
 @app.get("/api/scheduler/stream")
 async def scheduler_stream(request: Request):
-    return StreamingResponse(
-        _scheduler_stream_generator(request),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    _SSE_CONNECTIONS["scheduler"] += 1
+    try:
+        return StreamingResponse(
+            _scheduler_stream_generator(request),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+    finally:
+        _SSE_CONNECTIONS["scheduler"] = max(0, _SSE_CONNECTIONS["scheduler"] - 1)
 
 
 # ── GET /api/report/stage ────────────────────────────────────
@@ -1202,7 +1234,8 @@ async def get_paper_export():
 # GET /api/history/screener — 기간별 스크리너 집계
 # GET /api/history/ticker/{ticker} — 종목별 이력
 
-_HISTORY_DEFAULT_DAYS = 14  # 기본 조회 기간 (일)
+_HISTORY_DEFAULT_DAYS = 14   # 기본 조회 기간 (일)
+_HISTORY_MAX_DAYS     = 365  # 최대 조회 범위 — 초과 시 422
 
 
 def _date_to_week(d: date) -> str:
@@ -1232,6 +1265,8 @@ async def get_stage_history(
     end_date   = _parse_date(end, today)
     if start_date > end_date:
         start_date = end_date
+    if (end_date - start_date).days > _HISTORY_MAX_DAYS:
+        raise HTTPException(status_code=422, detail=f"조회 범위는 최대 {_HISTORY_MAX_DAYS}일입니다")
 
     try:
         pool = await get_pool()
@@ -1315,6 +1350,8 @@ async def get_screener_history(
     end_date   = _parse_date(end, today)
     if start_date > end_date:
         start_date = end_date
+    if (end_date - start_date).days > _HISTORY_MAX_DAYS:
+        raise HTTPException(status_code=422, detail=f"조회 범위는 최대 {_HISTORY_MAX_DAYS}일입니다")
     start_week = _date_to_week(start_date)
     end_week   = _date_to_week(end_date)
 
@@ -1365,6 +1402,8 @@ async def get_ticker_history(
     today = date.today()
     start_date = _parse_date(start, today - timedelta(days=_HISTORY_DEFAULT_DAYS))
     end_date   = _parse_date(end, today)
+    if (end_date - start_date).days > _HISTORY_MAX_DAYS:
+        raise HTTPException(status_code=422, detail=f"조회 범위는 최대 {_HISTORY_MAX_DAYS}일입니다")
     if start_date > end_date:
         start_date = end_date
     start_week = _date_to_week(start_date)
@@ -1672,6 +1711,44 @@ async def post_feedback(request: Request, body: FeedbackBody):
         raise HTTPException(status_code=500, detail=str(e))
 
     return {"status": "sent"}
+
+
+# ── GET /health ───────────────────────────────────────────────
+@app.get("/health")
+async def health():
+    """서버 상태 — Caddy 생존 체크 + 운영 모니터링용."""
+    now = _time_module.time()
+
+    def _cache_info(cache: dict) -> dict:
+        if not cache["data"]:
+            return {"cached": False}
+        expires_in = max(0.0, round(cache["expires"] - now, 1))
+        return {"cached": True, "expires_in_s": expires_in}
+
+    pool_info: dict = {}
+    try:
+        pool = await get_pool()
+        pool_info = {
+            "min_size": pool.get_min_size(),
+            "max_size": pool.get_max_size(),
+            "size":     pool.get_size(),
+            "free":     pool.get_idle_size(),
+        }
+    except Exception:
+        pool_info = {"error": "pool unavailable"}
+
+    return {
+        "status":    "ok",
+        "uptime_s":  round(now - _STARTUP_TIME, 1) if _STARTUP_TIME else None,
+        "db_pool":   pool_info,
+        "cache": {
+            "heatmap":      _cache_info(_HEATMAP_CACHE),
+            "top":          _cache_info(_TOP_CACHE),
+            "macro":        _cache_info(_MACRO_CACHE),
+            "market_index": _cache_info(_MARKET_INDEX_CACHE),
+        },
+        "sse": dict(_SSE_CONNECTIONS),
+    }
 
 
 # ── React 정적 파일 서빙 (프로덕션) ──────────────────────────
