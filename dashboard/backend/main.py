@@ -157,29 +157,46 @@ app.add_middleware(
 
 
 class _BasicAuthMiddleware(BaseHTTPMiddleware):
-    """DASHBOARD_USER / DASHBOARD_PASSWORD 환경변수가 설정된 경우에만 Basic Auth 적용."""
+    """
+    역할 기반 Basic Auth.
+    - ADMIN_USER/ADMIN_PASSWORD   → role=admin  (스케줄러 트리거 등 쓰기 권한)
+    - DASHBOARD_USER/DASHBOARD_PASSWORD → role=user (읽기 전용)
+    - ADMIN_USER 미설정 시 DASHBOARD_USER도 admin 취급 (하위 호환)
+    - 두 쌍 모두 미설정 → 인증 없음, role=admin (로컬 dev)
+    """
 
     async def dispatch(self, request: Request, call_next):
-        user = os.environ.get("DASHBOARD_USER", "")
-        pw   = os.environ.get("DASHBOARD_PASSWORD", "")
-        if not user or not pw:
+        admin_user = os.environ.get("ADMIN_USER", "")
+        admin_pw   = os.environ.get("ADMIN_PASSWORD", "")
+        dash_user  = os.environ.get("DASHBOARD_USER", "")
+        dash_pw    = os.environ.get("DASHBOARD_PASSWORD", "")
+
+        if not admin_user and not dash_user:
+            request.state.role = "admin"
             return await call_next(request)
 
+        role: str | None = None
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Basic "):
             try:
                 decoded = base64.b64decode(auth[6:]).decode("utf-8", errors="replace")
                 req_user, _, req_pw = decoded.partition(":")
-                if secrets.compare_digest(req_user, user) and secrets.compare_digest(req_pw, pw):
-                    return await call_next(request)
+                if admin_user and secrets.compare_digest(req_user, admin_user) and secrets.compare_digest(req_pw, admin_pw):
+                    role = "admin"
+                elif dash_user and secrets.compare_digest(req_user, dash_user) and secrets.compare_digest(req_pw, dash_pw):
+                    role = "admin" if not admin_user else "user"
             except Exception:
                 pass
 
-        return Response(
-            status_code=401,
-            headers={"WWW-Authenticate": 'Basic realm="Trading Dashboard"'},
-            content="Unauthorized",
-        )
+        if role is None:
+            return Response(
+                status_code=401,
+                headers={"WWW-Authenticate": 'Basic realm="Trading Dashboard"'},
+                content="Unauthorized",
+            )
+
+        request.state.role = role
+        return await call_next(request)
 
 
 app.add_middleware(_BasicAuthMiddleware)
@@ -456,7 +473,9 @@ class TriggerBody(BaseModel):
 
 
 @app.post("/api/scheduler/trigger")
-async def trigger_job(body: TriggerBody):
+async def trigger_job(request: Request, body: TriggerBody):
+    if getattr(request.state, "role", "admin") != "admin":
+        raise HTTPException(status_code=403, detail="관리자 권한이 필요합니다")
     if body.job not in _VALID_JOBS:
         raise HTTPException(status_code=400, detail=f"unknown job: {body.job}")
     pool = await get_pool()
