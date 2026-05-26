@@ -25,6 +25,7 @@
 > v0.9.4.0부터 **웹 대시보드 이력 트래킹**이 추가되었습니다. Report 탭에 날짜 범위 선택 바(오늘/-3일/-1주/-2주/-1달)가 추가되어 기간별 Stage·스크리너 등장 종목을 횟수 순으로 조회할 수 있습니다. 종목 클릭 시 Stage 일별 이력(분류일/스테이지/진입고가/피크아웃)·스크리너 주차 이력 팝업 표시. 이력 API 3개(`/api/history/stage`, `/api/history/screener`, `/api/history/ticker/{ticker}`) 추가. 모의투자 모델 카드 클릭으로 포지션 테이블 필터링.
 > v0.9.7.0부터 **모의투자 성과분석**이 추가되었습니다. `GET /api/paper/curve`(모델별 누적 P&L 시계열·집계 통계·미실현 현재가), `GET /api/paper/export`(paper_positions CSV, utf-8-sig BOM) 2개 엔드포인트 추가. `PaperAnalytics.tsx` 컴포넌트(누적 P&L 커브 Recharts, 미실현 포지션 리더보드, CSV 다운로드)가 `PaperPortfolio` 하단에 임베드됩니다.
 > v0.9.5.0부터 **웹 대시보드 히트맵 재설계**가 적용되었습니다. 데이터 소스를 Stage 분류 종목(10~50개)에서 Kiwoom 당일 거래대금 상위 50종목으로 교체. 셀 크기=당일 실제 거래대금, 등락률=Kiwoom 일중 change_pct. Stage 분류된 종목은 컬러 테두리(S1 파랑·S2 보라·S3 주황)로 오버레이. Stage 분류 잡 미실행 시에도 항상 50종목이 표시됨. Kiwoom 응답 실패 시 Stage 분류 데이터로 폴백.
+> v0.9.9.x부터 **대시보드 10명 동시 접속 안정화**가 적용되었습니다. `_bg_refresh()` stale-while-revalidate 패턴으로 캐시 만료 시 Thundering Herd 해소(RISK-04). `_EXT_EXECUTOR(max_workers=4)` + `_ext_thread()` 래퍼로 yfinance·Kiwoom·KRX 외부 API를 전용 풀에서 타임아웃과 함께 실행(RISK-05). `_warmup_caches()` lifespan 사전 로딩으로 cold start 지연 해소(RISK-07). `_HISTORY_MAX_DAYS=365` 이력 쿼리 범위 제한으로 단일 사용자 DB 독점 차단(RISK-08). `GET /health` 엔드포인트 신설 — 업타임·DB 풀·캐시 TTL·SSE 연결 수 반환(RISK-09).
 
 ---
 
@@ -771,6 +772,11 @@ test_feed/
 ├── dashboard/                     # 웹 대시보드 (FastAPI + React)
 │   ├── backend/
 │   │   ├── main.py                # FastAPI 앱 — BasicAuth 미들웨어, 전체 API 엔드포인트
+│   │   │                          # _bg_refresh(): stale-while-revalidate 캐시 갱신 헬퍼
+│   │   │                          # _EXT_EXECUTOR: 외부 API 전용 ThreadPoolExecutor(max_workers=4)
+│   │   │                          # _ext_thread(): yfinance/Kiwoom/KRX 호출 + 명시적 타임아웃
+│   │   │                          # _warmup_caches(): lifespan 시작 시 heatmap/market_index/macro 사전 로딩
+│   │   │                          # GET /health: 업타임·DB 풀·캐시 TTL·SSE 연결 수 반환
 │   │   └── database.py            # 대시보드 전용 DB 헬퍼
 │   └── frontend/
 │       ├── src/                   # React + TypeScript 소스
@@ -997,7 +1003,7 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 
 ---
 
-*현재 코드베이스 v0.9.8.1 (2026-05-24) 기준*
+*현재 코드베이스 v0.9.9.2 (2026-05-26) 기준*
 
 ---
 

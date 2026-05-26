@@ -7,6 +7,14 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - **피드백 위젯** (`dashboard/frontend/src/components/Feedback.tsx`, `dashboard/backend/main.py`): 헤더 오른쪽 끝 "피드백" 버튼 클릭 시 모달이 열리며, 텍스트 입력 + 선택적 스크린샷(html2canvas)을 Telegram으로 전송. `POST /api/feedback` 엔드포인트 신설 — 스크린샷 있으면 `sendPhoto`, 없으면 `sendMessage`. html2canvas는 동적 import로 lazy 로드되어 번들 크기 영향 없음. 발신자 역할(admin/user)이 캡션에 포함되어 누가 보냈는지 식별 가능.
+- **캐시 워밍업** (`dashboard/backend/main.py`): `_warmup_caches()` — FastAPI lifespan 시작 시 heatmap·market_index·macro 3개 캐시를 백그라운드 태스크로 병렬 사전 로딩. 재시작 직후 cold start 응답 지연 해소 (RISK-07).
+- **이력 조회 범위 제한** (`dashboard/backend/main.py`): `_HISTORY_MAX_DAYS=365` 상수 추가. `/api/history/stage`, `/api/history/screener`, `/api/history/ticker/{ticker}` 3개 엔드포인트에 날짜 범위 초과 시 HTTP 422 반환. 단일 사용자의 대범위 쿼리로 DB 연결을 독점하는 경로 차단 (RISK-08).
+- **`/health` 모니터링 엔드포인트** (`dashboard/backend/main.py`): `GET /health` 신설 — 서버 업타임, asyncpg 풀 상태(size·free·min/max), 캐시별 TTL 잔여 시간, SSE 연결 수(`signals`·`scheduler`)를 JSON으로 반환. Caddy `reverse_proxy` 헬스체크 및 운영 모니터링 용도 (RISK-09).
+
+### Performance
+
+- **stale-while-revalidate 캐시 패턴** (`dashboard/backend/main.py`): `_bg_refresh()` 헬퍼 도입. TTL 만료 후 stale 데이터가 있으면 즉시 반환하고 백그라운드에서 갱신. 10명 동시 접속 시 캐시 만료 직후 모든 요청이 큐 대기하던 Thundering Herd 현상 해소. `_HEATMAP_LOCK` 누락 추가, `_fetch_market_index_data()` 순수 함수로 추출해 락 내부에서 fetch 완료 보장 (RISK-04).
+- **외부 API 전용 스레드 풀** (`dashboard/backend/main.py`): `_EXT_EXECUTOR = ThreadPoolExecutor(max_workers=4)` — yfinance·Kiwoom·KRX 동기 호출을 기본 executor에서 분리. `_ext_thread(fn, *args, timeout)` 래퍼로 모든 외부 API 호출에 명시적 타임아웃 적용 (Kiwoom 15s, yfinance 20s, macro 90s). yfinance/Kiwoom 장애 시 executor 스레드 고갈로 이벤트 루프가 멈추던 문제 해소 (RISK-05).
 
 ### Fixed
 
