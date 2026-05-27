@@ -134,38 +134,55 @@ export default function Heatmap() {
             value="value"
             leavesOnly={true}
             colors={(node) => {
-              // 셀 배경 — 트리맵 전용 그린/레드 그라데이션 (heat scale)
               const d = node.data as unknown as { change_pct?: number }
               return heatCellColor(d.change_pct ?? 0)
             }}
             borderWidth={2}
             borderColor={(node) => {
-              // 셀 보더 — Stage 색
               const d = node.data as unknown as { stage?: number | null }
               return stageColor(d.stage ?? null)
             }}
-            label={(node) => {
-              const d = node.data as unknown as { label?: string; change_pct?: number; stage?: number | null }
-              if (!d.label) return ''
-              const { width } = node
-              if (width < 28) return ''
-              const pct = d.change_pct ?? 0
-              const sign = pct > 0 ? '+' : ''
-              const pctStr = `${sign}${pct.toFixed(1)}%`
-              const stageStr = d.stage != null ? `S${d.stage} ` : ''
-              const maxChars = Math.max(1, Math.floor(width / 11) - 1)
-              const full = `${stageStr}${d.label}  ${pctStr}`
-              if (full.length <= maxChars) return full
-              const nameMax = maxChars - pctStr.length - 2
-              if (nameMax >= 2) {
-                const name = d.label.length > nameMax ? d.label.slice(0, nameMax - 1) + '…' : d.label
-                return `${name}  ${pctStr}`
-              }
-              return maxChars >= 2 ? d.label.slice(0, maxChars - 1) + '…' : d.label.slice(0, 1)
-            }}
-            orientLabel={false}
+            label={() => ''}
             labelSkipSize={0}
-            labelTextColor={tokens.tx.primary}
+            layers={[
+              'nodes',
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              ({ nodes }: any) => (
+                <g>
+                  {(nodes as any[]).map((node: any) => {
+                    if (node.width < 28 || node.height < 18) return null
+                    const d = node.data as { label?: string; change_pct?: number }
+                    const name  = d.label ?? ''
+                    const pct   = d.change_pct ?? 0
+                    const sign  = pct > 0 ? '+' : ''
+                    const pctStr = `${sign}${pct.toFixed(1)}%`
+                    const cx = node.x + node.width / 2
+                    const cy = node.y + node.height / 2
+                    const maxChars  = Math.max(2, Math.floor(node.width / 10))
+                    const shortName = name.length > maxChars ? name.slice(0, maxChars - 1) + '…' : name
+                    const twoRows   = node.height >= 28
+                    return (
+                      <g key={node.id} style={{ pointerEvents: 'none', userSelect: 'none' }}>
+                        {twoRows ? (
+                          <>
+                            <text x={cx} y={cy - 5} textAnchor="middle" fontSize={10} fill={tokens.tx.primary}>
+                              {shortName}
+                            </text>
+                            <text x={cx} y={cy + 9} textAnchor="middle" fontSize={10} fontWeight={700} fill={pctTextColor(pct)}>
+                              {pctStr}
+                            </text>
+                          </>
+                        ) : (
+                          <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize={9} fill={tokens.tx.primary}>
+                            {shortName}
+                          </text>
+                        )}
+                      </g>
+                    )
+                  })}
+                </g>
+              ),
+            ]}
             tooltip={({ node }) => {
               const d = node.data as unknown as { item?: HeatmapItem }
               if (!d.item) return <div />

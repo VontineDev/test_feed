@@ -34,7 +34,7 @@ export const FACTOR_KEYS = ['rate', 'fx', 'oil', 'vix', 'dxy', 'export']
 
 export const FACTOR_LABELS: Record<string, string> = {
   rate: '미국10년금리', fx: 'USD/KRW', oil: '브렌트유',
-  vix: 'VIX', dxy: '달러인덱스', export: 'iShares MSCI Korea ETF',
+  vix: 'VIX', dxy: '달러인덱스', export: '아이셰어즈 대한민국 ETF(EWY)',
 }
 
 export const FACTOR_SHORT_LABELS: Record<string, string> = {

@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.9.4] - 2026-05-27
+
+### Fixed
+
+- **매크로 분석 Kiwoom 티커 포맷 변환 누락** (`dashboard/backend/main.py`): Kiwoom ka10032 API가 반환하는 `XXXXXX_AL`(KOSPI) / `XXXXXX_AQ`(KOSDAQ) 포맷 티커를 yfinance에 그대로 넘겨 `다운로드 실패` 오류가 매 10분 갱신마다 반복되던 버그. `_kiwoom_to_yfinance()` 헬퍼 추가 — `_AL` → `.KS`, `_AQ` → `.KQ` 변환. 변환 불가 티커는 aftermarket_snap 폴백.
+- **서버 재시작 직후 매크로가 어제 종목으로 채워지는 스타트업 레이스** (`dashboard/backend/main.py`): `_warmup_caches()`가 heatmap·macro를 `asyncio.gather()`로 동시 실행하여 macro가 빈 heatmap 캐시를 읽고 aftermarket_snap(전날 종목)으로 폴백하던 문제. warmup을 2단계로 분리 — ① heatmap 단독 완료 후 ② market_index + macro 병렬 실행. 재시작 즉시부터 오늘 TOP 20 종목 기준으로 분석.
+
+### Changed
+
+- **매크로 종목 선정: 거래대금 상위 20종목 + 거래대금 순 정렬** (`dashboard/backend/main.py`): `_run_macro_analysis()`의 히트맵 슬라이스를 `[:20]`에서 전체 풀(최대 50개)로 확대. yfinance 관측 부족으로 스킵된 자리를 하위 순위 종목으로 채워 유효 종목 항상 20개 확보. 결과 정렬을 `macro_score` 내림차순에서 거래대금(heatmap rank) 순서로 변경.
+- **EWY 팩터 표기명 한국어화** (`dashboard/frontend/src/components/Macro.utils.ts`): `FACTOR_LABELS.export` 값을 `'iShares MSCI Korea ETF'` → `'아이셰어즈 대한민국 ETF(EWY)'`로 변경. 팩터 카드 제목·배너 등 전체 반영.
+- **히트맵 색상 한국 시장 컨벤션 적용** (`dashboard/frontend/src/tokens.ts`): `heat.hot`(상승 셀)을 초록(`#4ade80`~`#15803d`) → 빨강(`#fca5a5`~`#b91c1c`), `heat.cold`(하락 셀)을 빨강 → 파랑(`#93c5fd`~`#1e40af`)으로 교체. `semantic.up/down`(텍스트)은 이미 한국식이었으므로 변경 없음.
+- **히트맵 셀 레이블 2행** (`dashboard/frontend/src/components/Heatmap.tsx`): Nivo 내장 `label` 문자열 렌더러를 폐기하고 커스텀 SVG 레이어(`layers`)로 교체. 셀 높이 ≥ 28px: 종목명(1행) + 등락률 한국색(2행) 표시. 셀 높이 18~27px: 종목명 단행. 셀 너비 기준 자동 truncate (`…` 처리).
+
 ## [0.9.9.3] - 2026-05-27
 
 ### Changed

@@ -141,13 +141,18 @@ _STARTUP_TIME: float = 0.0
 async def _warmup_caches() -> None:
     """서버 기동 시 캐시를 미리 채워 cold start 지연을 방지한다."""
     logger.info("[warmup] 캐시 사전 로딩 시작")
-    tasks = [
-        _bg_refresh(_HEATMAP_CACHE, _HEATMAP_LOCK, _build_heatmap_data, _PRICE_TTL, "heatmap"),
+    # heatmap 먼저: macro 분석이 오늘 TOP 20 종목을 사용하도록 순서 보장
+    try:
+        await _bg_refresh(_HEATMAP_CACHE, _HEATMAP_LOCK, _build_heatmap_data, _PRICE_TTL, "heatmap")
+    except Exception as e:
+        logger.warning("[warmup] heatmap 실패 (무시): %s", e)
+    # heatmap 완료 후 macro + market_index 병렬 실행
+    results = await asyncio.gather(
         _bg_refresh(_MARKET_INDEX_CACHE, _MARKET_INDEX_LOCK, _fetch_market_index_data, _MARKET_INDEX_TTL, "market_index"),
         _bg_refresh(_MACRO_CACHE, _MACRO_LOCK, lambda: _ext_thread(_run_macro_analysis, timeout=90.0), _MACRO_TTL, "macro"),
-    ]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    for label, exc in zip(["heatmap", "market_index", "macro"], results):
+        return_exceptions=True,
+    )
+    for label, exc in zip(["market_index", "macro"], results):
         if isinstance(exc, Exception):
             logger.warning("[warmup] %s 실패 (무시): %s", label, exc)
     logger.info("[warmup] 완료")
@@ -1512,17 +1517,49 @@ def _fetch_prev_top20_sync() -> dict[str, str] | None:
         return None
 
 
+def _kiwoom_to_yfinance(ticker: str, market: str = "") -> str | None:
+    """Kiwoom REST API 티커를 yfinance 포맷으로 변환.
+
+    Kiwoom ka10032 응답의 stk_cd 는 'XXXXXX_AL'(KOSPI) / 'XXXXXX_AQ'(KOSDAQ) 형식.
+    yfinance 는 'XXXXXX.KS' / 'XXXXXX.KQ' 형식을 기대.
+    이미 '.' 포함(yfinance 포맷)이면 그대로 반환. 변환 불가 시 None.
+    """
+    if "." in ticker:
+        return ticker
+    if ticker.endswith("_AL"):
+        return ticker[:-3] + ".KS"
+    if ticker.endswith("_AQ"):
+        return ticker[:-3] + ".KQ"
+    if market == "KOSPI":
+        return ticker + ".KS"
+    if market == "KOSDAQ":
+        return ticker + ".KQ"
+    return None
+
+
 def _run_macro_analysis() -> dict:
     """MacroTracker 분석 실행 (동기, asyncio.to_thread에서 호출)."""
-    # 1순위: 오늘 실시간 히트맵 캐시 TOP 20
+    # 1순위: 오늘 실시간 히트맵 캐시 — 전체 풀에서 변환 가능한 것 모두 분석 후 거래대금 상위 20개 선별
     heatmap_items: list[dict] = _HEATMAP_CACHE.get("data") or []
+    heatmap_rank: dict[str, int] = {}  # yf_ticker → 거래대금 순위 (1-based)
     if len(heatmap_items) >= 5:
-        live_tickers = {
-            item["ticker"]: item["name"]
-            for item in heatmap_items[:20]
-            if item.get("ticker") and item.get("name")
-        }
-        logger.info("[macro] 히트맵 TOP %d 종목으로 분석", len(live_tickers))
+        live_tickers: dict[str, str] = {}
+        rank = 0
+        for item in heatmap_items:
+            if not item.get("ticker") or not item.get("name"):
+                continue
+            yf_tk = _kiwoom_to_yfinance(item["ticker"], item.get("market", ""))
+            if yf_tk:
+                rank += 1
+                heatmap_rank[yf_tk] = rank
+                live_tickers[yf_tk] = item["name"]
+        if live_tickers:
+            logger.info("[macro] 히트맵 %d 종목 분석 (거래대금 상위 20 선별)", len(live_tickers))
+        else:
+            logger.info("[macro] 히트맵 티커 변환 불가 — aftermarket_snap 폴백")
+            live_tickers = _fetch_prev_top20_sync()
+            if live_tickers is None:
+                logger.info("[macro] 전일 aftermarket 없음 — DEFAULT_TICKERS 사용")
     else:
         # 2순위: aftermarket_snap 전날 TOP 20
         live_tickers = _fetch_prev_top20_sync()
@@ -1536,7 +1573,7 @@ def _run_macro_analysis() -> dict:
 
     # 종목별 결과 + 팩터별 5일 기여 계산
     stocks = []
-    for r in sorted(tracker._results, key=lambda x: x["macro_score"], reverse=True):
+    for r in tracker._results:
         factor_contribs: dict[str, float] = {}
         for f in ["rate", "fx", "oil", "vix", "dxy", "export"]:
             beta = r["betas"].get(f, 0.0)
@@ -1560,6 +1597,13 @@ def _run_macro_analysis() -> dict:
             "p_values":            {k: v for k, v in r["p_values"].items() if k != "alpha"},
             "factor_contribs_5d":  factor_contribs,
         })
+
+    # 거래대금 순서 정렬 후 상위 20개 선별 (히트맵 경로), fallback은 macro_score 내림차순
+    if heatmap_rank:
+        stocks.sort(key=lambda s: heatmap_rank.get(s["ticker"], 9999))
+        stocks = stocks[:20]
+    else:
+        stocks.sort(key=lambda s: s["macro_score"], reverse=True)
 
     return {
         "snapshot":   snapshot,
