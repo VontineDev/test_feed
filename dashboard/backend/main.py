@@ -132,6 +132,16 @@ CREATE INDEX IF NOT EXISTS idx_sched_trig_status
     WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_sched_stream
     ON scheduler_triggers (requested_at DESC);
+
+CREATE TABLE IF NOT EXISTS manual_portfolio (
+    id          BIGSERIAL     PRIMARY KEY,
+    ticker      VARCHAR(12)   NOT NULL UNIQUE,
+    name        TEXT          NOT NULL,
+    avg_price   NUMERIC(14,2) NOT NULL,
+    qty         INTEGER       NOT NULL,
+    created_at  TIMESTAMPTZ   DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ   DEFAULT NOW()
+);
 """
 
 
@@ -1842,132 +1852,188 @@ async def auth_me(request: Request):
     return {"role": getattr(request.state, "role", "user")}
 
 
-# ── GET /api/portfolio ────────────────────────────────────────
-# 포트폴리오 캐시 (5분)
-_PORTFOLIO_CACHE: dict = {"data": None, "expires": 0.0}
-_PORTFOLIO_TTL = 300  # 5분
-_PORTFOLIO_LOCK = asyncio.Lock()
+# ── 수동 포트폴리오 (manual_portfolio 테이블) ──────────────────
+
+class _HoldingInput(BaseModel):
+    ticker:    str
+    name:      str
+    avg_price: float
+    qty:       int
 
 
-def _fetch_portfolio_sync() -> dict:
-    """키움 API로 포트폴리오 데이터 동기 조회 (스레드 풀 실행용).
+async def _get_current_prices(pool, tickers: list[str]) -> dict[str, int]:
+    """aftermarket_snap 최신 종가 조회 → 미수록 종목은 yfinance 폴백."""
+    if not tickers:
+        return {}
+    prices: dict[str, int] = {}
 
-    kt00018 (계좌평가잔고내역) + kt00001 (예수금상세) 병렬 호출.
-    """
-    import requests as _req
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT DISTINCT ON (ticker) ticker, reg_close
+            FROM aftermarket_snap
+            WHERE ticker = ANY($1::text[])
+              AND reg_close IS NOT NULL
+            ORDER BY ticker, trade_date DESC
+            """,
+            tickers,
+        )
+    for r in rows:
+        if r["reg_close"]:
+            prices[r["ticker"]] = int(r["reg_close"])
 
-    token = _get_kiwoom_token()
-    client = KiwoomClient(use_mock=False)
-    client.inject_token(token)
-
-    # kt00018: 계좌평가잔고내역요청
-    try:
-        balance = client.fetch_portfolio_balance(qry_tp="1", dmst_stex_tp="KRX")
-    except _req.HTTPError as e:
-        if e.response is not None and e.response.status_code == 401:
-            _invalidate_kiwoom_token()
-            token = _get_kiwoom_token()
-            client.inject_token(token)
-            balance = client.fetch_portfolio_balance(qry_tp="1", dmst_stex_tp="KRX")
-        else:
-            raise
-
-    # kt00001: 예수금상세현황요청
-    try:
-        cash = client.fetch_cash_detail(qry_tp="3")
-    except Exception as e:
-        logger.warning("[portfolio] 예수금 조회 실패 (무시): %s", e)
-        cash = {}
-
-    def _to_int(s) -> int | None:
-        if s is None:
-            return None
+    missing = [t for t in tickers if t not in prices]
+    if missing:
+        def _yf_fetch():
+            import yfinance as yf
+            result: dict[str, int] = {}
+            for t in missing:
+                for suffix in (".KS", ".KQ"):
+                    try:
+                        info = yf.Ticker(t + suffix).fast_info
+                        price = getattr(info, "last_price", None) or getattr(info, "regular_market_price", None)
+                        if price:
+                            result[t] = int(price)
+                            break
+                    except Exception:
+                        continue
+            return result
         try:
-            return int(str(s).replace(",", "").strip().lstrip("+"))
-        except (ValueError, AttributeError):
-            return None
+            yf_prices = await _ext_thread(_yf_fetch, timeout=15.0)
+            prices.update(yf_prices)
+        except Exception as e:
+            logger.warning("[portfolio] yfinance 폴백 실패: %s", e)
 
-    def _to_float(s) -> float | None:
-        if s is None:
-            return None
-        try:
-            return float(str(s).replace(",", "").strip().lstrip("+"))
-        except (ValueError, AttributeError):
-            return None
+    return prices
 
-    summary = {
-        "prsm_dpst_aset_amt": _to_int(balance.get("prsm_dpst_aset_amt")),
-        "tot_pur_amt":         _to_int(balance.get("tot_pur_amt")),
-        "tot_evlt_amt":        _to_int(balance.get("tot_evlt_amt")),
-        "tot_evlt_pl":         _to_int(balance.get("tot_evlt_pl")),
-        "tot_prft_rt":         _to_float(balance.get("tot_prft_rt")),
-        "tot_loan_amt":        _to_int(balance.get("tot_loan_amt")),
-        "entr":                _to_int(cash.get("entr")),
-        "pymn_alow_amt":       _to_int(cash.get("pymn_alow_amt")),
-        "ord_alow_amt":        _to_int(cash.get("ord_alow_amt")),
-    }
 
-    raw_holdings = balance.get("acnt_evlt_remn_indv_tot") or []
+def _calc_holdings(rows, prices: dict[str, int]) -> tuple[list[dict], dict]:
+    """DB 행 + 현재가 → holdings 리스트 + summary 계산."""
     holdings = []
-    for h in raw_holdings:
-        stk_cd = str(h.get("stk_cd", "")).strip()
-        # Kiwoom 응답은 'A005930' 형식 — 앞의 알파벳 접두사 제거
-        display_cd = stk_cd.lstrip("ABCDEFGHIJKLMNOPQRSTUVWXYZ") if stk_cd else stk_cd
+    for r in rows:
+        ticker   = r["ticker"]
+        avg_p    = float(r["avg_price"])
+        qty      = int(r["qty"])
+        cur_prc  = prices.get(ticker)
+        pur_amt  = int(avg_p * qty)
+        evlt_amt = int(cur_prc * qty) if cur_prc else None
+        evltv_prft = (evlt_amt - pur_amt) if evlt_amt is not None else None
+        prft_rt    = (evltv_prft / pur_amt * 100) if (evltv_prft is not None and pur_amt) else None
         holdings.append({
-            "stk_cd":       display_cd,
-            "stk_nm":       str(h.get("stk_nm", "")).strip(),
-            "rmnd_qty":     _to_int(h.get("rmnd_qty")),
-            "trde_able_qty":_to_int(h.get("trde_able_qty")),
-            "pur_pric":     _to_int(h.get("pur_pric")),
-            "cur_prc":      _to_int(h.get("cur_prc")),
-            "evlt_amt":     _to_int(h.get("evlt_amt")),
-            "pur_amt":      _to_int(h.get("pur_amt")),
-            "evltv_prft":   _to_int(h.get("evltv_prft")),
-            "prft_rt":      _to_float(h.get("prft_rt")),
-            "poss_rt":      _to_float(h.get("poss_rt")),
-            "crd_tp_nm":    str(h.get("crd_tp_nm", "")).strip(),
+            "id":         r["id"],
+            "stk_cd":     ticker,
+            "stk_nm":     r["name"],
+            "avg_price":  int(avg_p),
+            "qty":        qty,
+            "cur_prc":    cur_prc,
+            "pur_amt":    pur_amt,
+            "evlt_amt":   evlt_amt,
+            "evltv_prft": evltv_prft,
+            "prft_rt":    round(prft_rt, 2) if prft_rt is not None else None,
+            "poss_rt":    None,  # 아래에서 후처리
         })
 
-    return {"summary": summary, "holdings": holdings}
+    tot_pur   = sum(h["pur_amt"] for h in holdings)
+    tot_evlt  = sum(h["evlt_amt"] for h in holdings if h["evlt_amt"] is not None)
+    tot_pl    = tot_evlt - tot_pur if holdings else 0
+    tot_rt    = round(tot_pl / tot_pur * 100, 2) if tot_pur else None
+
+    # 비중% 후처리
+    for h in holdings:
+        if h["evlt_amt"] is not None and tot_evlt:
+            h["poss_rt"] = round(h["evlt_amt"] / tot_evlt * 100, 1)
+
+    summary = {
+        "tot_pur_amt":  tot_pur,
+        "tot_evlt_amt": tot_evlt if holdings else None,
+        "tot_evlt_pl":  tot_pl if holdings else None,
+        "tot_prft_rt":  tot_rt,
+    }
+    return holdings, summary
 
 
 @app.get("/api/portfolio")
-async def get_portfolio(request: Request, refresh: bool = False):
-    """내 키움 투자 자산 조회 (admin + special 전용, 5분 캐시).
-
-    kt00018(계좌평가잔고내역) + kt00001(예수금상세현황) 조합.
-    """
+async def get_portfolio(request: Request):
+    """수동 입력 포트폴리오 조회 (admin + special 전용)."""
     role = getattr(request.state, "role", "user")
     if role not in ("admin", "special"):
         raise HTTPException(status_code=403, detail="포트폴리오 조회 권한이 없습니다")
 
-    now = _time_module.time()
-    if not refresh and _PORTFOLIO_CACHE["data"] and now < _PORTFOLIO_CACHE["expires"]:
-        return {**_PORTFOLIO_CACHE["data"], "cached": True}
-    if not refresh and _PORTFOLIO_CACHE["data"]:
-        if not _PORTFOLIO_LOCK.locked():
-            asyncio.create_task(_bg_refresh(
-                _PORTFOLIO_CACHE, _PORTFOLIO_LOCK,
-                lambda: _ext_thread(_fetch_portfolio_sync, timeout=20.0),
-                _PORTFOLIO_TTL, "portfolio",
-            ))
-        return {**_PORTFOLIO_CACHE["data"], "cached": True, "stale": True}
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, ticker, name, avg_price, qty FROM manual_portfolio ORDER BY created_at"
+        )
 
-    async with _PORTFOLIO_LOCK:
-        now = _time_module.time()
-        if not refresh and _PORTFOLIO_CACHE["data"] and now < _PORTFOLIO_CACHE["expires"]:
-            return {**_PORTFOLIO_CACHE["data"], "cached": True}
+    tickers = [r["ticker"] for r in rows]
+    prices  = await _get_current_prices(pool, tickers)
+    holdings, summary = _calc_holdings(rows, prices)
+    return {"summary": summary, "holdings": holdings}
+
+
+@app.post("/api/portfolio/holdings", status_code=201)
+async def add_holding(request: Request, body: _HoldingInput):
+    """종목 추가 (admin 전용)."""
+    if getattr(request.state, "role", "user") != "admin":
+        raise HTTPException(status_code=403, detail="관리자만 종목을 추가할 수 있습니다")
+    if body.qty <= 0 or body.avg_price <= 0:
+        raise HTTPException(status_code=422, detail="수량·단가는 양수여야 합니다")
+    ticker = body.ticker.strip().upper().lstrip("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    pool = await get_pool()
+    async with pool.acquire() as conn:
         try:
-            data = await _ext_thread(_fetch_portfolio_sync, timeout=20.0)
-            _PORTFOLIO_CACHE["data"] = data
-            _PORTFOLIO_CACHE["expires"] = _time_module.time() + _PORTFOLIO_TTL
-            return {**data, "cached": False}
+            row = await conn.fetchrow(
+                """
+                INSERT INTO manual_portfolio (ticker, name, avg_price, qty)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (ticker) DO UPDATE
+                  SET name=$2, avg_price=$3, qty=$4, updated_at=NOW()
+                RETURNING id, ticker, name, avg_price, qty
+                """,
+                ticker, body.name.strip(), body.avg_price, body.qty,
+            )
         except Exception as e:
-            logger.error("[portfolio] 조회 실패: %s", e)
-            if _PORTFOLIO_CACHE["data"]:
-                return {**_PORTFOLIO_CACHE["data"], "cached": True, "stale": True,
-                        "error": "조회 오류 — 이전 데이터 표시 중"}
             raise HTTPException(status_code=500, detail=str(e))
+    return {"id": row["id"], "ticker": row["ticker"], "name": row["name"],
+            "avg_price": float(row["avg_price"]), "qty": row["qty"]}
+
+
+@app.put("/api/portfolio/holdings/{holding_id}")
+async def update_holding(request: Request, holding_id: int, body: _HoldingInput):
+    """종목 수정 (admin 전용)."""
+    if getattr(request.state, "role", "user") != "admin":
+        raise HTTPException(status_code=403, detail="관리자만 종목을 수정할 수 있습니다")
+    if body.qty <= 0 or body.avg_price <= 0:
+        raise HTTPException(status_code=422, detail="수량·단가는 양수여야 합니다")
+    ticker = body.ticker.strip().upper().lstrip("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE manual_portfolio
+            SET ticker=$1, name=$2, avg_price=$3, qty=$4, updated_at=NOW()
+            WHERE id=$5
+            RETURNING id
+            """,
+            ticker, body.name.strip(), body.avg_price, body.qty, holding_id,
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="해당 종목을 찾을 수 없습니다")
+    return {"ok": True}
+
+
+@app.delete("/api/portfolio/holdings/{holding_id}", status_code=204)
+async def delete_holding(request: Request, holding_id: int):
+    """종목 삭제 (admin 전용)."""
+    if getattr(request.state, "role", "user") != "admin":
+        raise HTTPException(status_code=403, detail="관리자만 종목을 삭제할 수 있습니다")
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM manual_portfolio WHERE id=$1", holding_id
+        )
+    if result == "DELETE 0":
+        raise HTTPException(status_code=404, detail="해당 종목을 찾을 수 없습니다")
 
 
 # ── GET /health ───────────────────────────────────────────────
