@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.9.6] - 2026-05-28
+
+### Added
+
+- **3단계 역할 기반 대시보드** (`dashboard/backend/main.py`, `dashboard/frontend/`): `SPECIAL_USER`/`SPECIAL_PASSWORD` 환경변수 추가로 admin·special·user 3단계 인증 체계 구성. `_BasicAuthMiddleware`가 3개 자격증명을 순서대로 비교. `GET /api/auth/me` 엔드포인트 신설 — 현재 요청의 role을 JSON으로 반환.
+- **내 자산 포트폴리오 탭** (`dashboard/backend/main.py`, `dashboard/frontend/src/components/Portfolio.tsx`): admin·special 역할 전용 `GET /api/portfolio` 엔드포인트. 키움 REST API `kt00018`(계좌평가잔고내역) + `kt00001`(예수금상세현황) 를 호출하여 총자산·종목별 보유현황 반환. stale-while-revalidate 5분 캐시. React `Portfolio.tsx` 컴포넌트 — 추정 예탁자산 히어로 카드, 6-열 통계 그리드, 보유 종목 테이블(손익 한국 컬러 규칙).
+- **탭 역할 게이팅** (`dashboard/frontend/src/tabs.ts`, `dashboard/frontend/src/hooks/useRole.ts`): `TabConfig.roles` 필드로 탭별 접근 가능 역할 선언. `getVisibleTabs(role)` 함수로 역할에 따라 탭 목록 필터링. `useRole()` 훅이 `/api/auth/me`를 모듈 레벨에서 한 번만 호출하여 역할을 캐싱. `MobileNav`가 정적 `TAB_CONFIG` 대신 `tabs` prop을 받도록 변경.
+
 ## [0.9.9.5] - 2026-05-28
 
 ### Added

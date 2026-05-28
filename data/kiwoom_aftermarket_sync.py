@@ -278,6 +278,38 @@ class KiwoomClient:
         )
         return data
 
+    # ── 계좌 포트폴리오 조회 ──────────────────────────────────────
+
+    def fetch_portfolio_balance(
+        self,
+        qry_tp: str = "1",
+        dmst_stex_tp: str = "KRX",
+    ) -> dict:
+        """kt00018: 계좌평가잔고내역요청.
+
+        qry_tp: "1"=합산, "2"=개별
+        응답: 총매입금액/총평가금액/총손익/총수익률 + 종목별 잔고 리스트
+        """
+        data, _ = self._post(
+            "/api/dostk/acnt",
+            "kt00018",
+            {"qry_tp": qry_tp, "dmst_stex_tp": dmst_stex_tp},
+        )
+        return data
+
+    def fetch_cash_detail(self, qry_tp: str = "3") -> dict:
+        """kt00001: 예수금상세현황요청.
+
+        qry_tp: "3"=추정조회, "2"=일반조회
+        응답: 예수금/출금가능금액/주문가능금액 등 현금 상세
+        """
+        data, _ = self._post(
+            "/api/dostk/acnt",
+            "kt00001",
+            {"qry_tp": qry_tp},
+        )
+        return data
+
     # ── 거래대금 상위 조회 (대시보드 /top 탭) ─────────────────────
 
     def fetch_top_volume(

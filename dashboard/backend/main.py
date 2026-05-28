@@ -219,20 +219,23 @@ app.add_middleware(
 
 class _BasicAuthMiddleware(BaseHTTPMiddleware):
     """
-    역할 기반 Basic Auth.
-    - ADMIN_USER/ADMIN_PASSWORD   → role=admin  (스케줄러 트리거 등 쓰기 권한)
+    역할 기반 Basic Auth (3단계).
+    - ADMIN_USER/ADMIN_PASSWORD     → role=admin   (스케줄러 트리거 + 포트폴리오)
+    - SPECIAL_USER/SPECIAL_PASSWORD → role=special  (포트폴리오 조회 + 읽기)
     - DASHBOARD_USER/DASHBOARD_PASSWORD → role=user (읽기 전용)
     - ADMIN_USER 미설정 시 DASHBOARD_USER도 admin 취급 (하위 호환)
-    - 두 쌍 모두 미설정 → 인증 없음, role=admin (로컬 dev)
+    - 모두 미설정 → 인증 없음, role=admin (로컬 dev)
     """
 
     async def dispatch(self, request: Request, call_next):
-        admin_user = os.environ.get("ADMIN_USER", "")
-        admin_pw   = os.environ.get("ADMIN_PASSWORD", "")
-        dash_user  = os.environ.get("DASHBOARD_USER", "")
-        dash_pw    = os.environ.get("DASHBOARD_PASSWORD", "")
+        admin_user   = os.environ.get("ADMIN_USER", "")
+        admin_pw     = os.environ.get("ADMIN_PASSWORD", "")
+        special_user = os.environ.get("SPECIAL_USER", "")
+        special_pw   = os.environ.get("SPECIAL_PASSWORD", "")
+        dash_user    = os.environ.get("DASHBOARD_USER", "")
+        dash_pw      = os.environ.get("DASHBOARD_PASSWORD", "")
 
-        if not admin_user and not dash_user:
+        if not admin_user and not special_user and not dash_user:
             request.state.role = "admin"
             return await call_next(request)
 
@@ -244,6 +247,8 @@ class _BasicAuthMiddleware(BaseHTTPMiddleware):
                 req_user, _, req_pw = decoded.partition(":")
                 if admin_user and secrets.compare_digest(req_user, admin_user) and secrets.compare_digest(req_pw, admin_pw):
                     role = "admin"
+                elif special_user and secrets.compare_digest(req_user, special_user) and secrets.compare_digest(req_pw, special_pw):
+                    role = "special"
                 elif dash_user and secrets.compare_digest(req_user, dash_user) and secrets.compare_digest(req_pw, dash_pw):
                     role = "admin" if not admin_user else "user"
             except Exception:
@@ -1828,6 +1833,141 @@ async def post_feedback(request: Request, body: FeedbackBody):
         raise HTTPException(status_code=500, detail=str(e))
 
     return {"status": "sent"}
+
+
+# ── GET /api/auth/me ──────────────────────────────────────────
+@app.get("/api/auth/me")
+async def auth_me(request: Request):
+    """현재 로그인 사용자의 역할 반환. 프론트엔드 역할 기반 UI 분기용."""
+    return {"role": getattr(request.state, "role", "user")}
+
+
+# ── GET /api/portfolio ────────────────────────────────────────
+# 포트폴리오 캐시 (5분)
+_PORTFOLIO_CACHE: dict = {"data": None, "expires": 0.0}
+_PORTFOLIO_TTL = 300  # 5분
+_PORTFOLIO_LOCK = asyncio.Lock()
+
+
+def _fetch_portfolio_sync() -> dict:
+    """키움 API로 포트폴리오 데이터 동기 조회 (스레드 풀 실행용).
+
+    kt00018 (계좌평가잔고내역) + kt00001 (예수금상세) 병렬 호출.
+    """
+    import requests as _req
+
+    token = _get_kiwoom_token()
+    client = KiwoomClient(use_mock=False)
+    client.inject_token(token)
+
+    # kt00018: 계좌평가잔고내역요청
+    try:
+        balance = client.fetch_portfolio_balance(qry_tp="1", dmst_stex_tp="KRX")
+    except _req.HTTPError as e:
+        if e.response is not None and e.response.status_code == 401:
+            _invalidate_kiwoom_token()
+            token = _get_kiwoom_token()
+            client.inject_token(token)
+            balance = client.fetch_portfolio_balance(qry_tp="1", dmst_stex_tp="KRX")
+        else:
+            raise
+
+    # kt00001: 예수금상세현황요청
+    try:
+        cash = client.fetch_cash_detail(qry_tp="3")
+    except Exception as e:
+        logger.warning("[portfolio] 예수금 조회 실패 (무시): %s", e)
+        cash = {}
+
+    def _to_int(s) -> int | None:
+        if s is None:
+            return None
+        try:
+            return int(str(s).replace(",", "").strip().lstrip("+"))
+        except (ValueError, AttributeError):
+            return None
+
+    def _to_float(s) -> float | None:
+        if s is None:
+            return None
+        try:
+            return float(str(s).replace(",", "").strip().lstrip("+"))
+        except (ValueError, AttributeError):
+            return None
+
+    summary = {
+        "prsm_dpst_aset_amt": _to_int(balance.get("prsm_dpst_aset_amt")),
+        "tot_pur_amt":         _to_int(balance.get("tot_pur_amt")),
+        "tot_evlt_amt":        _to_int(balance.get("tot_evlt_amt")),
+        "tot_evlt_pl":         _to_int(balance.get("tot_evlt_pl")),
+        "tot_prft_rt":         _to_float(balance.get("tot_prft_rt")),
+        "tot_loan_amt":        _to_int(balance.get("tot_loan_amt")),
+        "entr":                _to_int(cash.get("entr")),
+        "pymn_alow_amt":       _to_int(cash.get("pymn_alow_amt")),
+        "ord_alow_amt":        _to_int(cash.get("ord_alow_amt")),
+    }
+
+    raw_holdings = balance.get("acnt_evlt_remn_indv_tot") or []
+    holdings = []
+    for h in raw_holdings:
+        stk_cd = str(h.get("stk_cd", "")).strip()
+        # Kiwoom 응답은 'A005930' 형식 — 앞의 알파벳 접두사 제거
+        display_cd = stk_cd.lstrip("ABCDEFGHIJKLMNOPQRSTUVWXYZ") if stk_cd else stk_cd
+        holdings.append({
+            "stk_cd":       display_cd,
+            "stk_nm":       str(h.get("stk_nm", "")).strip(),
+            "rmnd_qty":     _to_int(h.get("rmnd_qty")),
+            "trde_able_qty":_to_int(h.get("trde_able_qty")),
+            "pur_pric":     _to_int(h.get("pur_pric")),
+            "cur_prc":      _to_int(h.get("cur_prc")),
+            "evlt_amt":     _to_int(h.get("evlt_amt")),
+            "pur_amt":      _to_int(h.get("pur_amt")),
+            "evltv_prft":   _to_int(h.get("evltv_prft")),
+            "prft_rt":      _to_float(h.get("prft_rt")),
+            "poss_rt":      _to_float(h.get("poss_rt")),
+            "crd_tp_nm":    str(h.get("crd_tp_nm", "")).strip(),
+        })
+
+    return {"summary": summary, "holdings": holdings}
+
+
+@app.get("/api/portfolio")
+async def get_portfolio(request: Request, refresh: bool = False):
+    """내 키움 투자 자산 조회 (admin + special 전용, 5분 캐시).
+
+    kt00018(계좌평가잔고내역) + kt00001(예수금상세현황) 조합.
+    """
+    role = getattr(request.state, "role", "user")
+    if role not in ("admin", "special"):
+        raise HTTPException(status_code=403, detail="포트폴리오 조회 권한이 없습니다")
+
+    now = _time_module.time()
+    if not refresh and _PORTFOLIO_CACHE["data"] and now < _PORTFOLIO_CACHE["expires"]:
+        return {**_PORTFOLIO_CACHE["data"], "cached": True}
+    if not refresh and _PORTFOLIO_CACHE["data"]:
+        if not _PORTFOLIO_LOCK.locked():
+            asyncio.create_task(_bg_refresh(
+                _PORTFOLIO_CACHE, _PORTFOLIO_LOCK,
+                lambda: _ext_thread(_fetch_portfolio_sync, timeout=20.0),
+                _PORTFOLIO_TTL, "portfolio",
+            ))
+        return {**_PORTFOLIO_CACHE["data"], "cached": True, "stale": True}
+
+    async with _PORTFOLIO_LOCK:
+        now = _time_module.time()
+        if not refresh and _PORTFOLIO_CACHE["data"] and now < _PORTFOLIO_CACHE["expires"]:
+            return {**_PORTFOLIO_CACHE["data"], "cached": True}
+        try:
+            data = await _ext_thread(_fetch_portfolio_sync, timeout=20.0)
+            _PORTFOLIO_CACHE["data"] = data
+            _PORTFOLIO_CACHE["expires"] = _time_module.time() + _PORTFOLIO_TTL
+            return {**data, "cached": False}
+        except Exception as e:
+            logger.error("[portfolio] 조회 실패: %s", e)
+            if _PORTFOLIO_CACHE["data"]:
+                return {**_PORTFOLIO_CACHE["data"], "cached": True, "stale": True,
+                        "error": "조회 오류 — 이전 데이터 표시 중"}
+            raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── GET /health ───────────────────────────────────────────────

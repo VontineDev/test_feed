@@ -26,6 +26,7 @@
 > v0.9.7.0부터 **모의투자 성과분석**이 추가되었습니다. `GET /api/paper/curve`(모델별 누적 P&L 시계열·집계 통계·미실현 현재가), `GET /api/paper/export`(paper_positions CSV, utf-8-sig BOM) 2개 엔드포인트 추가. `PaperAnalytics.tsx` 컴포넌트(누적 P&L 커브 Recharts, 미실현 포지션 리더보드, CSV 다운로드)가 `PaperPortfolio` 하단에 임베드됩니다.
 > v0.9.5.0부터 **웹 대시보드 히트맵 재설계**가 적용되었습니다. 데이터 소스를 Stage 분류 종목(10~50개)에서 Kiwoom 당일 거래대금 상위 50종목으로 교체. 셀 크기=당일 실제 거래대금, 등락률=Kiwoom 일중 change_pct. Stage 분류된 종목은 컬러 테두리(S1 파랑·S2 보라·S3 주황)로 오버레이. Stage 분류 잡 미실행 시에도 항상 50종목이 표시됨. Kiwoom 응답 실패 시 Stage 분류 데이터로 폴백.
 > v0.9.9.x부터 **대시보드 10명 동시 접속 안정화**가 적용되었습니다. `_bg_refresh()` stale-while-revalidate 패턴으로 캐시 만료 시 Thundering Herd 해소(RISK-04). `_EXT_EXECUTOR(max_workers=4)` + `_ext_thread()` 래퍼로 yfinance·Kiwoom·KRX 외부 API를 전용 풀에서 타임아웃과 함께 실행(RISK-05). `_warmup_caches()` lifespan 사전 로딩으로 cold start 지연 해소(RISK-07). `_HISTORY_MAX_DAYS=365` 이력 쿼리 범위 제한으로 단일 사용자 DB 독점 차단(RISK-08). `GET /health` 엔드포인트 신설 — 업타임·DB 풀·캐시 TTL·SSE 연결 수 반환(RISK-09).
+> v0.9.9.6부터 **3단계 역할 기반 접근 제어 + 포트폴리오 탭**이 추가되었습니다. `SPECIAL_USER`/`SPECIAL_PASSWORD` 환경변수로 admin·special·user 3단계 인증 체계 구성. `GET /api/auth/me` — 현재 역할 반환. `GET /api/portfolio` — admin·special 전용, 키움 REST API(`kt00018`·`kt00001`)로 실계좌 총자산·종목별 보유현황 반환(5분 stale-while-revalidate). React `Portfolio.tsx` 컴포넌트 신설. `useRole()` 훅 + `getVisibleTabs(role)` 함수로 탭 목록을 역할에 따라 동적 렌더링.
 > v0.9.9.5부터 **OpenDART 전자공시 통합**이 추가되었습니다. `data/dart_sync.py` — Top 20 기업 공시 이벤트 수집·XBRL 재무수치·사업보고서 세그먼트 Ollama 파싱. DB 테이블 4종(`dart_companies`·`dart_disclosures`·`dart_xbrl`·`dart_segments`). 스케줄러 잡 3종(일별 공시·월별 XBRL·연간 세그먼트). `data/dart_download.py` — 보고서 원문 로컬 다운로더. 공시 갭 자동 백필(최대 90일).
 
 ---
@@ -854,10 +855,15 @@ test_feed/
 │   │   │                          # _ext_thread(): yfinance/Kiwoom/KRX 호출 + 명시적 타임아웃
 │   │   │                          # _warmup_caches(): lifespan 시작 시 heatmap/market_index/macro 사전 로딩
 │   │   │                          # GET /health: 업타임·DB 풀·캐시 TTL·SSE 연결 수 반환
+│   │   │                          # GET /api/auth/me: 현재 요청 역할 반환 (admin|special|user)
+│   │   │                          # GET /api/portfolio: admin·special 전용 — kt00018+kt00001 실계좌 조회
 │   │   └── database.py            # 대시보드 전용 DB 헬퍼
 │   └── frontend/
 │       ├── src/                   # React + TypeScript 소스
-│       │   └── components/        # Heatmap, Report, Top, PaperPortfolio, PaperAnalytics, Macro 등
+│       │   ├── hooks/useRole.ts   # useRole() — /api/auth/me 1회 호출, 모듈 캐시
+│       │   ├── tabs.ts            # TabConfig.roles 게이팅 + getVisibleTabs(role)
+│       │   └── components/        # Heatmap, Report, Top, PaperPortfolio, PaperAnalytics, Macro,
+│       │                          # Portfolio (admin·special 전용 — 실계좌 포트폴리오) 등
 │       └── dist/                  # Vite 빌드 산출물 (백엔드가 정적 서빙)
 │
 ├── tests/                         # pytest 테스트 (596개, v0.9.8.1 기준)
@@ -991,6 +997,14 @@ KIWOOM_APP_SECRET=your_kiwoom_app_secret
 # Kiwoom 모의투자 — paper trading (KIWOOM_MOCK_APPKEY 설정 시 자동 활성화)
 KIWOOM_MOCK_APPKEY=your_mock_appkey
 KIWOOM_MOCK_APPSECRET=your_mock_appsecret
+
+# 대시보드 인증 (3단계 역할 기반, v0.9.9.6~)
+ADMIN_USER=admin          # 관리자 — 스케줄러 트리거 + 포트폴리오 조회
+ADMIN_PASSWORD=your_admin_pw
+SPECIAL_USER=special      # 특수 사용자 — 포트폴리오 조회, 스케줄러 트리거 불가
+SPECIAL_PASSWORD=your_special_pw
+DASHBOARD_USER=user       # 일반 사용자 — 읽기 전용
+DASHBOARD_PASSWORD=your_user_pw
 ```
 
 ### 6-2. 로컬 LLM 실행
@@ -1060,6 +1074,7 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 | asyncpg `statement_cache_size=0` — Supabase PgBouncer 호환 | ✅ (v0.9.0.0~) |
 | 모의투자는 키움 가상 계좌 전용 (실자산 영향 없음) | ✅ |
 | 대시보드 localhost 인증 우회 차단 — `client.host` 기반 면제 로직 제거 (Nginx 뒤 모든 요청이 127.0.0.1로 보여 사실상 인증 전면 무력화됐던 취약점 수정, v0.9.8.x) | ✅ |
+| 포트폴리오 API 서버사이드 전용 — 키움 Bearer 토큰 브라우저 미노출, admin·special 역할만 접근 (v0.9.9.6~) | ✅ |
 
 ---
 
@@ -1080,7 +1095,7 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 
 ---
 
-*현재 코드베이스 v0.9.9.2 (2026-05-26) 기준*
+*현재 코드베이스 v0.9.9.6 (2026-05-28) 기준*
 
 ---
 

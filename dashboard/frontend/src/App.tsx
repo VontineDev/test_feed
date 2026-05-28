@@ -1,7 +1,8 @@
 import { Suspense, lazy, useState } from 'react'
 import MobileNav from './components/MobileNav'
 import Feedback from './components/Feedback'
-import { TAB_CONFIG, DEFAULT_TAB, type TabKey, type MobileTabKey } from './tabs'
+import { DEFAULT_TAB, getVisibleTabs, type TabKey, type MobileTabKey } from './tabs'
+import { useRole } from './hooks/useRole'
 import { tokens } from './tokens'
 
 const SignalFeed = lazy(() => import('./components/SignalFeed'))
@@ -11,9 +12,17 @@ const Loading = () => (
 )
 
 export default function App() {
-  const [leftTab, setLeftTab]         = useState<TabKey>(DEFAULT_TAB)
-  const [mobileTab, setMobileTab]     = useState<MobileTabKey>(DEFAULT_TAB)
+  const role = useRole()
+  const visibleTabs = getVisibleTabs(role)
+
+  const [leftTab, setLeftTab]           = useState<TabKey>(DEFAULT_TAB)
+  const [mobileTab, setMobileTab]       = useState<MobileTabKey>(DEFAULT_TAB)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
+
+  // 현재 선택된 탭이 역할 변경으로 숨겨지면 기본 탭으로 복귀
+  const safeLeftTab   = visibleTabs.find(t => t.key === leftTab)   ? leftTab   : DEFAULT_TAB
+  const safeMobileTab = (visibleTabs.find(t => t.key === mobileTab) || mobileTab === 'more')
+    ? mobileTab : DEFAULT_TAB
 
   return (
     <div style={styles.root} className="app-root">
@@ -35,11 +44,11 @@ export default function App() {
       <main style={styles.main} className="app-main app-desktop-layout">
         <section style={styles.leftPane} className="app-left-pane">
           <div style={styles.tabBar}>
-            {TAB_CONFIG.map(({ key, label }) => (
+            {visibleTabs.map(({ key, label }) => (
               <button
                 key={key}
                 className="app-tab-btn"
-                style={{ ...styles.tab, ...(leftTab === key ? styles.tabActive : {}) }}
+                style={{ ...styles.tab, ...(safeLeftTab === key ? styles.tabActive : {}) }}
                 onClick={() => setLeftTab(key)}
               >
                 {label}
@@ -47,8 +56,8 @@ export default function App() {
             ))}
           </div>
           <div style={styles.tabContent}>
-            {TAB_CONFIG.map(({ key, component: Comp }) =>
-              leftTab === key && <Suspense key={key} fallback={<Loading />}><Comp /></Suspense>
+            {visibleTabs.map(({ key, component: Comp }) =>
+              safeLeftTab === key && <Suspense key={key} fallback={<Loading />}><Comp /></Suspense>
             )}
           </div>
         </section>
@@ -59,15 +68,15 @@ export default function App() {
 
       {/* 모바일 레이아웃 */}
       <div className="app-mobile-layout">
-        {TAB_CONFIG.map(({ key, component: Comp }) =>
-          mobileTab === key && <Suspense key={key} fallback={<Loading />}><Comp /></Suspense>
+        {visibleTabs.map(({ key, component: Comp }) =>
+          safeMobileTab === key && <Suspense key={key} fallback={<Loading />}><Comp /></Suspense>
         )}
-        {mobileTab === 'more' && (
+        {safeMobileTab === 'more' && (
           <Suspense fallback={<Loading />}><SignalFeed /></Suspense>
         )}
       </div>
 
-      <MobileNav active={mobileTab} onChange={setMobileTab} />
+      <MobileNav tabs={visibleTabs} active={safeMobileTab} onChange={setMobileTab} />
       <Feedback open={feedbackOpen} onClose={() => setFeedbackOpen(false)} />
     </div>
   )
