@@ -94,6 +94,10 @@ _MACRO_CACHE: dict = {"data": None, "expires": 0.0}
 _MACRO_TTL = 600  # 10분 (yfinance 다운로드 비용 고려)
 _MACRO_LOCK = asyncio.Lock()
 
+# ── USD/KRW 환율 캐시 (10분) ──────────────────────────────────
+_USDKRW_CACHE: dict = {"rate": None, "expires": 0.0}
+_USDKRW_TTL = 600  # 10분
+
 # ── 시장 지수 캐시 (5분) ─────────────────────────────────────
 _MARKET_INDEX_CACHE: dict = {"data": None, "expires": 0.0}
 _MARKET_INDEX_TTL = 300  # 5분
@@ -138,7 +142,7 @@ CREATE TABLE IF NOT EXISTS manual_portfolio (
     ticker      VARCHAR(12)   NOT NULL UNIQUE,
     name        TEXT          NOT NULL,
     avg_price   NUMERIC(14,2) NOT NULL,
-    qty         INTEGER       NOT NULL,
+    qty         NUMERIC(14,6) NOT NULL,
     created_at  TIMESTAMPTZ   DEFAULT NOW(),
     updated_at  TIMESTAMPTZ   DEFAULT NOW()
 );
@@ -182,6 +186,19 @@ async def lifespan(app: FastAPI):
             ")"
         )
         await conn.execute("ALTER TABLE ticker_names ENABLE ROW LEVEL SECURITY")
+        # qty: INTEGER → NUMERIC(14,6) 마이그레이션 (해외주식 소수 수량 지원)
+        await conn.execute("""
+            DO $$ BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'manual_portfolio'
+                      AND column_name = 'qty'
+                      AND data_type = 'integer'
+                ) THEN
+                    ALTER TABLE manual_portfolio ALTER COLUMN qty TYPE NUMERIC(14,6);
+                END IF;
+            END $$;
+        """)
     logger.info("DB 풀 준비 완료")
 
     # 종목 이름 시드 + 캐시 사전 로딩 (백그라운드)
@@ -1858,45 +1875,63 @@ class _HoldingInput(BaseModel):
     ticker:    str
     name:      str
     avg_price: float
-    qty:       int
+    qty:       float
 
 
-async def _get_current_prices(pool, tickers: list[str]) -> dict[str, int]:
-    """aftermarket_snap 최신 종가 조회 → 미수록 종목은 yfinance 폴백."""
+async def _get_current_prices(pool, tickers: list[str]) -> dict[str, float]:
+    """aftermarket_snap 최신 종가 조회 → 미수록 종목은 yfinance 폴백.
+
+    한국주식: aftermarket_snap (reg_close) → yfinance .KS/.KQ
+    미국주식: yfinance 직접 조회 (숫자 없는 티커 = US 주식 판별)
+    """
     if not tickers:
         return {}
-    prices: dict[str, int] = {}
+    prices: dict[str, float] = {}
 
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT DISTINCT ON (ticker) ticker, reg_close
-            FROM aftermarket_snap
-            WHERE ticker = ANY($1::text[])
-              AND reg_close IS NOT NULL
-            ORDER BY ticker, trade_date DESC
-            """,
-            tickers,
-        )
-    for r in rows:
-        if r["reg_close"]:
-            prices[r["ticker"]] = int(r["reg_close"])
+    # aftermarket_snap은 한국주식 전용
+    kr_tickers = [t for t in tickers if any(c.isdigit() for c in t)]
+    if kr_tickers:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (ticker) ticker, reg_close
+                FROM aftermarket_snap
+                WHERE ticker = ANY($1::text[])
+                  AND reg_close IS NOT NULL
+                ORDER BY ticker, trade_date DESC
+                """,
+                kr_tickers,
+            )
+        for r in rows:
+            if r["reg_close"]:
+                prices[r["ticker"]] = float(r["reg_close"])
 
     missing = [t for t in tickers if t not in prices]
     if missing:
         def _yf_fetch():
             import yfinance as yf
-            result: dict[str, int] = {}
+            result: dict[str, float] = {}
             for t in missing:
-                for suffix in (".KS", ".KQ"):
+                # 미국주식 판별: 티커에 숫자가 없으면 US
+                if not any(c.isdigit() for c in t):
                     try:
-                        info = yf.Ticker(t + suffix).fast_info
+                        info = yf.Ticker(t).fast_info
                         price = getattr(info, "last_price", None) or getattr(info, "regular_market_price", None)
                         if price:
-                            result[t] = int(price)
-                            break
+                            result[t] = float(price)
+                            continue
                     except Exception:
-                        continue
+                        pass
+                else:
+                    for suffix in (".KS", ".KQ"):
+                        try:
+                            info = yf.Ticker(t + suffix).fast_info
+                            price = getattr(info, "last_price", None) or getattr(info, "regular_market_price", None)
+                            if price:
+                                result[t] = float(price)
+                                break
+                        except Exception:
+                            continue
             return result
         try:
             yf_prices = await _ext_thread(_yf_fetch, timeout=15.0)
@@ -1907,41 +1942,94 @@ async def _get_current_prices(pool, tickers: list[str]) -> dict[str, int]:
     return prices
 
 
-def _calc_holdings(rows, prices: dict[str, int]) -> tuple[list[dict], dict]:
-    """DB 행 + 현재가 → holdings 리스트 + summary 계산."""
+async def _get_usdkrw_rate() -> float:
+    """USD/KRW 환율 (yfinance USDKRW=X, 10분 캐시). 실패 시 최근 캐시 또는 1350 반환."""
+    now = _time_module.time()
+    if _USDKRW_CACHE["rate"] and now < _USDKRW_CACHE["expires"]:
+        return float(_USDKRW_CACHE["rate"])
+
+    def _fetch() -> float | None:
+        import yfinance as yf
+        try:
+            fi = yf.Ticker("USDKRW=X").fast_info
+            rate = getattr(fi, "last_price", None)
+            if rate and float(rate) > 100:
+                return float(rate)
+        except Exception:
+            pass
+        return None
+
+    try:
+        rate = await _ext_thread(_fetch, timeout=8.0)
+        if rate:
+            _USDKRW_CACHE["rate"] = rate
+            _USDKRW_CACHE["expires"] = now + _USDKRW_TTL
+            logger.info("[portfolio] USD/KRW 환율 갱신: %.2f", rate)
+            return rate
+    except Exception as e:
+        logger.warning("[portfolio] USD/KRW 환율 조회 실패: %s", e)
+
+    return float(_USDKRW_CACHE.get("rate") or 1350.0)
+
+
+def _calc_holdings(rows, prices: dict[str, float], usd_krw: float) -> tuple[list[dict], dict]:
+    """DB 행 + 현재가 + 환율 → holdings 리스트 + summary (합계는 모두 원화 환산 기준)."""
     holdings = []
     for r in rows:
-        ticker   = r["ticker"]
-        avg_p    = float(r["avg_price"])
-        qty      = int(r["qty"])
-        cur_prc  = prices.get(ticker)
-        pur_amt  = int(avg_p * qty)
-        evlt_amt = int(cur_prc * qty) if cur_prc else None
-        evltv_prft = (evlt_amt - pur_amt) if evlt_amt is not None else None
-        prft_rt    = (evltv_prft / pur_amt * 100) if (evltv_prft is not None and pur_amt) else None
+        ticker = r["ticker"]
+        is_us  = not any(c.isdigit() for c in ticker)
+        rate   = usd_krw if is_us else 1.0
+        avg_p  = float(r["avg_price"])
+        qty    = float(r["qty"])
+        cur_prc = prices.get(ticker)
+
+        # 원화 환산 금액 (KR 주식은 rate=1 이므로 그대로)
+        pur_amt_krw    = round(avg_p * qty * rate)
+        evlt_amt_krw   = round(cur_prc * qty * rate) if cur_prc is not None else None
+        evltv_prft_krw = (evlt_amt_krw - pur_amt_krw) if evlt_amt_krw is not None else None
+
+        # 네이티브 통화 금액 (US: USD 소수점 유지, KR: KRW 정수)
+        if is_us:
+            pur_amt    = round(avg_p * qty, 2)
+            evlt_amt   = round(cur_prc * qty, 2) if cur_prc is not None else None
+            evltv_prft = round((cur_prc - avg_p) * qty, 2) if cur_prc is not None else None
+        else:
+            pur_amt    = pur_amt_krw
+            evlt_amt   = evlt_amt_krw
+            evltv_prft = evltv_prft_krw
+
+        prft_rt = (
+            round(evltv_prft_krw / pur_amt_krw * 100, 2)
+            if evltv_prft_krw is not None and pur_amt_krw else None
+        )
+
         holdings.append({
-            "id":         r["id"],
-            "stk_cd":     ticker,
-            "stk_nm":     r["name"],
-            "avg_price":  int(avg_p),
-            "qty":        qty,
-            "cur_prc":    cur_prc,
-            "pur_amt":    pur_amt,
-            "evlt_amt":   evlt_amt,
-            "evltv_prft": evltv_prft,
-            "prft_rt":    round(prft_rt, 2) if prft_rt is not None else None,
-            "poss_rt":    None,  # 아래에서 후처리
+            "id":             r["id"],
+            "stk_cd":         ticker,
+            "stk_nm":         r["name"],
+            "market":         "US" if is_us else "KR",
+            "avg_price":      round(avg_p, 2) if is_us else int(avg_p),
+            "qty":            qty,
+            "cur_prc":        cur_prc,
+            "pur_amt":        pur_amt,
+            "evlt_amt":       evlt_amt,
+            "evltv_prft":     evltv_prft,
+            "pur_amt_krw":    pur_amt_krw,
+            "evlt_amt_krw":   evlt_amt_krw,
+            "evltv_prft_krw": evltv_prft_krw,
+            "prft_rt":        prft_rt,
+            "poss_rt":        None,
         })
 
-    tot_pur   = sum(h["pur_amt"] for h in holdings)
-    tot_evlt  = sum(h["evlt_amt"] for h in holdings if h["evlt_amt"] is not None)
-    tot_pl    = tot_evlt - tot_pur if holdings else 0
-    tot_rt    = round(tot_pl / tot_pur * 100, 2) if tot_pur else None
+    # 총계·비중 모두 원화 기준으로 계산
+    tot_pur  = sum(h["pur_amt_krw"] for h in holdings)
+    tot_evlt = sum(h["evlt_amt_krw"] for h in holdings if h["evlt_amt_krw"] is not None)
+    tot_pl   = tot_evlt - tot_pur if holdings else 0
+    tot_rt   = round(tot_pl / tot_pur * 100, 2) if tot_pur else None
 
-    # 비중% 후처리
     for h in holdings:
-        if h["evlt_amt"] is not None and tot_evlt:
-            h["poss_rt"] = round(h["evlt_amt"] / tot_evlt * 100, 1)
+        if h["evlt_amt_krw"] is not None and tot_evlt:
+            h["poss_rt"] = round(h["evlt_amt_krw"] / tot_evlt * 100, 1)
 
     summary = {
         "tot_pur_amt":  tot_pur,
@@ -1966,9 +2054,12 @@ async def get_portfolio(request: Request):
         )
 
     tickers = [r["ticker"] for r in rows]
-    prices  = await _get_current_prices(pool, tickers)
-    holdings, summary = _calc_holdings(rows, prices)
-    return {"summary": summary, "holdings": holdings}
+    prices, usd_krw = await asyncio.gather(
+        _get_current_prices(pool, tickers),
+        _get_usdkrw_rate(),
+    )
+    holdings, summary = _calc_holdings(rows, prices, usd_krw)
+    return {"summary": summary, "holdings": holdings, "usd_krw": round(usd_krw, 2)}
 
 
 @app.post("/api/portfolio/holdings", status_code=201)
@@ -1978,7 +2069,7 @@ async def add_holding(request: Request, body: _HoldingInput):
         raise HTTPException(status_code=403, detail="관리자만 종목을 추가할 수 있습니다")
     if body.qty <= 0 or body.avg_price <= 0:
         raise HTTPException(status_code=422, detail="수량·단가는 양수여야 합니다")
-    ticker = body.ticker.strip().upper().lstrip("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    ticker = body.ticker.strip().upper()
     pool = await get_pool()
     async with pool.acquire() as conn:
         try:
@@ -2005,7 +2096,7 @@ async def update_holding(request: Request, holding_id: int, body: _HoldingInput)
         raise HTTPException(status_code=403, detail="관리자만 종목을 수정할 수 있습니다")
     if body.qty <= 0 or body.avg_price <= 0:
         raise HTTPException(status_code=422, detail="수량·단가는 양수여야 합니다")
-    ticker = body.ticker.strip().upper().lstrip("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    ticker = body.ticker.strip().upper()
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -2034,6 +2125,78 @@ async def delete_holding(request: Request, holding_id: int):
         )
     if result == "DELETE 0":
         raise HTTPException(status_code=404, detail="해당 종목을 찾을 수 없습니다")
+
+
+# ── GET /api/ticker/lookup ─────────────────────────────────────
+@app.get("/api/ticker/lookup")
+async def lookup_ticker(q: str):
+    """종목코드로 종목명 조회.
+
+    한국주식: 6자리 숫자 → DB(ticker_names → krx_listings) → Yahoo Finance
+    미국주식: 영문 티커 → Yahoo Finance 검색
+    """
+    q = q.strip().upper()
+    if not q or len(q) > 20:
+        raise HTTPException(status_code=400, detail="올바른 종목코드를 입력하세요")
+
+    is_kr = q.isdigit()
+
+    if is_kr:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT name_ko FROM ticker_names WHERE ticker LIKE $1 LIMIT 1",
+                q + ".%",
+            )
+            if row and row["name_ko"]:
+                return {"ticker": q, "name": row["name_ko"], "market": "KR"}
+            row2 = await conn.fetchrow(
+                "SELECT name_ko FROM krx_listings WHERE yfinance_symbol LIKE $1 LIMIT 1",
+                q + ".%",
+            )
+            if row2 and row2["name_ko"]:
+                return {"ticker": q, "name": row2["name_ko"], "market": "KR"}
+
+    # Yahoo Finance 검색 (한국·미국 공통 폴백)
+    market = "KR" if is_kr else "US"
+    search_symbols = ([q + ".KS", q + ".KQ"] if is_kr else [q])
+
+    async def _yf_search() -> str | None:
+        import httpx
+        for sym in search_symbols:
+            url = (
+                f"https://query1.finance.yahoo.com/v1/finance/search"
+                f"?q={sym}&quotesCount=5&newsCount=0&enableFuzzyQuery=false"
+            )
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    r = await client.get(
+                        url,
+                        headers={"User-Agent": "Mozilla/5.0"},
+                    )
+                    if r.status_code != 200:
+                        continue
+                    for quote in r.json().get("quotes", []):
+                        symbol = quote.get("symbol", "")
+                        matched = (
+                            symbol.startswith(q + ".") if is_kr else symbol.upper() == q
+                        )
+                        if matched:
+                            name = quote.get("longname") or quote.get("shortname")
+                            if name:
+                                return name
+            except Exception:
+                continue
+        return None
+
+    try:
+        name = await asyncio.wait_for(_yf_search(), timeout=9.0)
+        if name:
+            return {"ticker": q, "name": name, "market": market}
+    except (asyncio.TimeoutError, Exception):
+        pass
+
+    raise HTTPException(status_code=404, detail="종목을 찾을 수 없습니다")
 
 
 # ── GET /health ───────────────────────────────────────────────
