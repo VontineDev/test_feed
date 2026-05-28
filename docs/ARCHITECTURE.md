@@ -26,6 +26,7 @@
 > v0.9.7.0부터 **모의투자 성과분석**이 추가되었습니다. `GET /api/paper/curve`(모델별 누적 P&L 시계열·집계 통계·미실현 현재가), `GET /api/paper/export`(paper_positions CSV, utf-8-sig BOM) 2개 엔드포인트 추가. `PaperAnalytics.tsx` 컴포넌트(누적 P&L 커브 Recharts, 미실현 포지션 리더보드, CSV 다운로드)가 `PaperPortfolio` 하단에 임베드됩니다.
 > v0.9.5.0부터 **웹 대시보드 히트맵 재설계**가 적용되었습니다. 데이터 소스를 Stage 분류 종목(10~50개)에서 Kiwoom 당일 거래대금 상위 50종목으로 교체. 셀 크기=당일 실제 거래대금, 등락률=Kiwoom 일중 change_pct. Stage 분류된 종목은 컬러 테두리(S1 파랑·S2 보라·S3 주황)로 오버레이. Stage 분류 잡 미실행 시에도 항상 50종목이 표시됨. Kiwoom 응답 실패 시 Stage 분류 데이터로 폴백.
 > v0.9.9.x부터 **대시보드 10명 동시 접속 안정화**가 적용되었습니다. `_bg_refresh()` stale-while-revalidate 패턴으로 캐시 만료 시 Thundering Herd 해소(RISK-04). `_EXT_EXECUTOR(max_workers=4)` + `_ext_thread()` 래퍼로 yfinance·Kiwoom·KRX 외부 API를 전용 풀에서 타임아웃과 함께 실행(RISK-05). `_warmup_caches()` lifespan 사전 로딩으로 cold start 지연 해소(RISK-07). `_HISTORY_MAX_DAYS=365` 이력 쿼리 범위 제한으로 단일 사용자 DB 독점 차단(RISK-08). `GET /health` 엔드포인트 신설 — 업타임·DB 풀·캐시 TTL·SSE 연결 수 반환(RISK-09).
+> v0.9.9.5부터 **OpenDART 전자공시 통합**이 추가되었습니다. `data/dart_sync.py` — Top 20 기업 공시 이벤트 수집·XBRL 재무수치·사업보고서 세그먼트 Ollama 파싱. DB 테이블 4종(`dart_companies`·`dart_disclosures`·`dart_xbrl`·`dart_segments`). 스케줄러 잡 3종(일별 공시·월별 XBRL·연간 세그먼트). `data/dart_download.py` — 보고서 원문 로컬 다운로더. 공시 갭 자동 백필(최대 90일).
 
 ---
 
@@ -708,6 +709,9 @@ python analysis/macro_tracker.py --snapshot-only            # 매크로 현황 �
 | `screener_job.py` | `weekly_screener_job(db_pool)` | 매주 일요일 20:30 KST |
 | `infra_jobs.py` | `daily_krx_refresh_job(db_pool)` | 매일 08:00 KST |
 | `infra_jobs.py` | `daily_flow_sync_job()` | 매일 17:30 KST |
+| `infra_jobs.py` | `daily_dart_disclosure_job(db_pool)` | 평일 09:00 KST |
+| `infra_jobs.py` | `monthly_dart_xbrl_job(db_pool)` | 매월 1일 02:00 KST |
+| `infra_jobs.py` | `annual_dart_segments_job(db_pool)` | 매년 5월 1일 03:00 KST |
 | `watchlist_job.py` | `watchlist_brief_job(db_pool)` | 매일 17:00 KST |
 | `watchlist_job.py` | `build_watchlist_entries(pool)` | on-demand (`/watchlist` 봇 커맨드) |
 | `paper_jobs.py` | `paper_open_entry_job(db_pool, trader)` | 매일 09:05 KST |
@@ -715,6 +719,77 @@ python analysis/macro_tracker.py --snapshot-only            # 매크로 현황 �
 | `paper_jobs.py` | `paper_eod_sampler_job(db_pool, trader)` | 매일 16:40 KST |
 
 **설계 원칙**: 각 잡 함수는 `db_pool`/`trader` 등 의존성을 인자로 받아 전역 상태 없이 동작. 전역 캐시(`_screener_tickers`, `_active_stage_tickers`)를 갱신하는 잡은 새 값을 반환 — 호출자(`run_scheduler.py`)가 전역에 대입.
+
+---
+
+### 3-14. `data/dart_sync.py` — OpenDART 전자공시 통합 (v0.9.9.5~)
+
+**역할**: 금융감독원 전자공시시스템(DART) API를 통해 Top 20 기업의 공시 이벤트·XBRL 재무수치·사업보고서 세그먼트를 수집합니다.
+
+**DartClient** (`httpx.AsyncClient` 래퍼):
+
+| 메서드 | 엔드포인트 | 설명 |
+|--------|-----------|------|
+| `fetch_corp_codes()` | `/api/corpCode.xml` | 전체 기업고유번호 ZIP 다운로드 → 파싱 |
+| `fetch_disclosures()` | `/api/list.json` | 기간·기업·공시유형 필터 공시 목록 조회 |
+| `fetch_xbrl()` | `/api/fnlttSinglAcntAll.json` | 단일기업 XBRL 재무수치 (연결/별도) |
+| `fetch_document_zip()` | `/api/document.xml` | 사업보고서 원문 ZIP 바이너리 |
+
+**핵심 함수**:
+- `sync_disclosures(pool, corp_codes, bgn_de, end_de)` — 공시 목록 → `dart_disclosures` 테이블 upsert. `dart_companies` 자동 시드(FK 레이스컨디션 방지).
+- `sync_xbrl(pool, corp_codes)` — 전년도 XBRL 재무수치 → `dart_xbrl` 테이블 upsert.
+- `sync_segments(pool, corp_codes, bsns_year)` — 사업보고서 원문 ZIP 다운로드 → `_extract_section_text()`로 II-2/II-4 절 추출 → Ollama 파싱 → `dart_segments` 저장.
+- `get_top20_corp_codes(pool)` — `dart_companies.stock_code`로 Top 20 corp_code 조회.
+
+**세그먼트 추출 (`_extract_section_text`)**:
+- DART4 XML에서 정규식으로 섹션 헤딩 위치 탐색
+- 정지 키워드(다음 섹션 헤딩) 탐색 오프셋 30자 — TOC 내 헤딩도 감지
+- 헤딩이 행 시작(`\n` 직전)에 있는지 검사 → 본문 내 인용 구분
+- 결과 < 400자이면 TOC 항목으로 판정하여 스킵
+- 최대 6,000자 반환 (Ollama 컨텍스트 한도 고려)
+
+**DB 테이블**:
+
+| 테이블 | 주키 | 설명 |
+|--------|------|------|
+| `dart_companies` | `corp_code (VARCHAR 8)` | DART 기업 마스터 + KRX 종목코드 매핑 |
+| `dart_disclosures` | `rcept_no (VARCHAR 14)` | 공시 이벤트 (실적발표·유상증자 등) |
+| `dart_xbrl` | `(corp_code, bsns_year, reprt_code, account_nm, fs_div)` | XBRL 재무수치 |
+| `dart_segments` | `(corp_code, bsns_year, section)` | Ollama 파싱 세그먼트 결과 |
+
+**환경변수**: `DART_API_KEY` (dart.fss.or.kr 개발자센터에서 발급)
+
+---
+
+### 3-15. `data/dart_download.py` — DART 보고서 로컬 다운로더 (v0.9.9.5~)
+
+**역할**: Top 20 기업의 사업보고서·반기보고서·분기보고서 원문 ZIP을 로컬 디렉터리에 구조화하여 저장합니다. `dart_sync.py` 파이프라인과 독립으로 실행됩니다.
+
+**저장 구조**:
+```
+reports/dart/
+  {기업명}/
+    {rcept_no}_{보고서명}/      ← 압축 해제된 XML 파일들
+      BIZ_YYYYMMDD_XXXXXX.xml
+      ...
+    {rcept_no}_meta.json        ← 보고서 메타데이터 (corp_code, rcept_dt, files, size_bytes)
+```
+
+**CLI 사용법**:
+```bash
+python data/dart_download.py                              # 2026년 Top 20 전체
+python data/dart_download.py --year 2025                  # 연도 지정
+python data/dart_download.py --year 2026 --corp 005930    # 단일 종목코드
+python data/dart_download.py --year 2026 --type 사업보고서 # 보고서 종류 필터
+python data/dart_download.py --year 2026 --dry-run        # 목록만 확인
+python data/dart_download.py --year 2026 --zip            # ZIP 파일 그대로 저장
+```
+
+**주요 동작**:
+- EUC-KR 파일명 자동 변환 (`cp437` → `cp949` 재인코딩)
+- 이미 존재하는 보고서 자동 스킵 (target_dir + meta_path 모두 존재 시)
+- API 부하 방지: 보고서 간 1.5초 대기
+- Windows cp949 터미널 대응: `sys.stdout.reconfigure(encoding="utf-8")`
 
 ---
 
@@ -749,7 +824,9 @@ test_feed/
 │   ├── krx_flow_sync.py           # 외국인·기관 순매수 파이프라인 → daily_flow 테이블
 │   ├── krx_aftermarket_sync.py    # KRX 시간외 단일가 → aftermarket_snap 적재
 │   ├── kiwoom_aftermarket_sync.py # Kiwoom REST API 시간외 단일가 → aftermarket_snap 적재
-│   └── kiwoom_paper_trader.py     # 키움 모의투자 자동주문 — 4모델, paper_positions 테이블
+│   ├── kiwoom_paper_trader.py     # 키움 모의투자 자동주문 — 4모델, paper_positions 테이블
+│   ├── dart_sync.py               # DART 전자공시 수집·XBRL 파싱·세그먼트 Ollama 추출
+│   └── dart_download.py           # DART 보고서 원문 로컬 다운로더 (CLI 독립 실행)
 │
 ├── analysis/                      # 분석·전략 (v0.9.6.0~)
 │   ├── signal_detector.py         # LLM 매매 신호 감지 (JSON 구조화 출력)

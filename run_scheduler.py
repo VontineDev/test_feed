@@ -526,6 +526,27 @@ async def _daily_flow_sync_job():
     await daily_flow_sync_job()
 
 
+async def _daily_dart_disclosure_job():
+    if not _db_pool:
+        return
+    from jobs.infra_jobs import daily_dart_disclosure_job
+    await daily_dart_disclosure_job(_db_pool)
+
+
+async def _monthly_dart_xbrl_job():
+    if not _db_pool:
+        return
+    from jobs.infra_jobs import monthly_dart_xbrl_job
+    await monthly_dart_xbrl_job(_db_pool)
+
+
+async def _annual_dart_segments_job():
+    if not _db_pool:
+        return
+    from jobs.infra_jobs import annual_dart_segments_job
+    await annual_dart_segments_job(_db_pool)
+
+
 # ── 모의투자 잡 래퍼 ─────────────────────────────────────────
 
 async def _paper_exit_checker_job() -> None:
@@ -788,6 +809,38 @@ async def main(interval: int, enable_summary: bool) -> None:
             replace_existing=True,
         )
         logger.info("[paper] T+1 진입 잡 등록 완료 (09:05 KST)")
+
+    # ── OpenDART 공시 수집: 평일 09:00 KST (00:00 UTC) ──────────
+    # 전일 Top 20 기업 공시 이벤트 (실적발표·유상증자 등) → dart_disclosures
+    # DART_API_KEY 미설정 시 내부에서 경고 후 skip — 스케줄러 크래시 없음.
+    scheduler.add_job(
+        _daily_dart_disclosure_job,
+        CronTrigger(day_of_week="mon-fri", hour=0, minute=0, timezone="UTC"),  # = 09:00 KST
+        id="daily_dart_disclosures",
+        max_instances=1,
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+    # ── OpenDART XBRL 갱신: 매월 1일 17:00 UTC (02:00 KST+1) ───
+    # Top 20 기업 전년도 사업보고서 XBRL 재무수치 → dart_xbrl
+    scheduler.add_job(
+        _monthly_dart_xbrl_job,
+        CronTrigger(day=1, hour=17, minute=0, timezone="UTC"),  # = 02:00 KST 다음날
+        id="monthly_dart_xbrl",
+        max_instances=1,
+        misfire_grace_time=86400,
+        replace_existing=True,
+    )
+    # ── OpenDART 세그먼트 Ollama 파싱: 매년 5월 1일 18:00 UTC (03:00 KST) ──
+    # 사업보고서 공시 시즌(3-4월) 완료 후 → dart_segments
+    scheduler.add_job(
+        _annual_dart_segments_job,
+        CronTrigger(month=5, day=1, hour=18, minute=0, timezone="UTC"),  # = 03:00 KST
+        id="annual_dart_segments",
+        max_instances=1,
+        misfire_grace_time=86400,
+        replace_existing=True,
+    )
 
     scheduler.add_job(
         _trigger_watcher_job,

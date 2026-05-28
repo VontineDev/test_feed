@@ -22,6 +22,79 @@ async def daily_krx_refresh_job(db_pool) -> None:
             logger.warning("[ticker_cache] 캐시 재로드 실패: %s", _cache_e)
 
 
+async def daily_dart_disclosure_job(db_pool) -> None:
+    """평일 09:00 KST — 전일 Top 20 기업 공시 이벤트 수집.
+
+    스케줄러 재시작 등으로 수집이 끊겼을 경우, 마지막 수집일 다음날부터
+    오늘까지 자동 백필한다 (최대 90일).
+    """
+    from datetime import date, timedelta
+    from data.dart_sync import get_top20_corp_codes, sync_disclosures
+
+    try:
+        corp_codes = await get_top20_corp_codes(db_pool)
+        if not corp_codes:
+            logger.warning("[dart] Top 20 corp_code 없음 — seed-companies 선행 필요")
+            return
+
+        # 마지막 수집일 확인 (rcept_dt 기준)
+        async with db_pool.acquire() as conn:
+            last_dt = await conn.fetchval(
+                "SELECT MAX(rcept_dt) FROM dart_disclosures"
+            )
+
+        today = date.today()
+        yesterday = today - timedelta(days=1)
+
+        if last_dt and (yesterday - last_dt).days > 1:
+            # 갭 감지: 마지막 수집일 다음날부터 어제까지 백필 (최대 90일)
+            gap_start = last_dt + timedelta(days=1)
+            if (yesterday - gap_start).days > 90:
+                gap_start = yesterday - timedelta(days=89)
+            bgn_de = gap_start.strftime("%Y%m%d")
+            end_de = yesterday.strftime("%Y%m%d")
+            logger.info("[dart] 공시 갭 감지 (%s ~ %s) — 백필 시작", bgn_de, end_de)
+            n = await sync_disclosures(db_pool, corp_codes, bgn_de, end_de)
+            logger.info("[dart] 공시 백필 완료: %d건 (%s ~ %s)", n, bgn_de, end_de)
+        else:
+            # 정상: 전일 하루치만 수집
+            n = await sync_disclosures(db_pool, corp_codes)
+            logger.info("[dart] 일별 공시 수집 완료: %d건", n)
+
+    except Exception as e:
+        logger.error("[dart] 일별 공시 수집 실패: %s", e)
+
+
+async def annual_dart_segments_job(db_pool) -> None:
+    """매년 5월 1일 03:00 KST — Top 20 사업보고서 II-2/II-4 Ollama 파싱."""
+    from data.dart_sync import get_top20_corp_codes, sync_segments
+    try:
+        corp_codes = await get_top20_corp_codes(db_pool)
+        if not corp_codes:
+            logger.warning("[dart] Top 20 corp_code 없음 — seed-companies 선행 필요")
+            return
+        from datetime import date
+        bsns_year = str(date.today().year - 1)
+        n = await sync_segments(db_pool, corp_codes, bsns_year)
+        logger.info("[dart] 연간 세그먼트 파싱 완료: %d건 (%s)", n, bsns_year)
+    except Exception as e:
+        logger.error("[dart] 연간 세그먼트 파싱 실패: %s", e)
+
+
+async def monthly_dart_xbrl_job(db_pool) -> None:
+    """매월 1일 02:00 KST — Top 20 기업 전년도 XBRL 재무수치 갱신."""
+    from data.dart_sync import get_top20_corp_codes, sync_xbrl
+    try:
+        corp_codes = await get_top20_corp_codes(db_pool)
+        if not corp_codes:
+            logger.warning("[dart] Top 20 corp_code 없음 — seed-companies 선행 필요")
+            return
+        n = await sync_xbrl(db_pool, corp_codes)
+        logger.info("[dart] 월별 XBRL 갱신 완료: %d건", n)
+    except Exception as e:
+        logger.error("[dart] 월별 XBRL 갱신 실패: %s", e)
+
+
 async def daily_flow_sync_job() -> None:
     logger.info("[flow-sync] krx_flow_sync --incremental 시작")
     try:

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.9.5] - 2026-05-28
+
+### Added
+
+- **OpenDART 전자공시 통합** (`data/dart_sync.py`, `core/db.py`, `jobs/infra_jobs.py`, `run_scheduler.py`): 금융감독원 DART 전자공시 시스템 데이터를 파이프라인에 추가. DB 테이블 4개 신설(`dart_companies`, `dart_disclosures`, `dart_xbrl`, `dart_segments`). Top 20 기업 공시 이벤트 일별 수집, XBRL 재무수치 월별 갱신, 사업보고서 세그먼트 Ollama 파싱 연간 실행. `DART_API_KEY` 환경변수로 인증.
+- **스케줄러 DART 잡 3종** (`run_scheduler.py`): ① `daily_dart_disclosures` — 평일 09:00 KST Top 20 기업 전일 공시 수집; ② `monthly_dart_xbrl` — 매월 1일 02:00 KST 전년도 XBRL 재무수치 갱신; ③ `annual_dart_segments` — 매년 5월 1일 03:00 KST 사업보고서 II-2/II-4 Ollama 파싱.
+- **공시 갭 감지 + 자동 백필** (`jobs/infra_jobs.py`): `daily_dart_disclosure_job`이 `MAX(rcept_dt)` 기준으로 수집 갭(스케줄러 재시작 등)을 자동 감지. 마지막 수집일 다음날부터 전일까지 자동 백필, 최대 90일 제한.
+- **DART 보고서 로컬 다운로더** (`data/dart_download.py`): 사업보고서·반기보고서·분기보고서 원문 ZIP을 `reports/dart/{기업명}/{rcept_no}_{보고서명}/` 구조로 저장하는 독립 실행 스크립트. EUC-KR 파일명 자동 변환, 이미 다운로드된 보고서 자동 스킵, `--dry-run`/`--zip` 옵션 지원.
+- **사업보고서 세그먼트 TOC/본문 구분 로직** (`data/dart_sync.py`): `_extract_section_text()`에서 TOC 항목을 본문으로 오인하던 버그 수정. 정지 키워드 탐색 오프셋 200→30 축소 + 행 시작 여부(`\n` 직전) 검사로 TOC 헤딩과 본문 내 인용 구분. 섹션 최대 추출 길이 3,500→6,000자 확장.
+
 ## [0.9.9.4] - 2026-05-27
 
 ### Fixed

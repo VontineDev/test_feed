@@ -286,6 +286,64 @@ CREATE TABLE IF NOT EXISTS ticker_names (
 );
 """
 
+_CREATE_DART_TABLES = """
+CREATE TABLE IF NOT EXISTS dart_companies (
+    corp_code   VARCHAR(8)   PRIMARY KEY,  -- DART 8자리 기업고유번호
+    corp_name   TEXT         NOT NULL,
+    stock_code  VARCHAR(6),               -- KRX 6자리 종목코드 (상장사만)
+    market      TEXT,                     -- KOSPI | KOSDAQ | NULL
+    updated_at  TIMESTAMPTZ  DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_dart_companies_stock_code
+    ON dart_companies (stock_code)
+    WHERE stock_code IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS dart_disclosures (
+    rcept_no    VARCHAR(14)  PRIMARY KEY,   -- 공시 접수번호 (14자리)
+    corp_code   VARCHAR(8)   NOT NULL REFERENCES dart_companies(corp_code),
+    corp_name   TEXT,
+    report_nm   TEXT,                       -- 공시 제목
+    rcept_dt    DATE,                       -- 접수일
+    pblntf_ty   VARCHAR(4),                -- 공시유형 코드
+    rm          TEXT,                       -- 비고 (유상증자 등 키워드)
+    fetched_at  TIMESTAMPTZ  DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_dart_disc_corp_dt
+    ON dart_disclosures (corp_code, rcept_dt DESC);
+CREATE INDEX IF NOT EXISTS idx_dart_disc_rcept_dt
+    ON dart_disclosures (rcept_dt DESC);
+
+CREATE TABLE IF NOT EXISTS dart_xbrl (
+    id          BIGSERIAL    PRIMARY KEY,
+    corp_code   VARCHAR(8)   NOT NULL REFERENCES dart_companies(corp_code),
+    bsns_year   VARCHAR(4)   NOT NULL,   -- 사업연도 'YYYY'
+    reprt_code  VARCHAR(5)   NOT NULL,   -- 11011=사업보고서, 11012=반기, 11013=1Q, 11014=3Q
+    account_nm  TEXT         NOT NULL,
+    fs_div      VARCHAR(4)   NOT NULL,   -- CFS=연결, OFS=별도
+    amount      BIGINT,
+    currency    VARCHAR(3)   DEFAULT 'KRW',
+    fetched_at  TIMESTAMPTZ  DEFAULT NOW(),
+    UNIQUE (corp_code, bsns_year, reprt_code, account_nm, fs_div)
+);
+CREATE INDEX IF NOT EXISTS idx_dart_xbrl_corp_year
+    ON dart_xbrl (corp_code, bsns_year DESC);
+
+CREATE TABLE IF NOT EXISTS dart_segments (
+    id          BIGSERIAL    PRIMARY KEY,
+    corp_code   VARCHAR(8)   NOT NULL REFERENCES dart_companies(corp_code),
+    bsns_year   VARCHAR(4)   NOT NULL,
+    section     VARCHAR(10)  NOT NULL,   -- 'II-2' | 'II-4'
+    raw_text    TEXT,                    -- Ollama 입력 원본
+    parsed_json JSONB,                   -- Ollama 파싱 결과
+    parse_ok    BOOLEAN      DEFAULT FALSE,
+    model       TEXT,                    -- 사용 모델명
+    fetched_at  TIMESTAMPTZ  DEFAULT NOW(),
+    UNIQUE (corp_code, bsns_year, section)
+);
+CREATE INDEX IF NOT EXISTS idx_dart_segments_corp_year
+    ON dart_segments (corp_code, bsns_year DESC);
+"""
+
 
 # ── RLS 활성화 (Supabase PostgREST 노출 차단) ────────────────────
 # 이 백엔드는 asyncpg 직접 연결(postgres/service_role)을 사용하므로 RLS 영향 없음.
@@ -305,6 +363,10 @@ _RLS_ALWAYS: list[str] = [
     "ticker_names",
     "trade_log",
     "scheduler_triggers",
+    "dart_companies",
+    "dart_disclosures",
+    "dart_xbrl",
+    "dart_segments",
 ]
 
 # init_db 호출 시점에 아직 없을 수 있는 테이블 — DO 블록으로 안전하게 처리
@@ -321,6 +383,7 @@ async def init_db(pool: asyncpg.Pool) -> None:
         await conn.execute(_CREATE_KRX_TABLE)
         await conn.execute(_CREATE_TICKER_NAMES)
         await conn.execute(_CREATE_SCHEDULER_TRIGGERS)
+        await conn.execute(_CREATE_DART_TABLES)
         await conn.execute(
             "ALTER TABLE chart_signals ADD COLUMN IF NOT EXISTS sector VARCHAR(80) DEFAULT ''"
         )
