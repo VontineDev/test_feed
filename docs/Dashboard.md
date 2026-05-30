@@ -30,7 +30,7 @@ PostgreSQL (Supabase)
 
 | 탭 | 컴포넌트 | 기능 |
 |----|----------|------|
-| 히트맵 | `Heatmap.tsx` | 당일 거래대금 상위 50종목(Kiwoom ka10032). Stage 분류 결과 오버레이. 장 마감 시 `daily_market_snap`(ka10032 top100, KRX+NXT 합산) 기준으로 전환 — `aftermarket_snap` 미매칭 시 폴백. 헤더에 "MM/DD 합산" 배지 표시. 5분 갱신(장 마감 30분). 상단에 `MarketSummaryBanner` — KOSPI/KOSDAQ 지수 + 시장 심리 한마디 표시. Kiwoom 실패 시 Stage 분류 데이터로 폴백. |
+| 히트맵 | `Heatmap.tsx` | 당일 거래대금 상위 20종목(Kiwoom ka10032). Stage 분류 결과 오버레이. 장 마감 시 `daily_market_snap`(ka10032 top100, KRX+NXT 합산) 기준으로 전환 — `aftermarket_snap` 미매칭 시 폴백. 헤더에 "MM/DD 합산" 배지 표시. 5분 갱신(장 마감 30분). 상단에 `MarketSummaryBanner` — KOSPI/KOSDAQ 지수 + 시장 심리 한마디 표시. Kiwoom 실패 시 Stage 분류 데이터로 폴백. |
 | 종목 분석 | `Report.tsx` | 추세 단계(Stage 분류) + 강세 후보 발굴(차트 스크리닝) 결과. 날짜 범위 선택(오늘/-3일/-1주/-2주/-1달)으로 이력 조회 가능. 종목 클릭 시 우측 패널 분할로 Stage·스크리너 이력 표시; 같은 종목 재클릭 또는 날짜 변경 시 패널 닫힘. 모바일에서는 세로 스택 전환. 섹션 헤더 ⓘ 호버 시 기능 설명 팝업. |
 | Top | `Top.tsx` | 당일 거래대금 상위 50종목(Kiwoom ka10032). EPS·PER·Forward PER(Naver Finance) 표시. 장 마감 시 `daily_market_snap`(ka10032 top100, KRX+NXT 합산) 기준으로 전환 — `aftermarket_snap` 미수집 시 폴백. "MM/DD 합산" 배지 표시. 5분 캐시(장 마감 30분). |
 | 모의투자 | `PaperPortfolio.tsx` | 모델별 요약 + 실시간 포지션(60s 갱신) + 청산 이력 + CSV 다운로드(포지션 헤더 버튼) + 스케줄러 컨트롤. 모델 카드 클릭으로 포지션 필터링 |
