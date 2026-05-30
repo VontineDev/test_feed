@@ -109,6 +109,7 @@ CREATE TABLE IF NOT EXISTS aftermarket_snap (
     after_close   NUMERIC(12, 0),
     after_volume  BIGINT,
     after_value   BIGINT,
+    reg_value     BIGINT,
     after_chg_pct NUMERIC(6, 2),
     fetched_at    TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (trade_date, ticker)
@@ -131,6 +132,7 @@ class AftermarketRecord:
     after_volume:  Optional[int]
     after_value:   Optional[int]
     after_chg_pct: Optional[float]
+    reg_value:     Optional[int] = None   # 정규장 거래대금 (close × volume)
 
 
 # ── 키움 REST API 클라이언트 ──────────────────────────────────────
@@ -464,6 +466,9 @@ def ensure_table(dsn: str) -> None:
                 stmt = stmt.strip()
                 if stmt:
                     cur.execute(stmt)
+            cur.execute(
+                "ALTER TABLE aftermarket_snap ADD COLUMN IF NOT EXISTS reg_value BIGINT"
+            )
             cur.execute("ALTER TABLE aftermarket_snap ENABLE ROW LEVEL SECURITY;")
             cur.execute("""
                 DO $$ BEGIN
@@ -491,19 +496,20 @@ def upsert_records(dsn: str, records: list[AftermarketRecord]) -> int:
                 """
                 INSERT INTO aftermarket_snap
                     (trade_date, ticker, reg_close, after_close,
-                     after_volume, after_value, after_chg_pct)
+                     after_volume, after_value, reg_value, after_chg_pct)
                 VALUES %s
                 ON CONFLICT (trade_date, ticker) DO UPDATE SET
                     reg_close     = EXCLUDED.reg_close,
                     after_close   = EXCLUDED.after_close,
                     after_volume  = EXCLUDED.after_volume,
                     after_value   = EXCLUDED.after_value,
+                    reg_value     = EXCLUDED.reg_value,
                     after_chg_pct = EXCLUDED.after_chg_pct,
                     fetched_at    = now()
                 """,
                 [
                     (r.trade_date, r.ticker, r.reg_close, r.after_close,
-                     r.after_volume, r.after_value, r.after_chg_pct)
+                     r.after_volume, r.after_value, r.reg_value, r.after_chg_pct)
                     for r in records
                 ],
             )
@@ -511,6 +517,48 @@ def upsert_records(dsn: str, records: list[AftermarketRecord]) -> int:
         return len(records)
     finally:
         conn.close()
+
+
+def _enrich_with_reg_value(client: "KiwoomClient", records: list[AftermarketRecord]) -> None:
+    """ka10032(거래대금상위)로 KRX+NXT 합산 거래대금을 reg_value에 채움.
+
+    ka10032는 장 마감 후에도 당일 최종 합산값을 반환.
+    stex_tp="3" (전체=KRX+NXT) 기준 상위 500종목 조회.
+
+    ka10032 stk_cd 형식: "005930_AL"(KOSPI) / "035720_AQ"(KOSDAQ)
+    aftermarket_snap ticker 형식: "005930.KS" / "035720.KQ"
+    → _AL→.KS, _AQ→.KQ 변환 후 매칭.
+    """
+    if not records:
+        return
+    try:
+        top_items = client.fetch_top_volume(n=500)
+    except Exception as e:
+        logger.warning("[kiwoom] reg_value 조회(ka10032) 실패 (무시): %s", e)
+        return
+
+    # _AL/.KS / _AQ/.KQ 변환 → aftermarket_snap ticker와 동일 형식으로 정규화
+    def _to_snap_ticker(raw: str) -> str:
+        if raw.endswith("_AL"):
+            return raw[:-3] + ".KS"
+        if raw.endswith("_AQ"):
+            return raw[:-3] + ".KQ"
+        # 이미 .KS/.KQ 형식이거나 알 수 없는 경우 그대로
+        return raw
+
+    amount_map: dict[str, int] = {
+        _to_snap_ticker(it["ticker"]): it["amount"]
+        for it in top_items
+        if it.get("amount")
+    }
+
+    n = 0
+    for r in records:
+        amt = amount_map.get(r.ticker)
+        if amt:
+            r.reg_value = amt
+            n += 1
+    logger.info("[kiwoom] reg_value 보강 완료: %d/%d건 (ka10032 top500 매칭)", n, len(records))
 
 
 def already_loaded(dsn: str, trade_date: date) -> bool:
@@ -678,6 +726,9 @@ def main() -> None:
     if not records:
         logger.warning("[kiwoom] 수집된 데이터 없음 — 시간외 거래가 없거나 장 진행 중")
         return
+
+    # reg_value: ka10032(KRX+NXT 합산)로 당일 최종 거래대금 보강
+    _enrich_with_reg_value(client, records)
 
     saved = upsert_records(dsn, records)
     logger.info("[kiwoom] 완료 — %s %d건 저장", trade_date, saved)

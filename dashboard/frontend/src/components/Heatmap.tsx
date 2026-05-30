@@ -26,18 +26,20 @@ const formatCountdown = (ms: number): string => {
 }
 
 export default function Heatmap() {
-  const [items, setItems]           = useState<HeatmapItem[]>([])
-  const [loading, setLoading]       = useState(true)
-  const [error, setError]           = useState<string | null>(null)
-  const [selected, setSelected]     = useState<HeatmapItem | null>(null)
-  const [updatedAt, setUpdatedAt]   = useState<Date | null>(null)
-  const [nextRefresh, setNextRefresh] = useState<number>(REFRESH_MS)
+  const [items, setItems]               = useState<HeatmapItem[]>([])
+  const [loading, setLoading]           = useState(true)
+  const [error, setError]               = useState<string | null>(null)
+  const [selected, setSelected]         = useState<HeatmapItem | null>(null)
+  const [updatedAt, setUpdatedAt]       = useState<Date | null>(null)
+  const [nextRefresh, setNextRefresh]   = useState<number>(REFRESH_MS)
+  const [isAftermarket, setIsAftermarket] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
       const j = await fetch('/api/heatmap').then(r => r.json())
       setItems(j.data ?? [])
+      setIsAftermarket(j.is_aftermarket ?? false)
       setUpdatedAt(new Date())
       setNextRefresh(REFRESH_MS)
       setError(null)
@@ -83,6 +85,15 @@ export default function Heatmap() {
       {/* 헤더 */}
       <div style={styles.header}>
         <span style={styles.title}>시장 히트맵</span>
+          {isAftermarket && (
+            <span style={{
+              fontSize: 10, padding: '2px 6px', borderRadius: 10,
+              background: tokens.bg.raised, border: `1px solid ${tokens.bd.emphasis}`,
+              color: tokens.tx.muted, fontWeight: 600,
+            }}>
+              전일 합산
+            </span>
+          )}
         <span style={styles.legend}>
           <span style={{ color: tokens.stage[1] }}>▮S1</span>{' '}
           <span style={{ color: tokens.stage[2] }}>▮S2</span>{' '}

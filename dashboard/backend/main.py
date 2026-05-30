@@ -86,7 +86,8 @@ _KIWOOM_TOKEN_TTL = 82800  # 23시간
 # 캐시는 n=20 기준 단일 슬롯. n이 다른 요청은 캐시된 데이터를 그대로 반환.
 # 프론트엔드가 n=20 고정이므로 충돌 없음. n 변경 시 단일 슬롯 가정 재검토 필요.
 _TOP_CACHE: dict = {"data": None, "expires": 0.0}
-_TOP_TTL = 300
+_TOP_TTL = 300            # 장 중 5분
+_AFTERMARKET_TTL = 1800   # 장 마감 후 30분 (aftermarket_snap은 하루 종일 불변)
 _TOP_LOCK = asyncio.Lock()
 
 # ── 매크로 캐시 (10분) ───────────────────────────────────────
@@ -136,6 +137,19 @@ CREATE INDEX IF NOT EXISTS idx_sched_trig_status
     WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_sched_stream
     ON scheduler_triggers (requested_at DESC);
+
+CREATE TABLE IF NOT EXISTS dart_extractions (
+    corp_name        TEXT NOT NULL,
+    rcept_no         TEXT NOT NULL,
+    report_type      TEXT,
+    period           TEXT,
+    extraction_text  TEXT,
+    model            TEXT,
+    prompt_ver       TEXT DEFAULT 'v1',
+    xml_chars        INT,
+    extracted_at     TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (corp_name, rcept_no)
+);
 
 CREATE TABLE IF NOT EXISTS manual_portfolio (
     id          BIGSERIAL     PRIMARY KEY,
@@ -346,8 +360,101 @@ async def _fetch_current_prices(
     return prices
 
 
+# ── 시장 개장 여부 ─────────────────────────────────────────────
+def _is_market_open() -> bool:
+    """평일 09:00~15:30 KST 이면 True."""
+    now_kst = datetime.now(_KST)
+    return now_kst.weekday() < 5 and time(9, 0) <= now_kst.time() < time(15, 31)
+
+
+# ── aftermarket_snap에서 합산(KRX+NXT) 거래대금 상위 N 조회 ──────
+async def _fetch_aftermarket_snap_top_async(n: int) -> dict | None:
+    """aftermarket_snap 최근 영업일 합산(KRX+NXT) 거래대금 상위 N 종목 반환.
+
+    reg_value(KRX 정규장 close×volume) + after_value(NXT 시간외) 합산 기준 정렬.
+    reg_value 미수집 시 after_value만 사용.
+    데이터 없으면 None 반환.
+    """
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT a.ticker,
+                       COALESCE(tn.name_ko, SPLIT_PART(a.ticker, '.', 1)) AS name,
+                       a.reg_close,
+                       a.after_close,
+                       a.after_value,
+                       a.reg_value,
+                       (COALESCE(a.reg_value, 0) + COALESCE(a.after_value, 0)) AS total_value,
+                       a.after_chg_pct,
+                       a.trade_date,
+                       CASE WHEN a.ticker LIKE '%.KS' THEN 'KOSPI'
+                            WHEN a.ticker LIKE '%.KQ' THEN 'KOSDAQ'
+                            ELSE '' END AS market
+                FROM   aftermarket_snap a
+                LEFT JOIN ticker_names tn ON tn.ticker = a.ticker
+                WHERE  a.trade_date = (SELECT MAX(trade_date) FROM aftermarket_snap)
+                  AND  (COALESCE(a.reg_value, 0) + COALESCE(a.after_value, 0)) > 0
+                ORDER  BY total_value DESC
+                LIMIT  $1
+                """,
+                n,
+            )
+        if not rows:
+            return None
+        trade_date = str(rows[0]["trade_date"])
+        items = []
+        for i, r in enumerate(rows, 1):
+            price = int(r["after_close"]) if r["after_close"] else (int(r["reg_close"]) if r["reg_close"] else 0)
+            change_pct = float(r["after_chg_pct"]) if r["after_chg_pct"] is not None else 0.0
+            items.append({
+                "rank":       i,
+                "ticker":     r["ticker"],
+                "name":       r["name"] or r["ticker"],
+                "price":      price,
+                "change_pct": change_pct,
+                "amount":     int(r["total_value"]),
+                "market":     r["market"] or "",
+            })
+        return {"items": items, "fetched_at": trade_date, "is_aftermarket": True}
+    except Exception as e:
+        logger.warning("[aftermarket] snap 조회 실패: %s", e)
+        return None
+
+
 # ── 히트맵 데이터 빌드 (Kiwoom 거래대금 Top 50 + Stage 오버레이) ──
 async def _build_heatmap_data() -> list[dict]:
+    pool = await get_pool()
+
+    # 장 마감 시: aftermarket_snap에서 전일 NXT 데이터 사용
+    if not _is_market_open():
+        snap_data = await _fetch_aftermarket_snap_top_async(50)
+        if snap_data and snap_data.get("items"):
+            tickers = [it["ticker"] for it in snap_data["items"]]
+            async with pool.acquire() as conn:
+                stage_rows = await conn.fetch(
+                    """
+                    SELECT ticker, stage FROM stage_classifications
+                    WHERE classified_date = (SELECT MAX(classified_date) FROM stage_classifications)
+                      AND ticker = ANY($1::text[])
+                    """,
+                    tickers,
+                )
+            stage_map = {r["ticker"]: r["stage"] for r in stage_rows}
+            return [
+                {
+                    "ticker":        it["ticker"],
+                    "name":          it["name"],
+                    "stage":         stage_map.get(it["ticker"]),
+                    "amount":        it["amount"],
+                    "change_pct":    it["change_pct"],
+                    "market":        it.get("market", ""),
+                    "is_aftermarket": True,
+                }
+                for it in snap_data["items"]
+            ]
+
     # 1. Kiwoom top 50 조회 (15초 타임아웃)
     try:
         top_data = await _ext_thread(_fetch_top_kiwoom, 50, timeout=15.0)
@@ -356,7 +463,6 @@ async def _build_heatmap_data() -> list[dict]:
         logger.warning("[heatmap] Kiwoom 조회 실패, Stage 분류 폴백: %s", e)
         kiwoom_items = []
 
-    pool = await get_pool()
     today = date.today()
 
     if kiwoom_items:
@@ -416,27 +522,36 @@ async def _build_heatmap_data() -> list[dict]:
 
 
 # ── GET /api/heatmap ──────────────────────────────────────────
+def _heatmap_response(data: list[dict], cached: bool, stale: bool = False) -> dict:
+    is_aftermarket = bool(data and data[0].get("is_aftermarket"))
+    r: dict = {"data": data, "cached": cached, "is_aftermarket": is_aftermarket}
+    if stale:
+        r["stale"] = True
+    return r
+
+
 @app.get("/api/heatmap")
 async def get_heatmap():
     now = _time_module.time()
     if _HEATMAP_CACHE["data"] and now < _HEATMAP_CACHE["expires"]:
-        return {"data": _HEATMAP_CACHE["data"], "cached": True}
+        return _heatmap_response(_HEATMAP_CACHE["data"], cached=True)
     if _HEATMAP_CACHE["data"]:
         # stale 데이터 있음 — 즉시 반환하고 백그라운드에서 갱신
         if not _HEATMAP_LOCK.locked():
             asyncio.create_task(_bg_refresh(
                 _HEATMAP_CACHE, _HEATMAP_LOCK, _build_heatmap_data, _PRICE_TTL, "heatmap"
             ))
-        return {"data": _HEATMAP_CACHE["data"], "cached": True, "stale": True}
+        return _heatmap_response(_HEATMAP_CACHE["data"], cached=True, stale=True)
     # 최초 기동: 데이터 없음 — 한 번만 대기
     async with _HEATMAP_LOCK:
         if _HEATMAP_CACHE["data"] and _time_module.time() < _HEATMAP_CACHE["expires"]:
-            return {"data": _HEATMAP_CACHE["data"], "cached": True}
+            return _heatmap_response(_HEATMAP_CACHE["data"], cached=True)
         try:
             data = await _build_heatmap_data()
             _HEATMAP_CACHE["data"] = data
-            _HEATMAP_CACHE["expires"] = _time_module.time() + _PRICE_TTL
-            return {"data": data, "cached": False}
+            ttl = _AFTERMARKET_TTL if (data and data[0].get("is_aftermarket")) else _PRICE_TTL
+            _HEATMAP_CACHE["expires"] = _time_module.time() + ttl
+            return _heatmap_response(data, cached=False)
         except Exception as e:
             logger.error("[heatmap] 빌드 실패: %s", e)
             raise HTTPException(status_code=500, detail="heatmap unavailable")
@@ -938,12 +1053,39 @@ def _fetch_top_kiwoom(n: int) -> dict:
 
 
 # ── GET /api/top ──────────────────────────────────────────────
+
+async def _enrich_top_with_fundamentals(items: list[dict]) -> None:
+    """items 리스트에 EPS/PER/Forward PER를 in-place로 추가."""
+    try:
+        fund_results = await asyncio.wait_for(
+            asyncio.gather(
+                *[asyncio.to_thread(_fetch_fundamental, it["ticker"]) for it in items],
+                return_exceptions=True,
+            ),
+            timeout=8.0,
+        )
+        for it, fund in zip(items, fund_results):
+            if isinstance(fund, dict):
+                it["eps"]         = fund.get("eps")
+                it["per"]         = fund.get("per")
+                it["forward_per"] = fund.get("forward_per")
+            else:
+                it["eps"] = it["per"] = it["forward_per"] = None
+    except Exception as e:
+        logger.warning("[top] 펀더멘털 enrichment 실패: %s", e)
+        for it in items:
+            it.setdefault("eps", None)
+            it.setdefault("per", None)
+            it.setdefault("forward_per", None)
+
+
 @app.get("/api/top")
 async def get_top(n: int = 50, refresh: bool = False):
-    """당일 거래대금 상위 N 종목 (Kiwoom ka10032 거래대금상위요청, 5분 캐시).
+    """거래대금 상위 N 종목.
 
-    캐시는 단일 슬롯. 뮤텍스(_TOP_LOCK)로 동시 API 호출 방지.
-    EPS는 Naver Finance에서 병렬 조회 후 각 항목에 추가.
+    장 중: Kiwoom ka10032 실시간 데이터 (5분 캐시).
+    장 마감: aftermarket_snap NXT 종가 데이터.
+    EPS/PER/Forward PER는 Naver Finance에서 병렬 조회.
     """
     n = min(max(n, 1), 100)
     now = _time_module.time()
@@ -952,26 +1094,18 @@ async def get_top(n: int = 50, refresh: bool = False):
     if not refresh and _TOP_CACHE["data"]:
         # stale 데이터 있음 — 즉시 반환하고 백그라운드에서 갱신
         if not _TOP_LOCK.locked():
-            async def _fetch_top_with_eps() -> dict:
-                data = await _ext_thread(_fetch_top_kiwoom, 20, timeout=15.0)
-                items = data.get("items", [])
-                try:
-                    fund_results = await asyncio.wait_for(
-                        asyncio.gather(
-                            *[asyncio.to_thread(_fetch_fundamental, it["ticker"]) for it in items],
-                            return_exceptions=True,
-                        ),
-                        timeout=8.0,
-                    )
-                    for it, fund in zip(items, fund_results):
-                        it["eps"] = fund.get("eps") if isinstance(fund, dict) else None
-                except Exception:
-                    for it in items:
-                        it.setdefault("eps", None)
-                data["items"] = items
+            async def _fetch_top_with_fundamentals() -> dict:
+                # 장 마감 시 aftermarket_snap 우선
+                if not _is_market_open():
+                    snap = await _fetch_aftermarket_snap_top_async(50)
+                    if snap:
+                        await _enrich_top_with_fundamentals(snap["items"])
+                        return snap
+                data = await _ext_thread(_fetch_top_kiwoom, 50, timeout=15.0)
+                await _enrich_top_with_fundamentals(data.get("items", []))
                 return data
             asyncio.create_task(_bg_refresh(
-                _TOP_CACHE, _TOP_LOCK, _fetch_top_with_eps, _TOP_TTL, "top"
+                _TOP_CACHE, _TOP_LOCK, _fetch_top_with_fundamentals, _TOP_TTL, "top"
             ))
         return {**_TOP_CACHE["data"], "stale": True}
     # 최초 기동 또는 강제 refresh: 한 번만 대기
@@ -980,30 +1114,23 @@ async def get_top(n: int = 50, refresh: bool = False):
         if not refresh and _TOP_CACHE["data"] and now < _TOP_CACHE["expires"]:
             return _TOP_CACHE["data"]
         try:
+            # 장 마감 시 aftermarket_snap 우선
+            if not _is_market_open():
+                snap = await _fetch_aftermarket_snap_top_async(n)
+                if snap:
+                    await _enrich_top_with_fundamentals(snap["items"])
+                    _TOP_CACHE["data"] = snap
+                    _TOP_CACHE["expires"] = _time_module.time() + _AFTERMARKET_TTL
+                    return snap
             data = await _ext_thread(_fetch_top_kiwoom, n, timeout=15.0)
             items = data.get("items", [])
-            try:
-                fund_results = await asyncio.wait_for(
-                    asyncio.gather(
-                        *[asyncio.to_thread(_fetch_fundamental, it["ticker"]) for it in items],
-                        return_exceptions=True,
-                    ),
-                    timeout=8.0,
-                )
-                for it, fund in zip(items, fund_results):
-                    eps = None
-                    if isinstance(fund, dict):
-                        eps = fund.get("eps")
-                    it["eps"] = eps
-            except Exception:
-                for it in items:
-                    it.setdefault("eps", None)
+            await _enrich_top_with_fundamentals(items)
             data["items"] = items
             _TOP_CACHE["data"] = data
             _TOP_CACHE["expires"] = _time_module.time() + _TOP_TTL
             return data
         except Exception as e:
-            logger.warning("[top] Kiwoom API 오류: %s", e)
+            logger.warning("[top] 조회 오류: %s", e)
             _safe_err = "API 오류 — 서버 로그 확인"
             if _TOP_CACHE["data"]:
                 return {**_TOP_CACHE["data"], "stale": True, "error": _safe_err}
@@ -1518,7 +1645,7 @@ async def get_ticker_history(
 # ── GET /api/macro ────────────────────────────────────────────
 
 def _fetch_prev_top20_sync() -> dict[str, str] | None:
-    """aftermarket_snap 최근 영업일 거래대금 TOP 20 → {ticker: name}. 실패 시 None."""
+    """aftermarket_snap 최근 영업일 합산(KRX+NXT) 거래대금 TOP 20 → {ticker: name}. 실패 시 None."""
     try:
         import psycopg2
         from core.db import get_dsn as _get_dsn
@@ -1531,9 +1658,8 @@ def _fetch_prev_top20_sync() -> dict[str, str] | None:
                     FROM   aftermarket_snap a
                     LEFT JOIN ticker_names tn ON tn.ticker = a.ticker
                     WHERE  a.trade_date = (SELECT MAX(trade_date) FROM aftermarket_snap)
-                      AND  a.after_value IS NOT NULL
-                      AND  a.after_value > 0
-                    ORDER  BY a.after_value DESC
+                      AND  (COALESCE(a.reg_value, 0) + COALESCE(a.after_value, 0)) > 0
+                    ORDER  BY (COALESCE(a.reg_value, 0) + COALESCE(a.after_value, 0)) DESC
                     LIMIT  20
                 """)
                 rows = cur.fetchall()
@@ -1673,10 +1799,7 @@ def _market_sentiment(
 async def _fetch_market_index_data() -> dict:
     """KOSPI/KOSDAQ 지수 데이터를 실제로 조회하는 순수 fetch 함수."""
     now_kst = datetime.now(_KST)
-    is_open = (
-        now_kst.weekday() < 5
-        and time(9, 0) <= now_kst.time() < time(15, 31)
-    )
+    is_open = _is_market_open()
     bas_dd = now_kst.strftime("%Y%m%d")
 
     def _fetch_krx():
