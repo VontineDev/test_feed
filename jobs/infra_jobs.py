@@ -81,6 +81,16 @@ async def annual_dart_segments_job(db_pool) -> None:
         logger.error("[dart] 연간 세그먼트 파싱 실패: %s", e)
 
 
+async def annual_dart_extractor_job(db_pool) -> None:
+    """매년 5월 1일 03:00 KST — Top20 사업보고서 로컬 XML Ollama 추출 → dart_extractions."""
+    from data.dart_extractor import extract_all
+    try:
+        n = await extract_all(db_pool)
+        logger.info("[dart-extractor] 완료: %d건", n)
+    except Exception as e:
+        logger.error("[dart-extractor] 실패: %s", e)
+
+
 async def monthly_dart_xbrl_job(db_pool) -> None:
     """매월 1일 02:00 KST — Top 20 기업 전년도 XBRL 재무수치 갱신."""
     from data.dart_sync import get_top20_corp_codes, sync_xbrl
@@ -93,6 +103,35 @@ async def monthly_dart_xbrl_job(db_pool) -> None:
         logger.info("[dart] 월별 XBRL 갱신 완료: %d건", n)
     except Exception as e:
         logger.error("[dart] 월별 XBRL 갱신 실패: %s", e)
+
+
+async def daily_aftermarket_sync_job() -> None:
+    """평일 16:05 KST — NXT 시간외 단일가 + ka10032 합산 거래대금 수집.
+
+    kiwoom_aftermarket_sync.py --incremental 을 서브프로세스로 실행.
+    trade_date = 전일 영업일로 저장 (--incremental 기본 동작).
+    """
+    logger.info("[aftermarket-sync] kiwoom_aftermarket_sync --incremental 시작")
+    try:
+        import os as _os
+        cwd = _os.path.join(_os.path.dirname(__file__), "..", "data")
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "kiwoom_aftermarket_sync.py", "--incremental",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=cwd,
+        )
+        out, _ = await proc.communicate()
+        if proc.returncode == 0:
+            logger.info("[aftermarket-sync] 완료 (exit=0)")
+        else:
+            logger.warning("[aftermarket-sync] 비정상 종료 (exit=%d)", proc.returncode)
+        if out:
+            for line in out.decode("utf-8", errors="replace").splitlines():
+                if line.strip():
+                    logger.debug("[aftermarket-sync] %s", line)
+    except Exception as e:
+        logger.warning("[aftermarket-sync] 실행 실패: %s", e)
 
 
 async def daily_flow_sync_job() -> None:

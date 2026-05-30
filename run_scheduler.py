@@ -521,6 +521,11 @@ async def _weekly_screener_job():
     _screener_tickers = await weekly_screener_job(_db_pool)
 
 
+async def _daily_aftermarket_sync_job():
+    from jobs.infra_jobs import daily_aftermarket_sync_job
+    await daily_aftermarket_sync_job()
+
+
 async def _daily_flow_sync_job():
     from jobs.infra_jobs import daily_flow_sync_job
     await daily_flow_sync_job()
@@ -540,11 +545,11 @@ async def _monthly_dart_xbrl_job():
     await monthly_dart_xbrl_job(_db_pool)
 
 
-async def _annual_dart_segments_job():
+async def _annual_dart_extractor_job():
     if not _db_pool:
         return
-    from jobs.infra_jobs import annual_dart_segments_job
-    await annual_dart_segments_job(_db_pool)
+    from jobs.infra_jobs import annual_dart_extractor_job
+    await annual_dart_extractor_job(_db_pool)
 
 
 # ── 모의투자 잡 래퍼 ─────────────────────────────────────────
@@ -768,6 +773,18 @@ async def main(interval: int, enable_summary: bool) -> None:
         misfire_grace_time=3600,
         replace_existing=True,
     )
+    # ── NXT 시간외 수집: 평일 16:05 KST (07:05 UTC) ──────────────
+    # kiwoom_aftermarket_sync.py --incremental
+    # NXT 시간외 단일가(15:40~16:00) 종료 후 5분 여유 확보.
+    # reg_value(ka10032 KRX+NXT 합산)도 동시에 갱신.
+    scheduler.add_job(
+        _daily_aftermarket_sync_job,
+        CronTrigger(day_of_week="mon-fri", hour=7, minute=5, timezone="UTC"),  # = 16:05 KST
+        id="daily_aftermarket_sync",
+        max_instances=1,
+        misfire_grace_time=1800,
+        replace_existing=True,
+    )
     # ── 수급 증분 sync: 평일 18:00 KST (09:00 UTC) ───────────────
     # krx_flow_sync.py --incremental (전일 전 종목 수급 → daily_flow)
     # 장 마감(15:30) + KRX 데이터 게시 여유(~2h) 확보.
@@ -831,12 +848,12 @@ async def main(interval: int, enable_summary: bool) -> None:
         misfire_grace_time=86400,
         replace_existing=True,
     )
-    # ── OpenDART 세그먼트 Ollama 파싱: 매년 5월 1일 18:00 UTC (03:00 KST) ──
-    # 사업보고서 공시 시즌(3-4월) 완료 후 → dart_segments
+    # ── OpenDART XML Ollama 추출: 매년 5월 1일 18:00 UTC (03:00 KST) ──
+    # 사업보고서 공시 시즌(3-4월) 완료 후 → dart_extractions
     scheduler.add_job(
-        _annual_dart_segments_job,
+        _annual_dart_extractor_job,
         CronTrigger(month=5, day=1, hour=18, minute=0, timezone="UTC"),  # = 03:00 KST
-        id="annual_dart_segments",
+        id="annual_dart_extractions",
         max_instances=1,
         misfire_grace_time=86400,
         replace_existing=True,

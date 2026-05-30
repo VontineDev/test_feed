@@ -69,8 +69,62 @@ async def _ext_thread(fn, *args, timeout: float):
         timeout=timeout,
     )
 
+# ── 한국 공휴일 캐시 ─────────────────────────────────────────
+# {date: True} 형태. 연초 1회 KRX OpenAPI에서 갱신, 실패 시 법정공휴일 fallback.
+_KR_HOLIDAYS: set[date] = set()
+_HOLIDAYS_YEAR: int = 0   # 마지막으로 로드한 연도
+
+def _load_kr_holidays(year: int) -> set[date]:
+    """KRX OpenAPI /cal/holiday_info 로 해당 연도 휴장일 로드.
+    API 실패 시 대한민국 법정공휴일(공직선거·임시공휴일 제외) fallback.
+    """
+    holidays: set[date] = set()
+    try:
+        import requests as _req, os as _os
+        key = _os.environ.get("KRX_OPENAPI_KEY", "")
+        if key:
+            resp = _req.get(
+                "https://data-dbg.krx.co.kr/svc/apis/cal/holiday_info",
+                headers={"AUTH_KEY": key},
+                params={"basDd": f"{year}0101"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            for row in resp.json().get("OutBlock_1", []):
+                ds = str(row.get("BASS_DT", ""))
+                if len(ds) == 8:
+                    holidays.add(date(int(ds[:4]), int(ds[4:6]), int(ds[6:])))
+            if holidays:
+                logger.info("[holidays] KRX API %d년 %d일 로드", year, len(holidays))
+                return holidays
+    except Exception as e:
+        logger.warning("[holidays] KRX API 실패, fallback 사용: %s", e)
+
+    # ── fallback: 반복 법정공휴일 (대체공휴일 미포함) ─────────────
+    fixed = [
+        (1,  1), (3,  1), (5,  5), (6,  6),
+        (8, 15), (10, 3), (10, 9), (12, 25),
+    ]
+    for m, d_ in fixed:
+        try:
+            holidays.add(date(year, m, d_))
+        except ValueError:
+            pass
+    # 설·추석은 음력이라 연도별로 계산 불가 → 별도 등록 없음 (KRX API 의존)
+    logger.info("[holidays] fallback %d년 %d일 (음력 명절 미포함)", year, len(holidays))
+    return holidays
+
+def _is_holiday(d: date) -> bool:
+    """한국 공휴일이면 True. 연도가 바뀌면 자동 재로드."""
+    global _KR_HOLIDAYS, _HOLIDAYS_YEAR
+    if d.year != _HOLIDAYS_YEAR:
+        _KR_HOLIDAYS = _load_kr_holidays(d.year)
+        _HOLIDAYS_YEAR = d.year
+    return d in _KR_HOLIDAYS
+
 # ── 캐시 (히트맵/Top 5분, 포지션 현재가 5분) ─────────────────
-_HEATMAP_CACHE: dict = {"data": None, "expires": 0.0}
+# market_open: 캐시 생성 시점의 _is_market_open() 값 — 케이스 전환 감지용
+_HEATMAP_CACHE: dict = {"data": None, "expires": 0.0, "market_open": None}
 _HEATMAP_LOCK = asyncio.Lock()
 _PRICE_TTL = 300     # 5분
 
@@ -85,7 +139,7 @@ _KIWOOM_TOKEN_TTL = 82800  # 23시간
 # ── Top 캐시 (5분) ────────────────────────────────────────────
 # 캐시는 n=20 기준 단일 슬롯. n이 다른 요청은 캐시된 데이터를 그대로 반환.
 # 프론트엔드가 n=20 고정이므로 충돌 없음. n 변경 시 단일 슬롯 가정 재검토 필요.
-_TOP_CACHE: dict = {"data": None, "expires": 0.0}
+_TOP_CACHE: dict = {"data": None, "expires": 0.0, "market_open": None}
 _TOP_TTL = 300            # 장 중 5분
 _AFTERMARKET_TTL = 1800   # 장 마감 후 30분 (aftermarket_snap은 하루 종일 불변)
 _TOP_LOCK = asyncio.Lock()
@@ -109,15 +163,29 @@ _KST = ZoneInfo("Asia/Seoul")
 _SSE_CONNECTIONS: dict[str, int] = {"signals": 0, "scheduler": 0}
 
 
+def _cache_is_valid(cache: dict) -> bool:
+    """캐시 유효 여부: TTL + market_open 상태 일치 확인.
+    market_open 상태가 바뀌면 TTL이 남아 있어도 무효 처리.
+    """
+    if not cache["data"]:
+        return False
+    if _time_module.time() >= cache["expires"]:
+        return False
+    if cache.get("market_open") is not None and cache["market_open"] != _is_market_open():
+        return False
+    return True
+
+
 async def _bg_refresh(cache: dict, lock: asyncio.Lock, fetch_fn, ttl: float, label: str) -> None:
     """stale-while-revalidate: 백그라운드에서 캐시를 갱신한다. 실패 시 stale 유지."""
     async with lock:
-        if cache["data"] and _time_module.time() < cache["expires"]:
+        if _cache_is_valid(cache):
             return  # 락 대기 중 이미 다른 태스크가 갱신 완료
         try:
             data = await fetch_fn()
             cache["data"] = data
             cache["expires"] = _time_module.time() + ttl
+            cache["market_open"] = _is_market_open()
             logger.info("[cache] %s 갱신 완료", label)
         except Exception as e:
             logger.warning("[cache] %s 백그라운드 갱신 실패 — stale 유지: %s", label, e)
@@ -171,7 +239,8 @@ async def _warmup_caches() -> None:
     logger.info("[warmup] 캐시 사전 로딩 시작")
     # heatmap 먼저: macro 분석이 오늘 TOP 20 종목을 사용하도록 순서 보장
     try:
-        await _bg_refresh(_HEATMAP_CACHE, _HEATMAP_LOCK, _build_heatmap_data, _PRICE_TTL, "heatmap")
+        ttl_heat = _PRICE_TTL if _is_market_open() else _AFTERMARKET_TTL
+        await _bg_refresh(_HEATMAP_CACHE, _HEATMAP_LOCK, _build_heatmap_data, ttl_heat, "heatmap")
     except Exception as e:
         logger.warning("[warmup] heatmap 실패 (무시): %s", e)
     # heatmap 완료 후 macro + market_index 병렬 실행
@@ -362,17 +431,23 @@ async def _fetch_current_prices(
 
 # ── 시장 개장 여부 ─────────────────────────────────────────────
 def _is_market_open() -> bool:
-    """평일 09:00~15:30 KST 이면 True."""
+    """평일 비공휴일 09:00~15:30 KST 이면 True."""
     now_kst = datetime.now(_KST)
-    return now_kst.weekday() < 5 and time(9, 0) <= now_kst.time() < time(15, 31)
+    if now_kst.weekday() >= 5:
+        return False
+    if _is_holiday(now_kst.date()):
+        return False
+    return time(9, 0) <= now_kst.time() < time(15, 31)
 
 
 # ── aftermarket_snap에서 합산(KRX+NXT) 거래대금 상위 N 조회 ──────
 async def _fetch_aftermarket_snap_top_async(n: int) -> dict | None:
-    """aftermarket_snap 최근 영업일 합산(KRX+NXT) 거래대금 상위 N 종목 반환.
+    """aftermarket_snap 최근 영업일 거래대금 상위 N 종목 반환.
 
-    reg_value(KRX 정규장 close×volume) + after_value(NXT 시간외) 합산 기준 정렬.
-    reg_value 미수집 시 after_value만 사용.
+    정렬/표시 기준:
+      reg_value 있음 → reg_value (ka10032 KRX+NXT 당일 최종, NXT 시간외 포함 여부 미확정이므로
+                        after_value를 더하지 않아 이중계산 위험 제거)
+      reg_value NULL → after_value (NXT 시간외 전용 폴백)
     데이터 없으면 None 반환.
     """
     try:
@@ -386,7 +461,7 @@ async def _fetch_aftermarket_snap_top_async(n: int) -> dict | None:
                        a.after_close,
                        a.after_value,
                        a.reg_value,
-                       (COALESCE(a.reg_value, 0) + COALESCE(a.after_value, 0)) AS total_value,
+                       COALESCE(a.reg_value, a.after_value, 0) AS total_value,
                        a.after_chg_pct,
                        a.trade_date,
                        CASE WHEN a.ticker LIKE '%.KS' THEN 'KOSPI'
@@ -395,7 +470,7 @@ async def _fetch_aftermarket_snap_top_async(n: int) -> dict | None:
                 FROM   aftermarket_snap a
                 LEFT JOIN ticker_names tn ON tn.ticker = a.ticker
                 WHERE  a.trade_date = (SELECT MAX(trade_date) FROM aftermarket_snap)
-                  AND  (COALESCE(a.reg_value, 0) + COALESCE(a.after_value, 0)) > 0
+                  AND  COALESCE(a.reg_value, a.after_value, 0) > 0
                 ORDER  BY total_value DESC
                 LIMIT  $1
                 """,
@@ -532,11 +607,10 @@ def _heatmap_response(data: list[dict], cached: bool, stale: bool = False) -> di
 
 @app.get("/api/heatmap")
 async def get_heatmap():
-    now = _time_module.time()
-    if _HEATMAP_CACHE["data"] and now < _HEATMAP_CACHE["expires"]:
+    if _cache_is_valid(_HEATMAP_CACHE):
         return _heatmap_response(_HEATMAP_CACHE["data"], cached=True)
     if _HEATMAP_CACHE["data"]:
-        # stale 데이터 있음 — 즉시 반환하고 백그라운드에서 갱신
+        # stale 또는 market_open 상태 전환 — 즉시 반환하고 백그라운드에서 갱신
         if not _HEATMAP_LOCK.locked():
             asyncio.create_task(_bg_refresh(
                 _HEATMAP_CACHE, _HEATMAP_LOCK, _build_heatmap_data, _PRICE_TTL, "heatmap"
@@ -544,13 +618,14 @@ async def get_heatmap():
         return _heatmap_response(_HEATMAP_CACHE["data"], cached=True, stale=True)
     # 최초 기동: 데이터 없음 — 한 번만 대기
     async with _HEATMAP_LOCK:
-        if _HEATMAP_CACHE["data"] and _time_module.time() < _HEATMAP_CACHE["expires"]:
+        if _cache_is_valid(_HEATMAP_CACHE):
             return _heatmap_response(_HEATMAP_CACHE["data"], cached=True)
         try:
             data = await _build_heatmap_data()
             _HEATMAP_CACHE["data"] = data
             ttl = _AFTERMARKET_TTL if (data and data[0].get("is_aftermarket")) else _PRICE_TTL
             _HEATMAP_CACHE["expires"] = _time_module.time() + ttl
+            _HEATMAP_CACHE["market_open"] = _is_market_open()
             return _heatmap_response(data, cached=False)
         except Exception as e:
             logger.error("[heatmap] 빌드 실패: %s", e)
@@ -1088,14 +1163,12 @@ async def get_top(n: int = 50, refresh: bool = False):
     EPS/PER/Forward PER는 Naver Finance에서 병렬 조회.
     """
     n = min(max(n, 1), 100)
-    now = _time_module.time()
-    if not refresh and _TOP_CACHE["data"] and now < _TOP_CACHE["expires"]:
+    if not refresh and _cache_is_valid(_TOP_CACHE):
         return _TOP_CACHE["data"]
     if not refresh and _TOP_CACHE["data"]:
-        # stale 데이터 있음 — 즉시 반환하고 백그라운드에서 갱신
+        # stale 또는 market_open 상태 전환 — 즉시 반환하고 백그라운드에서 갱신
         if not _TOP_LOCK.locked():
             async def _fetch_top_with_fundamentals() -> dict:
-                # 장 마감 시 aftermarket_snap 우선
                 if not _is_market_open():
                     snap = await _fetch_aftermarket_snap_top_async(50)
                     if snap:
@@ -1110,17 +1183,16 @@ async def get_top(n: int = 50, refresh: bool = False):
         return {**_TOP_CACHE["data"], "stale": True}
     # 최초 기동 또는 강제 refresh: 한 번만 대기
     async with _TOP_LOCK:
-        now = _time_module.time()
-        if not refresh and _TOP_CACHE["data"] and now < _TOP_CACHE["expires"]:
+        if not refresh and _cache_is_valid(_TOP_CACHE):
             return _TOP_CACHE["data"]
         try:
-            # 장 마감 시 aftermarket_snap 우선
             if not _is_market_open():
                 snap = await _fetch_aftermarket_snap_top_async(n)
                 if snap:
                     await _enrich_top_with_fundamentals(snap["items"])
                     _TOP_CACHE["data"] = snap
                     _TOP_CACHE["expires"] = _time_module.time() + _AFTERMARKET_TTL
+                    _TOP_CACHE["market_open"] = False
                     return snap
             data = await _ext_thread(_fetch_top_kiwoom, n, timeout=15.0)
             items = data.get("items", [])
@@ -1128,6 +1200,7 @@ async def get_top(n: int = 50, refresh: bool = False):
             data["items"] = items
             _TOP_CACHE["data"] = data
             _TOP_CACHE["expires"] = _time_module.time() + _TOP_TTL
+            _TOP_CACHE["market_open"] = True
             return data
         except Exception as e:
             logger.warning("[top] 조회 오류: %s", e)
@@ -1658,8 +1731,8 @@ def _fetch_prev_top20_sync() -> dict[str, str] | None:
                     FROM   aftermarket_snap a
                     LEFT JOIN ticker_names tn ON tn.ticker = a.ticker
                     WHERE  a.trade_date = (SELECT MAX(trade_date) FROM aftermarket_snap)
-                      AND  (COALESCE(a.reg_value, 0) + COALESCE(a.after_value, 0)) > 0
-                    ORDER  BY (COALESCE(a.reg_value, 0) + COALESCE(a.after_value, 0)) DESC
+                      AND  COALESCE(a.reg_value, a.after_value, 0) > 0
+                    ORDER  BY COALESCE(a.reg_value, a.after_value, 0) DESC
                     LIMIT  20
                 """)
                 rows = cur.fetchall()
