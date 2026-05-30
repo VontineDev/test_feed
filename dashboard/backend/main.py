@@ -69,58 +69,93 @@ async def _ext_thread(fn, *args, timeout: float):
         timeout=timeout,
     )
 
-# ── 한국 공휴일 캐시 ─────────────────────────────────────────
-# {date: True} 형태. 연초 1회 KRX OpenAPI에서 갱신, 실패 시 법정공휴일 fallback.
-_KR_HOLIDAYS: set[date] = set()
-_HOLIDAYS_YEAR: int = 0   # 마지막으로 로드한 연도
+# ── 한국 휴장일 캐시 ─────────────────────────────────────────
+# 네이버 Finance siseJson(005930)으로 실제 영업일 목록을 조회해 당일 휴장 여부 확인.
+# 미래 날짜는 API 데이터가 없으므로 고정 법정공휴일 fallback 병용.
+#
+# 캐시 구조:
+#   _HOLIDAY_CACHE: {date → bool}  — True=휴장일
+#   _HOLIDAY_CACHE_DATE: 마지막 갱신 날짜 (당일 1회만 조회)
+_HOLIDAY_CACHE: dict[date, bool] = {}
+_HOLIDAY_CACHE_DATE: date | None = None
 
-def _load_kr_holidays(year: int) -> set[date]:
-    """KRX OpenAPI /cal/holiday_info 로 해당 연도 휴장일 로드.
-    API 실패 시 대한민국 법정공휴일(공직선거·임시공휴일 제외) fallback.
-    """
-    holidays: set[date] = set()
+# 고정 법정공휴일 (연도 무관, 대체공휴일·선거일·임시공휴일 제외)
+_FIXED_HOLIDAYS: set[tuple[int, int]] = {
+    (1, 1), (3, 1), (5, 1), (5, 5), (6, 6),
+    (8, 15), (10, 3), (10, 9), (12, 25),
+}
+
+
+def _fetch_trading_days_naver(start: date, end: date) -> set[date] | None:
+    """네이버 Finance siseJson으로 기간 내 실제 영업일 반환. 실패 시 None."""
     try:
-        import requests as _req, os as _os
-        key = _os.environ.get("KRX_OPENAPI_KEY", "")
-        if key:
-            resp = _req.get(
-                "https://data-dbg.krx.co.kr/svc/apis/cal/holiday_info",
-                headers={"AUTH_KEY": key},
-                params={"basDd": f"{year}0101"},
-                timeout=10,
-            )
-            resp.raise_for_status()
-            for row in resp.json().get("OutBlock_1", []):
-                ds = str(row.get("BASS_DT", ""))
-                if len(ds) == 8:
-                    holidays.add(date(int(ds[:4]), int(ds[4:6]), int(ds[6:])))
-            if holidays:
-                logger.info("[holidays] KRX API %d년 %d일 로드", year, len(holidays))
-                return holidays
+        import requests as _req
+        resp = _req.get(
+            "https://api.finance.naver.com/siseJson.naver",
+            params={
+                "symbol":      "005930",
+                "requestType": 1,
+                "startTime":   start.strftime("%Y%m%d"),
+                "endTime":     end.strftime("%Y%m%d"),
+                "timeframe":   "day",
+            },
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Referer":    "https://finance.naver.com/",
+            },
+            timeout=8,
+        )
+        resp.raise_for_status()
+        trading: set[date] = set()
+        for line in resp.text.splitlines():
+            line = line.strip()
+            if line.startswith('[\"20') and len(line) > 11:
+                ds = line[2:10]
+                try:
+                    trading.add(date(int(ds[:4]), int(ds[4:6]), int(ds[6:])))
+                except ValueError:
+                    pass
+        return trading if trading else None
     except Exception as e:
-        logger.warning("[holidays] KRX API 실패, fallback 사용: %s", e)
+        logger.debug("[holidays] 네이버 API 실패: %s", e)
+        return None
 
-    # ── fallback: 반복 법정공휴일 (대체공휴일 미포함) ─────────────
-    fixed = [
-        (1,  1), (3,  1), (5,  5), (6,  6),
-        (8, 15), (10, 3), (10, 9), (12, 25),
-    ]
-    for m, d_ in fixed:
-        try:
-            holidays.add(date(year, m, d_))
-        except ValueError:
-            pass
-    # 설·추석은 음력이라 연도별로 계산 불가 → 별도 등록 없음 (KRX API 의존)
-    logger.info("[holidays] fallback %d년 %d일 (음력 명절 미포함)", year, len(holidays))
-    return holidays
 
 def _is_holiday(d: date) -> bool:
-    """한국 공휴일이면 True. 연도가 바뀌면 자동 재로드."""
-    global _KR_HOLIDAYS, _HOLIDAYS_YEAR
-    if d.year != _HOLIDAYS_YEAR:
-        _KR_HOLIDAYS = _load_kr_holidays(d.year)
-        _HOLIDAYS_YEAR = d.year
-    return d in _KR_HOLIDAYS
+    """KST 날짜 d가 한국 주식시장 휴장일이면 True.
+
+    판단 순서:
+    1. 캐시 히트 → 즉시 반환
+    2. 네이버 siseJson으로 ±15일 영업일 조회 → 당일 포함 여부로 판단
+       (과거 확정 데이터이므로 정확)
+    3. API 실패 → 고정 법정공휴일 fallback
+    """
+    global _HOLIDAY_CACHE, _HOLIDAY_CACHE_DATE
+
+    if d in _HOLIDAY_CACHE:
+        return _HOLIDAY_CACHE[d]
+
+    today = datetime.now(_KST).date()
+
+    # 오늘 처음 조회 시 ±15일 윈도우 일괄 갱신 (API 1회 호출)
+    if _HOLIDAY_CACHE_DATE != today:
+        win_start = today - timedelta(days=15)
+        win_end   = today + timedelta(days=3)   # 근미래 소폭 포함
+        trading = _fetch_trading_days_naver(win_start, win_end)
+        if trading is not None:
+            for offset in range(-15, 4):
+                cd = today + timedelta(days=offset)
+                if cd.weekday() < 5:   # 평일만 판단
+                    _HOLIDAY_CACHE[cd] = cd not in trading
+            _HOLIDAY_CACHE_DATE = today
+            logger.info("[holidays] 영업일 캐시 갱신 (±15일, %d일 반영)", len(trading))
+            if d in _HOLIDAY_CACHE:
+                return _HOLIDAY_CACHE[d]
+
+    # API 실패 또는 범위 밖 → 고정 법정공휴일 fallback
+    result = (d.month, d.day) in _FIXED_HOLIDAYS
+    _HOLIDAY_CACHE[d] = result
+    return result
 
 # ── 캐시 (히트맵/Top 5분, 포지션 현재가 5분) ─────────────────
 # market_open: 캐시 생성 시점의 _is_market_open() 값 — 케이스 전환 감지용
