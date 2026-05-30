@@ -138,12 +138,12 @@ _FUND_CACHE: dict = {}  # krx_code → {per, pbr, eps, dividend_yield, foreign_r
 
 
 def _fetch_fundamental(krx_code: str) -> dict:
-    """Naver Finance Integration API에서 PER/PBR/EPS/배당수익률/외국인비율 조회.
+    """Naver Finance Integration API에서 PER/Forward PER/PBR/EPS/배당수익률/외국인비율 조회.
 
     URL: https://m.stock.naver.com/api/stock/{code}/integration
     인증 불필요. 결과는 날짜 키로 당일 캐시.
     """
-    empty: dict = {"per": None, "pbr": None, "eps": None, "dividend_yield": None, "foreign_rate": None}
+    empty: dict = {"per": None, "forward_per": None, "pbr": None, "eps": None, "dividend_yield": None, "foreign_rate": None}
     # "005930_AL" → "005930" (Kiwoom 거래대금 API가 시장 구분자를 붙임)
     krx_code = str(krx_code).split("_")[0].split(".")[0]
     if not HTTPX_OK or not krx_code.isdigit():
@@ -162,7 +162,6 @@ def _fetch_fundamental(krx_code: str) -> dict:
         data = r.json()
         result = dict(empty)
         # Naver integration API: code 필드는 소문자 camelCase
-        # 예) "eps", "per", "pbr", "dividendYieldRatio", "foreignRate"
         for item in (data.get("totalInfos") or data.get("totalInfoList") or []):
             code = str(item.get("code") or "")
             val  = _parse_naver_value(str(item.get("value") or ""))
@@ -170,6 +169,8 @@ def _fetch_fundamental(krx_code: str) -> dict:
                 result["eps"] = val
             elif code == "per":
                 result["per"] = val
+            elif code in ("forwardPer", "estimatedPer", "expectPer"):
+                result["forward_per"] = val
             elif code == "pbr":
                 result["pbr"] = val
             elif code == "dividendYieldRatio":

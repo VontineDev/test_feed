@@ -30,11 +30,11 @@ PostgreSQL (Supabase)
 
 | 탭 | 컴포넌트 | 기능 |
 |----|----------|------|
-| 히트맵 | `Heatmap.tsx` | 당일 거래대금 상위 50종목(Kiwoom ka10032). Stage 분류 결과 오버레이. 장 마감 시 `aftermarket_snap` 합산(KRX+NXT) 거래대금 기준으로 전환, 헤더에 "전일 합산" 배지 표시. 5분 갱신(장 마감 30분). 상단에 `MarketSummaryBanner` — KOSPI/KOSDAQ 지수 + 시장 심리 한마디 표시. Kiwoom 실패 시 Stage 분류 데이터로 폴백. |
+| 히트맵 | `Heatmap.tsx` | 당일 거래대금 상위 50종목(Kiwoom ka10032). Stage 분류 결과 오버레이. 장 마감 시 `daily_market_snap`(ka10032 top100, KRX+NXT 합산) 기준으로 전환 — `aftermarket_snap` 미매칭 시 폴백. 헤더에 "MM/DD 합산" 배지 표시. 5분 갱신(장 마감 30분). 상단에 `MarketSummaryBanner` — KOSPI/KOSDAQ 지수 + 시장 심리 한마디 표시. Kiwoom 실패 시 Stage 분류 데이터로 폴백. |
 | 종목 분석 | `Report.tsx` | 추세 단계(Stage 분류) + 강세 후보 발굴(차트 스크리닝) 결과. 날짜 범위 선택(오늘/-3일/-1주/-2주/-1달)으로 이력 조회 가능. 종목 클릭 시 우측 패널 분할로 Stage·스크리너 이력 표시; 같은 종목 재클릭 또는 날짜 변경 시 패널 닫힘. 모바일에서는 세로 스택 전환. 섹션 헤더 ⓘ 호버 시 기능 설명 팝업. |
-| Top | `Top.tsx` | 당일 거래대금 상위 50종목(Kiwoom ka10032). EPS·PER·Forward PER(Naver Finance) 표시. 장 마감 시 `aftermarket_snap` 합산(KRX+NXT) 거래대금 기준으로 전환, "전일 합산" 배지 표시. 5분 캐시(장 마감 30분). |
+| Top | `Top.tsx` | 당일 거래대금 상위 50종목(Kiwoom ka10032). EPS·PER·Forward PER(Naver Finance) 표시. 장 마감 시 `daily_market_snap`(ka10032 top100, KRX+NXT 합산) 기준으로 전환 — `aftermarket_snap` 미수집 시 폴백. "MM/DD 합산" 배지 표시. 5분 캐시(장 마감 30분). |
 | 모의투자 | `PaperPortfolio.tsx` | 모델별 요약 + 실시간 포지션(60s 갱신) + 청산 이력 + CSV 다운로드(포지션 헤더 버튼) + 스케줄러 컨트롤. 모델 카드 클릭으로 포지션 필터링 |
-| 매크로 | `Macro.tsx` | OLS 팩터 모델 — 6개 팩터(USD/KRW·미국10년금리·브렌트유·VIX·달러인덱스·아이셰어즈 대한민국 ETF(EWY)) 추적. 종목별 분석 대상은 오늘 거래대금 상위 20종목(히트맵 기준), 없으면 전날 aftermarket_snap TOP 20. 결과는 거래대금 순 정렬 |
+| 매크로 | `Macro.tsx` | OLS 팩터 모델 — 6개 팩터(USD/KRW·미국10년금리·브렌트유·VIX·달러인덱스·아이셰어즈 대한민국 ETF(EWY)) 추적. 종목별 분석 대상은 오늘 거래대금 상위 20종목(히트맵 기준), 없으면 `daily_market_snap` 최신 영업일 TOP 20. 결과는 거래대금 순 정렬 |
 | 시그널 (우측 패널/모바일) | `SignalFeed.tsx` | 실시간 매매 신호 SSE 스트림. 15초 폴링 |
 
 모바일(≤768px)에서는 하단 탭바(`MobileNav.tsx`)로 전환됩니다.
@@ -45,7 +45,18 @@ PostgreSQL (Supabase)
 
 ### GET /api/heatmap
 
-당일 거래대금 상위 50종목의 히트맵 데이터를 반환합니다. 장 중에는 Kiwoom ka10032 실시간 데이터(KRX+NXT 합산), 장 마감 시에는 `aftermarket_snap`의 `reg_value`(KRX) + `after_value`(NXT) 합산 기준으로 전환합니다. Kiwoom 응답 실패 시 Stage 분류 데이터로 폴백합니다.
+당일 거래대금 상위 50종목의 히트맵 데이터를 반환합니다.
+
+**데이터 소스 우선순위:**
+
+| 상태 | 데이터 소스 |
+|------|------------|
+| 장 중 (09:00~15:30 KST, 평일·영업일) | Kiwoom ka10032 실시간 (KRX+NXT 합산) |
+| 장 마감·주말·공휴일 — 1순위 | `daily_market_snap` 최신 영업일 (ka10032 top100) |
+| 장 마감·주말·공휴일 — 2순위 폴백 | `aftermarket_snap` (`COALESCE(reg_value, after_value)`) |
+| Kiwoom 실패 (장 중) | Stage 분류 데이터 (`stage_results`) |
+
+**공휴일 감지:** 네이버 Finance `siseJson.naver` (005930 영업일 역산). 고정 법정공휴일 9종 + Naver API 실패 시 fallback.
 
 **응답:**
 ```json
@@ -60,6 +71,7 @@ PostgreSQL (Supabase)
       "market": "KOSPI"
     }
   ],
+  "fetched_at": "2026-05-30",
   "cached": false,
   "is_aftermarket": false
 }
@@ -67,14 +79,15 @@ PostgreSQL (Supabase)
 
 | 필드 | 타입 | 설명 |
 |------|------|------|
-| `amount` | float | 거래대금(장 중: ka10032 KRX+NXT 합산, 장 마감: `reg_value`+`after_value` 합산) |
-| `change_pct` | float | 등락률(장 중: 당일 실시간, 장 마감: NXT 시간외 등락률) |
+| `amount` | float | 거래대금(원) |
+| `change_pct` | float | 등락률(%) |
 | `stage` | int\|null | Stage 1/2/3 또는 `null`(미분류) |
 | `market` | string | `"KOSPI"` / `"KOSDAQ"` / `""` |
+| `fetched_at` | string\|null | 장 마감 시 `YYYY-MM-DD` (스냅샷 기준 영업일), 장 중 `null` |
 | `cached` | bool | 캐시 히트 여부 |
-| `is_aftermarket` | bool | `true` = 장 마감 합산 데이터 사용 중 ("전일 합산" 배지) |
+| `is_aftermarket` | bool | `true` = 장 마감 스냅샷 데이터 사용 중 ("MM/DD 합산" 배지) |
 
-**캐시:** 장 중 5분(`_PRICE_TTL`), 장 마감 30분(`_AFTERMARKET_TTL`).
+**캐시:** 장 중 5분(`_PRICE_TTL`), 장 마감 30분(`_AFTERMARKET_TTL`). 장중↔장마감 전환 시 `market_open` 태그 변경으로 즉시 무효화.
 
 ---
 
@@ -214,7 +227,15 @@ data: [{"id": 123, "direction": "BUY", "strength": 4, ...}]
 
 ### GET /api/top
 
-거래대금 상위 N종목. 장 중: Kiwoom ka10032 실시간(KRX+NXT 합산), 장 마감: `aftermarket_snap` 합산(`reg_value`+`after_value`) 기준. EPS·PER·Forward PER는 Naver Finance에서 병렬 조회.
+거래대금 상위 N종목. EPS·PER·Forward PER는 Naver Finance에서 병렬 조회.
+
+**데이터 소스 우선순위:**
+
+| 상태 | 데이터 소스 |
+|------|------------|
+| 장 중 (09:00~15:30 KST) | Kiwoom ka10032 실시간 (KRX+NXT 합산) |
+| 장 마감·주말·공휴일 — 1순위 | `daily_market_snap` 최신 영업일 (ka10032 top100) |
+| 장 마감·주말·공휴일 — 2순위 폴백 | `aftermarket_snap` (`COALESCE(reg_value, after_value)`) |
 
 **쿼리 파라미터:** `?n=50` (기본값 50, 최대 100) · `?refresh=true` (캐시 강제 갱신)
 
@@ -234,37 +255,65 @@ data: [{"id": 123, "direction": "BUY", "strength": 4, ...}]
       "forward_per": 12.3
     }
   ],
-  "fetched_at": "14:32:11",
-  "is_aftermarket": false
+  "fetched_at": "2026-05-30",
+  "is_aftermarket": true
 }
 ```
 
 | 필드 | 타입 | 설명 |
 |------|------|------|
-| `price` | int | 현재가(장 중: 실시간, 장 마감: NXT 시간외 체결가) |
+| `price` | int | 현재가 |
 | `change_pct` | float | 등락률(%) |
-| `amount` | int | 거래대금(원)(장 중: KRX+NXT 합산, 장 마감: `reg_value`+`after_value`) |
+| `amount` | int | 거래대금(원) |
 | `eps` | int\|null | 주당순이익(Naver Finance) |
 | `per` | float\|null | PER(Naver Finance, Trailing) |
 | `forward_per` | float\|null | 예상 PER(Naver Finance) |
-| `fetched_at` | string | 조회 시각(장 중: HH:MM:SS, 장 마감: YYYY-MM-DD) |
-| `is_aftermarket` | bool | `true` = 장 마감 합산 데이터 ("전일 합산" 배지) |
+| `fetched_at` | string | 장 중: `HH:MM:SS`, 장 마감: `YYYY-MM-DD` (스냅샷 기준 영업일) |
+| `is_aftermarket` | bool | `true` = 장 마감 스냅샷 데이터 ("MM/DD 합산" 배지) |
 
 **캐시:** 장 중 5분, 장 마감 30분.
 
-#### aftermarket_snap 테이블 (장 마감 데이터 소스)
+---
 
-`kiwoom_aftermarket_sync.py --incremental` (16:05 KST 실행)으로 수집.
+#### daily_market_snap 테이블 (장 마감 1순위 데이터 소스)
+
+`run_scheduler.py` → `daily_market_snap_job` (16:10 KST, 평일)으로 수집.  
+NXT 시간외 단일가(15:40~16:00) 종료 후 10분 뒤 실행해 당일 최종 합산 거래대금을 캡처합니다.
+
+```sql
+CREATE TABLE daily_market_snap (
+    trade_date  DATE         NOT NULL,
+    ticker      VARCHAR(12)  NOT NULL,   -- yfinance 형식: 005930.KS / 035720.KQ
+    name        VARCHAR(100),
+    price       INT,
+    change_pct  NUMERIC(7,2),
+    amount      BIGINT,                  -- KRX+NXT 합산 거래대금 (원)
+    market      VARCHAR(10),             -- KOSPI / KOSDAQ
+    PRIMARY KEY (trade_date, ticker)
+);
+```
+
+- `ticker`: Kiwoom 원본(`000660_AL` → `.KS`, `035720_AQ` → `.KQ`) 정규화
+- `amount`: `ka10032`(`stex_tp=3`, KRX+NXT 합산) 기준 — 정규장 + NXT 시간외 포함
+- 저장 범위: 거래대금 top100 (삼성전자·SK하이닉스 등 주요 종목 전체 커버)
+- `aftermarket_snap`과의 차이: NXT 거래 여부와 무관하게 ka10032 상위 종목 전체 저장
+
+---
+
+#### aftermarket_snap 테이블 (장 마감 2순위 폴백)
+
+`kiwoom_aftermarket_sync.py --incremental` (16:05 KST)으로 수집.  
+NXT 시간외 단일가에 참여한 종목만 저장 (~800여 종목). `daily_market_snap` 미수집 시 폴백으로 사용.
 
 | 컬럼 | 설명 |
 |------|------|
 | `reg_close` | 정규장 종가 |
 | `after_close` | NXT 시간외 체결가 |
 | `after_value` | NXT 시간외 누적 거래대금 (원) |
-| `reg_value` | KRX+NXT 합산 거래대금 (ka10032 기준, 원). NULL이면 after_value만 사용 |
+| `reg_value` | ka10032 기준 KRX+NXT 합산 거래대금 (원). NULL = ka10032 top500 미매칭 |
 | `after_chg_pct` | NXT 시간외 등락률 (%) |
 
-`reg_value`는 `kiwoom_aftermarket_sync.py` 실행 시 `ka10032`(거래대금상위, `stex_tp=3`)를 호출해 당일 최종 합산 거래대금을 매칭 저장합니다. ka10032 top500 이외 종목은 NULL.
+장 마감 조회 시 `COALESCE(reg_value, after_value)` 순으로 거래대금 사용.
 
 ---
 
@@ -430,6 +479,20 @@ KOSPI/KOSDAQ 지수 현재가 + 등락률을 반환합니다. KRX OpenAPI + yfin
 **응답:** `text/csv; charset=utf-8`, `Content-Disposition: attachment; filename="paper_positions_YYYYMMDD.csv"`
 
 컬럼: `model, ticker, name, signal_date, entry_theory, entry_actual, slippage_pct, qty, status, tp1_pct, tp1_ratio, tp1_date, tp1_price, trail_pct, hard_stop_pct, watermark, exit_date, exit_price, exit_type, blended_return, created_at`
+
+---
+
+---
+
+## 장 마감 데이터 수집 스케줄
+
+| 시각 (KST) | 잡 | 대상 테이블 | 설명 |
+|-----------|-----|------------|------|
+| 16:05 | `daily_aftermarket_sync_job` | `aftermarket_snap` | NXT 시간외 단일가 종목 수집 (`--incremental`) |
+| 16:10 | `daily_market_snap_job` | `daily_market_snap` | ka10032 top100 최종 스냅샷 저장 |
+
+두 잡 모두 `run_scheduler.py`에 평일(mon-fri)로 등록됩니다.  
+16:05 → NXT 거래 종목 보완, 16:10 → 전 종목 KRX+NXT 합산 확정.
 
 ---
 
