@@ -78,7 +78,9 @@ export default function Top() {
               background: tokens.bg.raised, border: `1px solid ${tokens.bd.emphasis}`,
               color: tokens.tx.muted, fontWeight: 600,
             }}>
-              전일 합산
+              {fetchedAt && /^\d{4}-\d{2}-\d{2}$/.test(fetchedAt)
+                ? `${fetchedAt.slice(5).replace('-', '/')} 합산`
+                : '전일 합산'}
             </span>
           )}
         </div>

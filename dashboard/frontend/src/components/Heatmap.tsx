@@ -33,6 +33,7 @@ export default function Heatmap() {
   const [updatedAt, setUpdatedAt]       = useState<Date | null>(null)
   const [nextRefresh, setNextRefresh]   = useState<number>(REFRESH_MS)
   const [isAftermarket, setIsAftermarket] = useState(false)
+  const [dataDate, setDataDate]           = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -40,6 +41,7 @@ export default function Heatmap() {
       const j = await fetch('/api/heatmap').then(r => r.json())
       setItems(j.data ?? [])
       setIsAftermarket(j.is_aftermarket ?? false)
+      setDataDate(j.fetched_at ?? null)
       setUpdatedAt(new Date())
       setNextRefresh(REFRESH_MS)
       setError(null)
@@ -91,7 +93,7 @@ export default function Heatmap() {
               background: tokens.bg.raised, border: `1px solid ${tokens.bd.emphasis}`,
               color: tokens.tx.muted, fontWeight: 600,
             }}>
-              전일 합산
+              {dataDate ? `${dataDate.slice(5).replace('-', '/')} 합산` : '전일 합산'}
             </span>
           )}
         <span style={styles.legend}>

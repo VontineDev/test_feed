@@ -239,8 +239,14 @@ async def _warmup_caches() -> None:
     logger.info("[warmup] 캐시 사전 로딩 시작")
     # heatmap 먼저: macro 분석이 오늘 TOP 20 종목을 사용하도록 순서 보장
     try:
+        # _bg_refresh가 _build_heatmap_data() 결과(dict)를 저장한 뒤
+        # TTL은 fetched_at 유무로 결정. warmup 시점에는 아직 데이터 없으므로
+        # _is_market_open() 기준으로 초기 TTL 선택.
         ttl_heat = _PRICE_TTL if _is_market_open() else _AFTERMARKET_TTL
         await _bg_refresh(_HEATMAP_CACHE, _HEATMAP_LOCK, _build_heatmap_data, ttl_heat, "heatmap")
+        # warmup 완료 후 실제 데이터 기준으로 TTL 재보정
+        if _HEATMAP_CACHE["data"] and _HEATMAP_CACHE["data"].get("fetched_at"):
+            _HEATMAP_CACHE["expires"] = _time_module.time() + _AFTERMARKET_TTL
     except Exception as e:
         logger.warning("[warmup] heatmap 실패 (무시): %s", e)
     # heatmap 완료 후 macro + market_index 병렬 실행
@@ -430,6 +436,10 @@ async def _fetch_current_prices(
 
 
 # ── 시장 개장 여부 ─────────────────────────────────────────────
+# TODO [엣지 11] 금요일 20:00 → 토요일 00:00 경계:
+#   캐시 market_open 태그로 대부분 처리되지만, 토요일 00:00 직후
+#   첫 요청까지는 금요일 캐시가 살아있을 수 있음.
+#   캐시 TTL이 만료되면 자동 해소 — 허용 범위로 판단.
 def _is_market_open() -> bool:
     """평일 비공휴일 09:00~15:30 KST 이면 True."""
     now_kst = datetime.now(_KST)
@@ -499,10 +509,37 @@ async def _fetch_aftermarket_snap_top_async(n: int) -> dict | None:
 
 
 # ── 히트맵 데이터 빌드 (Kiwoom 거래대금 Top 50 + Stage 오버레이) ──
-async def _build_heatmap_data() -> list[dict]:
+# TODO [엣지 1] 평일 08:00~09:00 프리마켓 케이스:
+#   장전 단일가(08:00~09:00) + 전일 합산 표시가 필요하지만
+#   Kiwoom 장전 단일가 API(코드 미확인)가 없어 미구현.
+#   확인 후 별도 케이스(_is_premarket()) 분기 추가 필요.
+#
+# TODO [엣지 2] 주말 08:00~09:00:
+#   위 프리마켓 케이스 구현 시 weekday < 5 체크 반드시 포함할 것.
+#   현재는 _is_market_open()이 weekday >= 5 → False 반환하므로 장마감 경로로 처리됨.
+#
+# TODO [엣지 5] ka10032의 장전 단일가(08:00~09:00) 포함 여부:
+#   09:00 직전/직후 trde_prica 실측으로 확인 필요.
+#   포함되면 "08시부터" 자연 충족, 미포함이면 별도 장전 API 보완 필요.
+#
+# TODO [엣지 8] 15:30~15:40 NXT 미시작 공백:
+#   정규장 마감(15:30) 직후 NXT 시간외는 15:40 시작.
+#   이 10분간은 _is_market_open()=False이지만 aftermarket_snap에
+#   오늘 데이터가 없음 → MAX(trade_date)가 어제 데이터로 표시됨.
+#   16:05 수집 잡이 완료되기 전까지 동일 현상 지속.
+#   개선 방법: 15:30~16:05 구간에 ka10032 frozen 스냅샷 별도 캐시 유지.
+#
+# TODO [엣지 3·12] 종목 구성 불연속:
+#   장마감 → 장전 전환(07:59→08:00) 시 ka10032 top100(장중) vs
+#   aftermarket_snap NXT 거래 종목(~800개)으로 커버리지가 달라짐.
+#   근본 해결은 ka10032 당일 최종 스냅샷을 별도 테이블로 저장하는 것.
+async def _build_heatmap_data() -> dict:
+    """{"items": list[dict], "fetched_at": str|None} 반환.
+    fetched_at: 장마감 시 trade_date(YYYY-MM-DD), 장중 시 None.
+    """
     pool = await get_pool()
 
-    # 장 마감 시: aftermarket_snap에서 전일 NXT 데이터 사용
+    # 장 마감 시: aftermarket_snap 합산(KRX+NXT) 기준
     if not _is_market_open():
         snap_data = await _fetch_aftermarket_snap_top_async(50)
         if snap_data and snap_data.get("items"):
@@ -517,7 +554,7 @@ async def _build_heatmap_data() -> list[dict]:
                     tickers,
                 )
             stage_map = {r["ticker"]: r["stage"] for r in stage_rows}
-            return [
+            items = [
                 {
                     "ticker":        it["ticker"],
                     "name":          it["name"],
@@ -529,6 +566,7 @@ async def _build_heatmap_data() -> list[dict]:
                 }
                 for it in snap_data["items"]
             ]
+            return {"items": items, "fetched_at": snap_data.get("fetched_at")}
 
     # 1. Kiwoom top 50 조회 (15초 타임아웃)
     try:
@@ -541,7 +579,6 @@ async def _build_heatmap_data() -> list[dict]:
     today = date.today()
 
     if kiwoom_items:
-        # ── Kiwoom 데이터 경로 ─────────────────────────────────
         tickers = [i["ticker"] for i in kiwoom_items]
         async with pool.acquire() as conn:
             stage_rows = await conn.fetch(
@@ -552,7 +589,7 @@ async def _build_heatmap_data() -> list[dict]:
                 today, tickers,
             )
         stage_map = {r["ticker"]: r["stage"] for r in stage_rows}
-        return [
+        items = [
             {
                 "ticker":     it["ticker"],
                 "name":       it["name"],
@@ -563,6 +600,7 @@ async def _build_heatmap_data() -> list[dict]:
             }
             for it in kiwoom_items
         ]
+        return {"items": items, "fetched_at": None}
 
     # ── Stage 분류 폴백 (Kiwoom 미응답 시) ──────────────────────
     logger.info("[heatmap] Stage 분류 데이터로 폴백")
@@ -593,13 +631,18 @@ async def _build_heatmap_data() -> list[dict]:
             "change_pct": 0.0,
             "market":     r["market"] or "",
         })
-    return sorted(result, key=lambda x: x["amount"], reverse=True)
+    items = sorted(result, key=lambda x: x["amount"], reverse=True)
+    return {"items": items, "fetched_at": None}
 
 
 # ── GET /api/heatmap ──────────────────────────────────────────
-def _heatmap_response(data: list[dict], cached: bool, stale: bool = False) -> dict:
-    is_aftermarket = bool(data and data[0].get("is_aftermarket"))
-    r: dict = {"data": data, "cached": cached, "is_aftermarket": is_aftermarket}
+def _heatmap_response(cache_data: dict, cached: bool, stale: bool = False) -> dict:
+    items = cache_data.get("items") or []
+    fetched_at = cache_data.get("fetched_at")
+    is_aftermarket = bool(items and items[0].get("is_aftermarket"))
+    r: dict = {"data": items, "cached": cached, "is_aftermarket": is_aftermarket}
+    if fetched_at:
+        r["fetched_at"] = fetched_at   # YYYY-MM-DD (장마감 trade_date)
     if stale:
         r["stale"] = True
     return r
@@ -621,12 +664,12 @@ async def get_heatmap():
         if _cache_is_valid(_HEATMAP_CACHE):
             return _heatmap_response(_HEATMAP_CACHE["data"], cached=True)
         try:
-            data = await _build_heatmap_data()
-            _HEATMAP_CACHE["data"] = data
-            ttl = _AFTERMARKET_TTL if (data and data[0].get("is_aftermarket")) else _PRICE_TTL
+            cache_data = await _build_heatmap_data()
+            _HEATMAP_CACHE["data"] = cache_data
+            ttl = _AFTERMARKET_TTL if cache_data.get("fetched_at") else _PRICE_TTL
             _HEATMAP_CACHE["expires"] = _time_module.time() + ttl
             _HEATMAP_CACHE["market_open"] = _is_market_open()
-            return _heatmap_response(data, cached=False)
+            return _heatmap_response(cache_data, cached=False)
         except Exception as e:
             logger.error("[heatmap] 빌드 실패: %s", e)
             raise HTTPException(status_code=500, detail="heatmap unavailable")
@@ -1771,7 +1814,7 @@ def _kiwoom_to_yfinance(ticker: str, market: str = "") -> str | None:
 def _run_macro_analysis() -> dict:
     """MacroTracker 분석 실행 (동기, asyncio.to_thread에서 호출)."""
     # 1순위: 오늘 실시간 히트맵 캐시 — 전체 풀에서 변환 가능한 것 모두 분석 후 거래대금 상위 20개 선별
-    heatmap_items: list[dict] = _HEATMAP_CACHE.get("data") or []
+    heatmap_items: list[dict] = (_HEATMAP_CACHE.get("data") or {}).get("items") or []
     heatmap_rank: dict[str, int] = {}  # yf_ticker → 거래대금 순위 (1-based)
     if len(heatmap_items) >= 5:
         live_tickers: dict[str, str] = {}
