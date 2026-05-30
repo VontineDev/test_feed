@@ -521,6 +521,11 @@ async def _weekly_screener_job():
     _screener_tickers = await weekly_screener_job(_db_pool)
 
 
+async def _daily_market_snap_job():
+    from jobs.infra_jobs import daily_market_snap_job
+    await daily_market_snap_job()
+
+
 async def _daily_aftermarket_sync_job():
     from jobs.infra_jobs import daily_aftermarket_sync_job
     await daily_aftermarket_sync_job()
@@ -771,6 +776,17 @@ async def main(interval: int, enable_summary: bool) -> None:
         id="daily_watchlist_brief",
         max_instances=1,
         misfire_grace_time=3600,
+        replace_existing=True,
+    )
+    # ── 당일 최종 스냅샷: 평일 16:10 KST (07:10 UTC) ─────────────
+    # ka10032 top100(KRX+NXT 합산) → daily_market_snap
+    # NXT 종료(16:00) 후 10분 여유. 히트맵/TOP 장마감 데이터 소스.
+    scheduler.add_job(
+        _daily_market_snap_job,
+        CronTrigger(day_of_week="mon-fri", hour=7, minute=10, timezone="UTC"),  # = 16:10 KST
+        id="daily_market_snap",
+        max_instances=1,
+        misfire_grace_time=1800,
         replace_existing=True,
     )
     # ── NXT 시간외 수집: 평일 16:05 KST (07:05 UTC) ──────────────

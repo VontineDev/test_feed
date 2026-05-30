@@ -561,6 +561,122 @@ def _enrich_with_reg_value(client: "KiwoomClient", records: list[AftermarketReco
     logger.info("[kiwoom] reg_value 보강 완료: %d/%d건 (ka10032 top500 매칭)", n, len(records))
 
 
+# ── daily_market_snap DDL + 저장 ─────────────────────────────────
+
+_DDL_DAILY_SNAP = """
+CREATE TABLE IF NOT EXISTS daily_market_snap (
+    trade_date  DATE         NOT NULL,
+    ticker      VARCHAR(12)  NOT NULL,
+    name        VARCHAR(100),
+    price       INTEGER,
+    change_pct  NUMERIC(6, 2),
+    amount      BIGINT,
+    market      VARCHAR(10),
+    fetched_at  TIMESTAMPTZ  DEFAULT now(),
+    PRIMARY KEY (trade_date, ticker)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_snap_date
+    ON daily_market_snap (trade_date DESC);
+"""
+
+
+def ensure_daily_snap_table(dsn: str) -> None:
+    """daily_market_snap 테이블 생성 + RLS 활성화."""
+    conn = _connect(dsn)
+    try:
+        with conn.cursor() as cur:
+            for stmt in _DDL_DAILY_SNAP.strip().split(";"):
+                stmt = stmt.strip()
+                if stmt:
+                    cur.execute(stmt)
+            cur.execute("ALTER TABLE daily_market_snap ENABLE ROW LEVEL SECURITY")
+            cur.execute("""
+                DO $$ BEGIN
+                  IF NOT EXISTS (
+                    SELECT 1 FROM pg_policies
+                    WHERE schemaname='public'
+                      AND tablename='daily_market_snap'
+                      AND policyname='backend_all'
+                  ) THEN
+                    CREATE POLICY backend_all ON daily_market_snap
+                      FOR ALL USING (true) WITH CHECK (true);
+                  END IF;
+                END $$
+            """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _raw_to_yf(raw: str) -> str | None:
+    """'000660_AL' → '000660.KS', '035720_AQ' → '035720.KQ'. 변환 불가 시 None."""
+    if raw.endswith("_AL"):
+        return raw[:-3] + ".KS"
+    if raw.endswith("_AQ"):
+        return raw[:-3] + ".KQ"
+    if "." in raw:
+        return raw   # 이미 yfinance 포맷
+    return None
+
+
+def save_daily_market_snap(dsn: str, items: list[dict], trade_date: date) -> int:
+    """ka10032 items → daily_market_snap upsert."""
+    if not items:
+        return 0
+    records = []
+    for it in items:
+        ticker = _raw_to_yf(it.get("ticker", ""))
+        if not ticker:
+            continue
+        market = "KOSPI" if ticker.endswith(".KS") else "KOSDAQ"
+        records.append((
+            trade_date,
+            ticker,
+            it.get("name") or "",
+            it.get("price"),
+            it.get("change_pct"),
+            it.get("amount"),
+            market,
+        ))
+    if not records:
+        return 0
+    conn = _connect(dsn)
+    try:
+        with conn.cursor() as cur:
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO daily_market_snap
+                    (trade_date, ticker, name, price, change_pct, amount, market)
+                VALUES %s
+                ON CONFLICT (trade_date, ticker) DO UPDATE SET
+                    name       = EXCLUDED.name,
+                    price      = EXCLUDED.price,
+                    change_pct = EXCLUDED.change_pct,
+                    amount     = EXCLUDED.amount,
+                    market     = EXCLUDED.market,
+                    fetched_at = now()
+                """,
+                records,
+            )
+        conn.commit()
+        return len(records)
+    finally:
+        conn.close()
+
+
+def run_daily_snap(dsn: str, client: "KiwoomClient", trade_date: date) -> int:
+    """ka10032 top100 조회 후 daily_market_snap 저장. 저장 건수 반환."""
+    ensure_daily_snap_table(dsn)
+    items = client.fetch_top_volume(n=100)
+    if not items:
+        logger.warning("[daily-snap] ka10032 응답 없음")
+        return 0
+    saved = save_daily_market_snap(dsn, items, trade_date)
+    logger.info("[daily-snap] %s %d건 저장", trade_date, saved)
+    return saved
+
+
 def already_loaded(dsn: str, trade_date: date) -> bool:
     """해당 날짜 데이터가 이미 DB에 있는지 확인."""
     conn = _connect(dsn)

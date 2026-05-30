@@ -105,6 +105,29 @@ async def monthly_dart_xbrl_job(db_pool) -> None:
         logger.error("[dart] 월별 XBRL 갱신 실패: %s", e)
 
 
+async def daily_market_snap_job() -> None:
+    """평일 16:10 KST — ka10032 당일 최종 스냅샷 → daily_market_snap.
+
+    NXT 시간외 단일가(15:40~16:00) 종료 10분 후 실행.
+    stex_tp=3 (KRX+NXT 합산) 기준 top100 저장.
+    장 마감 후 히트맵/TOP의 주요 데이터 소스.
+    """
+    from datetime import date as _date
+    from core.db import get_dsn as _get_dsn
+    from data.kiwoom_aftermarket_sync import (
+        _build_client, run_daily_snap,
+    )
+    logger.info("[daily-snap] 시작")
+    try:
+        dsn = _get_dsn()
+        client = _build_client()
+        saved = run_daily_snap(dsn, client, _date.today())
+        if saved == 0:
+            logger.warning("[daily-snap] 저장된 데이터 없음")
+    except Exception as e:
+        logger.error("[daily-snap] 실패: %s", e)
+
+
 async def daily_aftermarket_sync_job() -> None:
     """평일 16:05 KST — NXT 시간외 단일가 + ka10032 합산 거래대금 수집.
 

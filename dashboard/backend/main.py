@@ -323,6 +323,14 @@ async def lifespan(app: FastAPI):
                 END IF;
             END $$;
         """)
+    # daily_market_snap 테이블 생성 (없으면)
+    try:
+        from core.db import get_dsn as _get_dsn
+        from data.kiwoom_aftermarket_sync import ensure_daily_snap_table as _ensure_snap
+        await asyncio.to_thread(_ensure_snap, _get_dsn())
+        logger.info("daily_market_snap 테이블 확인 완료")
+    except Exception as _e:
+        logger.warning("daily_market_snap 테이블 생성 실패 (무시): %s", _e)
     logger.info("DB 풀 준비 완료")
 
     # 종목 이름 시드 + 캐시 사전 로딩 (백그라운드)
@@ -485,6 +493,55 @@ def _is_market_open() -> bool:
     return time(9, 0) <= now_kst.time() < time(15, 31)
 
 
+# ── daily_market_snap에서 거래대금 상위 N 조회 (장마감 1순위) ──────
+async def _fetch_daily_snap_top_async(n: int) -> dict | None:
+    """daily_market_snap 최신 영업일 거래대금 상위 N 종목.
+
+    aftermarket_snap 대비 장점:
+      - NXT 거래 여부와 무관하게 전 종목 커버 (ka10032 top100)
+      - amount = KRX+NXT 합산 당일 최종값
+      - change_pct = 정규장 기준 당일 등락률
+    데이터 없으면 None 반환.
+    """
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT d.ticker,
+                       COALESCE(tn.name_ko, d.name,
+                                SPLIT_PART(d.ticker, '.', 1)) AS name,
+                       d.price, d.change_pct, d.amount,
+                       d.market, d.trade_date
+                FROM   daily_market_snap d
+                LEFT JOIN ticker_names tn ON tn.ticker = d.ticker
+                WHERE  d.trade_date = (SELECT MAX(trade_date) FROM daily_market_snap)
+                  AND  d.amount > 0
+                ORDER  BY d.amount DESC
+                LIMIT  $1
+                """,
+                n,
+            )
+        if not rows:
+            return None
+        trade_date = str(rows[0]["trade_date"])
+        items = []
+        for i, r in enumerate(rows, 1):
+            items.append({
+                "rank":       i,
+                "ticker":     r["ticker"],
+                "name":       r["name"] or r["ticker"],
+                "price":      int(r["price"]) if r["price"] else 0,
+                "change_pct": float(r["change_pct"]) if r["change_pct"] is not None else 0.0,
+                "amount":     int(r["amount"]),
+                "market":     r["market"] or "",
+            })
+        return {"items": items, "fetched_at": trade_date, "is_aftermarket": True}
+    except Exception as e:
+        logger.warning("[daily-snap] 조회 실패: %s", e)
+        return None
+
+
 # ── aftermarket_snap에서 합산(KRX+NXT) 거래대금 상위 N 조회 ──────
 async def _fetch_aftermarket_snap_top_async(n: int) -> dict | None:
     """aftermarket_snap 최근 영업일 거래대금 상위 N 종목 반환.
@@ -565,18 +622,24 @@ async def _fetch_aftermarket_snap_top_async(n: int) -> dict | None:
 #   개선 방법: 15:30~16:05 구간에 ka10032 frozen 스냅샷 별도 캐시 유지.
 #
 # TODO [엣지 3·12] 종목 구성 불연속:
-#   장마감 → 장전 전환(07:59→08:00) 시 ka10032 top100(장중) vs
-#   aftermarket_snap NXT 거래 종목(~800개)으로 커버리지가 달라짐.
-#   근본 해결은 ka10032 당일 최종 스냅샷을 별도 테이블로 저장하는 것.
+#   장마감 → 장전 전환(07:59→08:00) 시 daily_market_snap top100(장중) vs
+#   daily_market_snap 전날 데이터가 그대로 유지되므로 연속성 개선됨.
+#   단, 스냅샷 수집(16:10) 전 15:30~16:10 구간은 어제 데이터로 표시.
 async def _build_heatmap_data() -> dict:
     """{"items": list[dict], "fetched_at": str|None} 반환.
     fetched_at: 장마감 시 trade_date(YYYY-MM-DD), 장중 시 None.
+
+    데이터 소스 우선순위 (장 마감 시):
+      1순위: daily_market_snap — ka10032 top100, KRX+NXT 합산, 전 종목 커버
+      2순위: aftermarket_snap  — NXT 거래 종목만, 폴백
     """
     pool = await get_pool()
 
-    # 장 마감 시: aftermarket_snap 합산(KRX+NXT) 기준
+    # 장 마감 시: daily_market_snap 우선, aftermarket_snap 폴백
     if not _is_market_open():
-        snap_data = await _fetch_aftermarket_snap_top_async(50)
+        snap_data = await _fetch_daily_snap_top_async(50)
+        if not snap_data or not snap_data.get("items"):
+            snap_data = await _fetch_aftermarket_snap_top_async(50)
         if snap_data and snap_data.get("items"):
             tickers = [it["ticker"] for it in snap_data["items"]]
             async with pool.acquire() as conn:
@@ -1248,7 +1311,9 @@ async def get_top(n: int = 50, refresh: bool = False):
         if not _TOP_LOCK.locked():
             async def _fetch_top_with_fundamentals() -> dict:
                 if not _is_market_open():
-                    snap = await _fetch_aftermarket_snap_top_async(50)
+                    snap = await _fetch_daily_snap_top_async(50)
+                    if not snap:
+                        snap = await _fetch_aftermarket_snap_top_async(50)
                     if snap:
                         await _enrich_top_with_fundamentals(snap["items"])
                         return snap
@@ -1265,7 +1330,9 @@ async def get_top(n: int = 50, refresh: bool = False):
             return _TOP_CACHE["data"]
         try:
             if not _is_market_open():
-                snap = await _fetch_aftermarket_snap_top_async(n)
+                snap = await _fetch_daily_snap_top_async(n)
+                if not snap:
+                    snap = await _fetch_aftermarket_snap_top_async(n)
                 if snap:
                     await _enrich_top_with_fundamentals(snap["items"])
                     _TOP_CACHE["data"] = snap
@@ -1796,13 +1863,36 @@ async def get_ticker_history(
 # ── GET /api/macro ────────────────────────────────────────────
 
 def _fetch_prev_top20_sync() -> dict[str, str] | None:
-    """aftermarket_snap 최근 영업일 합산(KRX+NXT) 거래대금 TOP 20 → {ticker: name}. 실패 시 None."""
+    """최근 영업일 거래대금 TOP 20 → {ticker: name}. 실패 시 None.
+
+    1순위: daily_market_snap (ka10032 top100, 전 종목)
+    2순위: aftermarket_snap  (NXT 거래 종목만, 폴백)
+    """
     try:
         import psycopg2
         from core.db import get_dsn as _get_dsn
         conn = psycopg2.connect(_get_dsn())
         try:
             with conn.cursor() as cur:
+                # 1순위: daily_market_snap
+                cur.execute("""
+                    SELECT d.ticker,
+                           COALESCE(tn.name_ko, d.name,
+                                    SPLIT_PART(d.ticker, '.', 1)) AS name
+                    FROM   daily_market_snap d
+                    LEFT JOIN ticker_names tn ON tn.ticker = d.ticker
+                    WHERE  d.trade_date = (SELECT MAX(trade_date) FROM daily_market_snap)
+                      AND  d.amount > 0
+                    ORDER  BY d.amount DESC
+                    LIMIT  20
+                """)
+                rows = cur.fetchall()
+                if rows:
+                    result = {row[0]: row[1] for row in rows if row[0]}
+                    logger.info("[macro] daily_market_snap 전일 TOP %d 종목 로드", len(result))
+                    return result if result else None
+
+                # 2순위: aftermarket_snap 폴백
                 cur.execute("""
                     SELECT a.ticker,
                            COALESCE(tn.name_ko, SPLIT_PART(a.ticker, '.', 1)) AS name
@@ -1819,10 +1909,10 @@ def _fetch_prev_top20_sync() -> dict[str, str] | None:
         if not rows:
             return None
         result = {row[0]: row[1] for row in rows if row[0]}
-        logger.info("[macro] aftermarket_snap 전일 TOP %d 종목 로드", len(result))
+        logger.info("[macro] aftermarket_snap 전일 TOP %d 종목 로드 (폴백)", len(result))
         return result if result else None
     except Exception as e:
-        logger.warning("[macro] aftermarket_snap 조회 실패: %s", e)
+        logger.warning("[macro] 전일 TOP 조회 실패: %s", e)
         return None
 
 
