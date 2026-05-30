@@ -157,6 +157,53 @@ async def daily_aftermarket_sync_job() -> None:
         logger.warning("[aftermarket-sync] 실행 실패: %s", e)
 
 
+async def youtube_narrative_sync_job() -> None:
+    """평일 09:05 KST — 전일 삼프로TV 업로드 수집 + LLM 추출 → youtube_mention_raw."""
+    import os
+    from datetime import date as _date, timedelta as _td
+    from core.db import get_dsn as _get_dsn
+    from data.youtube_narrative_sync import run_sync, ensure_tables
+    logger.info("[yt-sync] 운영 수집 시작")
+    try:
+        dsn        = _get_dsn()
+        api_key    = os.environ.get("YOUTUBE_API_KEY", "")
+        gemini_key = os.environ.get("GEMINI_API_KEY", "")
+        if not api_key or not gemini_key:
+            logger.warning("[yt-sync] YOUTUBE_API_KEY / GEMINI_API_KEY 미설정 — 건너뜀")
+            return
+        ensure_tables(dsn)
+        yesterday = _date.today() - _td(days=1)
+        n = await asyncio.to_thread(run_sync, dsn, api_key, gemini_key, yesterday, yesterday)
+        logger.info("[yt-sync] 완료: %d건", n)
+    except Exception as e:
+        logger.error("[yt-sync] 실패: %s", e)
+
+
+async def youtube_attention_score_job() -> None:
+    """평일 09:10 KST — rolling 5영업일 attention_score 집계."""
+    from datetime import date as _date
+    from core.db import get_dsn as _get_dsn
+    from data.youtube_narrative_sync import compute_attention_scores
+    logger.info("[yt-attn] 집계 시작")
+    try:
+        n = await asyncio.to_thread(compute_attention_scores, _get_dsn())
+        logger.info("[yt-attn] 완료: %d종목", n)
+    except Exception as e:
+        logger.error("[yt-attn] 실패: %s", e)
+
+
+async def youtube_forward_return_job() -> None:
+    """평일 15:40 KST — 당일 종가로 forward return 백필."""
+    from core.db import get_dsn as _get_dsn
+    from data.youtube_narrative_sync import fill_forward_returns
+    logger.info("[yt-ret] forward return 채우기 시작")
+    try:
+        n = await asyncio.to_thread(fill_forward_returns, _get_dsn())
+        logger.info("[yt-ret] 완료: %d건", n)
+    except Exception as e:
+        logger.error("[yt-ret] 실패: %s", e)
+
+
 async def daily_flow_sync_job() -> None:
     logger.info("[flow-sync] krx_flow_sync --incremental 시작")
     try:
