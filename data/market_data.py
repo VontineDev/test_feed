@@ -169,7 +169,7 @@ def _fetch_fundamental(krx_code: str) -> dict:
                 result["eps"] = val
             elif code == "per":
                 result["per"] = val
-            elif code in ("forwardPer", "estimatedPer", "expectPer"):
+            elif code in ("cnsPer", "forwardPer", "estimatedPer", "expectPer"):
                 result["forward_per"] = val
             elif code == "pbr":
                 result["pbr"] = val
