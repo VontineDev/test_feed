@@ -38,13 +38,29 @@ Line 예측/미실현: strokeWidth 1, strokeDasharray="4 2"
 - 헤더: bg-1 · padding 10px 20px · border-bottom 1px bd-1
 - 탭: padding 10px 22px · 활성 = #93c5fd + 2px #3b82f6 underline
 - 버튼: bg-2 · 1px bd-2 · radius 4 · min 36×36
-- 테이블: 12px · 셀 padding 4–6px 8px · 숫자 칼럼 우측 + tabular-nums
+- 테이블(기본): 12px · 셀 padding 4–6px 8px · 숫자 칼럼 우측 + tabular-nums
+- 테이블(밀집): 11px · 셀 padding 3px 5px (Top 탭 등 많은 칼럼이 필요한 경우)
 - 차트(Recharts): 전역 chartTheme 첨부 · 새 색 만들지 말고 chart.cat.*에서만 선택
-- 트리맵: 보더 색 = stage·셀 색 = changePct
+- 트리맵: 보더 색 = stage · 셀 색 = changePct · 셀 크기 = 거래대금 · 레이블 2행(종목명 10px / 등락률 10px bold)
 - 툴팁: bg-2 · 1px bd-2 · radius 6 · shadow 0 4px 12px rgba(0,0,0,.4)
 - 빈 상태: SVG(opacity 0.35) + 굵은 1줄 + 가는 힌트 1줄
 - 로딩: "…" 텍스트 · 스피너 ✕
 - 에러: 인라인 빨강 텍스트 11–12px
+
+### 2줄 종목명 셀 (테이블)
+종목명+종목코드를 2줄로 표시할 때:
+- 1행: 종목명 · fontWeight 500 · whiteSpace nowrap · overflow hidden · textOverflow ellipsis
+- 2행: 순수 종목코드(`.KS`/`.KQ`/`_AL`/`_AQ` 제거) · color tx/2 · fontSize 9.5px
+- 셀 lineHeight 1.3
+
+### 상태 뱃지 (is_aftermarket 등)
+헤더 또는 타이틀 옆에 표시하는 소형 컨텍스트 뱃지:
+- fontSize 10px · padding 2px 6px · borderRadius 10px
+- background bg/2 · border 1px bd/2 · color tx/1 · fontWeight 600
+
+### 모바일 레이아웃
+브레이크포인트: 768px
+- 히트맵 높이: `100svh - 42px(탭바) - 56px(하단 네비)` — `ResponsiveTreeMap` 필수 조건
 
 ### 분할 패널 패턴 (Master–Detail Split)
 

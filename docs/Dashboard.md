@@ -30,9 +30,9 @@ PostgreSQL (Supabase)
 
 | 탭 | 컴포넌트 | 기능 |
 |----|----------|------|
-| 히트맵 | `Heatmap.tsx` | 당일 거래대금 상위 50종목(Kiwoom ka10032). 셀 크기=실제 거래대금, 색상=등락률(한국식 — 빨강=상승·파랑=하락). 셀 내 종목명+등락률 2행 표시. Stage 분류 종목은 컬러 테두리 오버레이. 5분 자동갱신. 상단에 `MarketSummaryBanner` — KOSPI/KOSDAQ 지수 + 시장 심리 한마디 표시 |
-| 종목 분석 | `Report.tsx` | 추세 단계(Stage 분류) + 강세 후보 발굴(차트 스크리닝) 결과. 날짜 범위 선택(오늘/-3일/-1주/-2주/-1달)으로 이력 조회 가능. 종목 클릭 시 우측 패널 분할(55%/45%)로 Stage·스크리너 이력 표시; 같은 종목 재클릭 또는 날짜 변경 시 패널 닫힘. 768px 이하 모바일에서는 세로 스택 전환. 섹션 헤더 ⓘ 호버 시 기능 설명 팝업 |
-| Top | `Top.tsx` | 당일 거래대금 상위 20종목. Kiwoom ka10032 API, 5분 캐시 |
+| 히트맵 | `Heatmap.tsx` | 당일 거래대금 상위 50종목(Kiwoom ka10032). Stage 분류 결과 오버레이. 장 마감 시 `aftermarket_snap` 합산(KRX+NXT) 거래대금 기준으로 전환, 헤더에 "전일 합산" 배지 표시. 5분 갱신(장 마감 30분). 상단에 `MarketSummaryBanner` — KOSPI/KOSDAQ 지수 + 시장 심리 한마디 표시. Kiwoom 실패 시 Stage 분류 데이터로 폴백. |
+| 종목 분석 | `Report.tsx` | 추세 단계(Stage 분류) + 강세 후보 발굴(차트 스크리닝) 결과. 날짜 범위 선택(오늘/-3일/-1주/-2주/-1달)으로 이력 조회 가능. 종목 클릭 시 우측 패널 분할로 Stage·스크리너 이력 표시; 같은 종목 재클릭 또는 날짜 변경 시 패널 닫힘. 모바일에서는 세로 스택 전환. 섹션 헤더 ⓘ 호버 시 기능 설명 팝업. |
+| Top | `Top.tsx` | 당일 거래대금 상위 50종목(Kiwoom ka10032). EPS·PER·Forward PER(Naver Finance) 표시. 장 마감 시 `aftermarket_snap` 합산(KRX+NXT) 거래대금 기준으로 전환, "전일 합산" 배지 표시. 5분 캐시(장 마감 30분). |
 | 모의투자 | `PaperPortfolio.tsx` | 모델별 요약 + 실시간 포지션(60s 갱신) + 청산 이력 + CSV 다운로드(포지션 헤더 버튼) + 스케줄러 컨트롤. 모델 카드 클릭으로 포지션 필터링 |
 | 매크로 | `Macro.tsx` | OLS 팩터 모델 — 6개 팩터(USD/KRW·미국10년금리·브렌트유·VIX·달러인덱스·아이셰어즈 대한민국 ETF(EWY)) 추적. 종목별 분석 대상은 오늘 거래대금 상위 20종목(히트맵 기준), 없으면 전날 aftermarket_snap TOP 20. 결과는 거래대금 순 정렬 |
 | 시그널 (우측 패널/모바일) | `SignalFeed.tsx` | 실시간 매매 신호 SSE 스트림. 15초 폴링 |
@@ -45,7 +45,7 @@ PostgreSQL (Supabase)
 
 ### GET /api/heatmap
 
-당일 거래대금 상위 50종목(Kiwoom ka10032)의 히트맵 데이터를 반환합니다. Stage 분류 결과와 무관하게 항상 채워집니다. Kiwoom 응답 실패 시 Stage 분류 데이터로 폴백합니다.
+당일 거래대금 상위 50종목의 히트맵 데이터를 반환합니다. 장 중에는 Kiwoom ka10032 실시간 데이터(KRX+NXT 합산), 장 마감 시에는 `aftermarket_snap`의 `reg_value`(KRX) + `after_value`(NXT) 합산 기준으로 전환합니다. Kiwoom 응답 실패 시 Stage 분류 데이터로 폴백합니다.
 
 **응답:**
 ```json
@@ -60,18 +60,21 @@ PostgreSQL (Supabase)
       "market": "KOSPI"
     }
   ],
-  "cached": false
+  "cached": false,
+  "is_aftermarket": false
 }
 ```
 
 | 필드 | 타입 | 설명 |
 |------|------|------|
-| `amount` | float | 당일 실제 거래대금(Kiwoom). 셀 크기 결정 |
-| `change_pct` | float | 당일 등락률(%). Kiwoom 실시간 기준 |
+| `amount` | float | 거래대금(장 중: ka10032 KRX+NXT 합산, 장 마감: `reg_value`+`after_value` 합산) |
+| `change_pct` | float | 등락률(장 중: 당일 실시간, 장 마감: NXT 시간외 등락률) |
 | `stage` | int\|null | Stage 1/2/3 또는 `null`(미분류) |
-| `cached` | bool | 5분 캐시 히트 여부 |
+| `market` | string | `"KOSPI"` / `"KOSDAQ"` / `""` |
+| `cached` | bool | 캐시 히트 여부 |
+| `is_aftermarket` | bool | `true` = 장 마감 합산 데이터 사용 중 ("전일 합산" 배지) |
 
-**캐시:** 5분(`_HEATMAP_TTL = 300`).
+**캐시:** 장 중 5분(`_PRICE_TTL`), 장 마감 30분(`_AFTERMARKET_TTL`).
 
 ---
 
@@ -211,19 +214,57 @@ data: [{"id": 123, "direction": "BUY", "strength": 4, ...}]
 
 ### GET /api/top
 
-당일 거래대금 상위 N종목. Kiwoom ka10032 API, 5분 캐시.
+거래대금 상위 N종목. 장 중: Kiwoom ka10032 실시간(KRX+NXT 합산), 장 마감: `aftermarket_snap` 합산(`reg_value`+`after_value`) 기준. EPS·PER·Forward PER는 Naver Finance에서 병렬 조회.
 
-**쿼리 파라미터:** `?n=20` (기본값 20, 최대 50)
+**쿼리 파라미터:** `?n=50` (기본값 50, 최대 100) · `?refresh=true` (캐시 강제 갱신)
 
 ```json
 {
-  "data": [
-    {"rank": 1, "ticker": "000660.KS", "name": "SK하이닉스",
-     "close": 185000, "change_pct": 1.5, "volume": 2345678,
-     "amount": 4.3e11, "market": "KOSPI"}
-  ]
+  "items": [
+    {
+      "rank": 1,
+      "ticker": "000660.KS",
+      "name": "SK하이닉스",
+      "price": 185000,
+      "change_pct": 1.5,
+      "amount": 430000000000,
+      "market": "KOSPI",
+      "eps": 12345,
+      "per": 15.0,
+      "forward_per": 12.3
+    }
+  ],
+  "fetched_at": "14:32:11",
+  "is_aftermarket": false
 }
 ```
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| `price` | int | 현재가(장 중: 실시간, 장 마감: NXT 시간외 체결가) |
+| `change_pct` | float | 등락률(%) |
+| `amount` | int | 거래대금(원)(장 중: KRX+NXT 합산, 장 마감: `reg_value`+`after_value`) |
+| `eps` | int\|null | 주당순이익(Naver Finance) |
+| `per` | float\|null | PER(Naver Finance, Trailing) |
+| `forward_per` | float\|null | 예상 PER(Naver Finance) |
+| `fetched_at` | string | 조회 시각(장 중: HH:MM:SS, 장 마감: YYYY-MM-DD) |
+| `is_aftermarket` | bool | `true` = 장 마감 합산 데이터 ("전일 합산" 배지) |
+
+**캐시:** 장 중 5분, 장 마감 30분.
+
+#### aftermarket_snap 테이블 (장 마감 데이터 소스)
+
+`kiwoom_aftermarket_sync.py --incremental` (16:05 KST 실행)으로 수집.
+
+| 컬럼 | 설명 |
+|------|------|
+| `reg_close` | 정규장 종가 |
+| `after_close` | NXT 시간외 체결가 |
+| `after_value` | NXT 시간외 누적 거래대금 (원) |
+| `reg_value` | KRX+NXT 합산 거래대금 (ka10032 기준, 원). NULL이면 after_value만 사용 |
+| `after_chg_pct` | NXT 시간외 등락률 (%) |
+
+`reg_value`는 `kiwoom_aftermarket_sync.py` 실행 시 `ka10032`(거래대금상위, `stex_tp=3`)를 호출해 당일 최종 합산 거래대금을 매칭 저장합니다. ka10032 top500 이외 종목은 NULL.
 
 ---
 
@@ -442,10 +483,10 @@ uvicorn main:app --port 8000
 
 768px 이하에서 다음과 같이 작동합니다:
 
-- 데스크탑 레이아웃(`app-desktop-layout`) 숨김
+- 데스크탑 레이아웃 숨김
 - 하단 탭바(`MobileNav`) 표시 — 히트맵·종목 분석·Top·모의투자·시그널 5탭
 - 탭별 컴포넌트가 전체 화면을 차지
-- 히트맵은 `.heatmap-root` CSS 클래스로 명시적 높이 부여(`100svh - 42px - 56px`) — `ResponsiveTreeMap`이 높이를 필요로 하기 때문
+- 히트맵은 `ResponsiveTreeMap`의 높이 요구 충족을 위해 명시적 높이 지정(스타일 규칙은 `DESIGN.md` 참조)
 
 ---
 
