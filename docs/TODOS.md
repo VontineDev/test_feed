@@ -517,6 +517,36 @@ Stage 2 conditions to replay:
 
 ---
 
+## P3: YouTube 내러티브 — fill_forward_returns 배치 처리 개선
+
+**What:** `fill_forward_returns()`를 현재의 per-row commit 루프에서 단일 배치 upsert로 변경.
+130줄 함수를 `_calc_returns()` + `_upsert_forward_return()` 헬퍼로 분리.
+
+**Why:** pre-landing review에서 발견. 현재 루프는 종목당 개별 `commit()`을 호출해
+N회 트랜잭션이 발생. `save_mentions()` / `compute_attention_scores()`의 배치 패턴과 불일치.
+
+**Effort:** S (human: ~30min / CC: ~15min)
+**Priority:** P3
+**Depends on:** 없음
+
+---
+
+## P3: YouTube 내러티브 — 매직 넘버 상수화
+
+**What:** `youtube_narrative_sync.py`의 인라인 리터럴을 모듈 레벨 상수로 추출.
+- `8000` → `_MAX_TRANSCRIPT_CHARS = 8000` (Gemini 토큰 상한)
+- `4` → `_GEMINI_RPM_SLEEP = 4.0` (free-tier 15 RPM 대응)
+- `500` → `_FILL_RETURNS_BATCH = 500` (per-call 처리 행 수)
+
+**Why:** pre-landing review에서 발견. 숫자만으로는 조정 의도를 알기 어렵고
+변경 시 같은 값을 두 곳에서 수정해야 하는 위험 있음.
+
+**Effort:** XS (human: ~5min / CC: ~5min)
+**Priority:** P3
+**Depends on:** 없음
+
+---
+
 ## P3: D+10 retirement notice in watchlist brief
 
 **What:** When a ticker's `days_since == 10` (its last tracking day), add a "[마지막 추적일]" marker in the brief and a closing line summarizing the final status.

@@ -18,6 +18,7 @@ from data.youtube_narrative_sync import (
     _prev_business_days,
     normalize_ticker,
 )
+from scripts.collect_transcripts import _parse_json3
 
 
 # ── normalize_ticker ──────────────────────────────────
@@ -63,6 +64,16 @@ class TestNormalizeTicker:
         aliases = {}
         master = {"삼성전자": "005930"}
         assert normalize_ticker("  삼성전자  ", master, aliases) == "005930"
+
+    def test_empty_string_returns_none(self):
+        """빈 문자열 → None (k.startswith('') 항상 True 버그 방지)."""
+        master = {"삼성전자": "005930"}
+        assert normalize_ticker("", master, {}) is None
+
+    def test_whitespace_only_returns_none(self):
+        """공백만 있는 입력 → None."""
+        master = {"삼성전자": "005930"}
+        assert normalize_ticker("   ", master, {}) is None
 
 
 # ── _prev_business_days ───────────────────────────────
@@ -177,20 +188,7 @@ class TestLoadAliases:
             mod._ALIASES_PATH = original
 
 
-# ── _parse_json3 (via inline copy — module has sys.exit guard) ──
-
-
-def _parse_json3(text: str) -> str:
-    """YouTube json3 자막 → 텍스트 (테스트용 인라인 복사)."""
-    data = json.loads(text)
-    events = data.get("events", [])
-    parts = []
-    for ev in events:
-        for seg in ev.get("segs", []):
-            t = seg.get("utf8", "").replace("\n", " ").strip()
-            if t:
-                parts.append(t)
-    return " ".join(parts).strip()
+# ── _parse_json3 ──────────────────────────────────────
 
 
 class TestParseJson3:

@@ -43,8 +43,6 @@ import os
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
-
 import psycopg2
 import psycopg2.extras
 
@@ -224,9 +222,24 @@ def extract_mentions(transcript: str, gemini_api_key: str) -> list[dict]:
             if text.startswith("json"):
                 text = text[4:]
         mentions = json.loads(text)
-        # source_quote 없는 레코드 폐기
-        valid = [m for m in mentions if m.get("source_quote", "").strip()]
-        return valid
+        if not isinstance(mentions, list):
+            return []
+        _VALID_DIRECTIONS = {"buy", "sell", "neutral"}
+        _VALID_HORIZONS = {"short", "mid", "long", "unknown"}
+        result = []
+        for m in mentions:
+            if not m.get("source_quote", "").strip():
+                continue
+            d = m.get("direction", "neutral")
+            h = m.get("horizon", "unknown")
+            if d not in _VALID_DIRECTIONS:
+                logger.warning("[yt-sync] LLM 비정상 direction=%r → neutral로 대체", d)
+                m["direction"] = "neutral"
+            if h not in _VALID_HORIZONS:
+                logger.warning("[yt-sync] LLM 비정상 horizon=%r → unknown으로 대체", h)
+                m["horizon"] = "unknown"
+            result.append(m)
+        return result
     except Exception as e:
         logger.warning("[yt-sync] LLM 추출 실패: %s", e)
         return []
@@ -263,6 +276,8 @@ def _load_ticker_master() -> dict[str, str]:
 def normalize_ticker(name_raw: str, master: dict[str, str], aliases: dict[str, str]) -> str | None:
     """종목명 → 6자리 KRX 코드. 매핑 실패 시 None."""
     name = name_raw.strip()
+    if not name:
+        return None
     if name in aliases:
         return aliases[name]
     if name in master:

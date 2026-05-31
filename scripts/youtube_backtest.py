@@ -39,6 +39,7 @@ def _connect():
 
 
 _VALID_RET_COLS = {"ret_1d", "ret_5d", "ret_20d"}
+_RET_COL_SQL = {c: f"fr.{c}" for c in _VALID_RET_COLS}
 
 
 def run_backtest(ret_col: str = "ret_5d", min_samples: int = 100) -> dict:
@@ -47,6 +48,7 @@ def run_backtest(ret_col: str = "ret_5d", min_samples: int = 100) -> dict:
     from scipy import stats
     import statistics
 
+    col_expr = _RET_COL_SQL[ret_col]
     conn = _connect()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -57,14 +59,14 @@ def run_backtest(ret_col: str = "ret_5d", min_samples: int = 100) -> dict:
                     r.direction,
                     r.video_date,
                     a.attention_score,
-                    fr.{ret_col}        AS forward_ret
+                    {col_expr}        AS forward_ret
                 FROM   youtube_mention_raw r
                 JOIN   youtube_mention_forward_returns fr ON fr.mention_id = r.id
                 LEFT JOIN youtube_attention_scores a
                     ON  a.ticker     = r.ticker
                     AND a.window_end = r.video_date
                 WHERE  r.ticker IS NOT NULL
-                  AND  fr.{ret_col} IS NOT NULL
+                  AND  {col_expr} IS NOT NULL
             """)
             rows = cur.fetchall()
     finally:
@@ -124,7 +126,6 @@ def run_backtest(ret_col: str = "ret_5d", min_samples: int = 100) -> dict:
             print(f"  {direction:8s}: n={len(vals):4d}  avg={mean:+.4f} ({mean*100:+.2f}%)")
 
     # ── 종목별 히트율 (상위 10) ───────────────────────
-    from collections import defaultdict
     ticker_hits: dict[str, list] = defaultdict(list)
     for r in rows:
         if r["ticker"] and r["direction"] == "buy":
