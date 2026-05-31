@@ -804,10 +804,11 @@ async def main(interval: int, enable_summary: bool) -> None:
         misfire_grace_time=3600,
         replace_existing=True,
     )
-    # ── YouTube attention_score 집계: 평일 09:10 KST (00:10 UTC) ───
+    # ── YouTube attention_score 집계: 평일 09:35 KST (00:35 UTC) ───
+    # sync 잡(09:05) 대비 30분 여유 — 삼프로TV 15개 영상 × 4s/Gemini ≈ 60~120s
     scheduler.add_job(
         _youtube_attention_score_job,
-        CronTrigger(day_of_week="mon-fri", hour=0, minute=10, timezone="UTC"),  # = 09:10 KST
+        CronTrigger(day_of_week="mon-fri", hour=0, minute=35, timezone="UTC"),  # = 09:35 KST
         id="youtube_attention_score",
         max_instances=1,
         misfire_grace_time=3600,

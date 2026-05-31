@@ -491,7 +491,7 @@ KOSPI/KOSDAQ 지수 현재가 + 등락률을 반환합니다. KRX OpenAPI + yfin
 | 시각 (KST) | 잡 | 대상 테이블 | 설명 |
 |-----------|-----|------------|------|
 | 09:05 | `youtube_narrative_sync_job` | `youtube_mention_raw` | 삼프로TV 전일 영상 → LLM 종목 언급 추출 |
-| 09:10 | `youtube_attention_score_job` | `youtube_attention_scores` | 5영업일 롤링 attention_score 집계 |
+| 09:35 | `youtube_attention_score_job` | `youtube_attention_scores` | 5영업일 롤링 attention_score 집계 |
 | 15:40 | `youtube_forward_return_job` | `youtube_mention_forward_returns` | 언급 종목 +1d/+5d/+20d 수익률 채우기 |
 | 16:05 | `daily_aftermarket_sync_job` | `aftermarket_snap` | NXT 시간외 단일가 종목 수집 (`--incremental`) |
 | 16:10 | `daily_market_snap_job` | `daily_market_snap` | ka10032 top100 최종 스냅샷 저장 |

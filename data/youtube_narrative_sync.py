@@ -78,11 +78,14 @@ CREATE TABLE IF NOT EXISTS youtube_attention_scores (
     ticker            VARCHAR(12)  NOT NULL,
     window_end        DATE         NOT NULL,
     mention_count     INT,
-    sentiment_weighted NUMERIC(7,3),
-    attention_score   NUMERIC(6,4),
+    sentiment_weighted NUMERIC(10,3),
+    attention_score   NUMERIC(10,4),
     distinct_videos   INT,
     PRIMARY KEY (ticker, window_end)
 );
+ALTER TABLE youtube_attention_scores
+    ALTER COLUMN sentiment_weighted TYPE NUMERIC(10,3),
+    ALTER COLUMN attention_score    TYPE NUMERIC(10,4);
 CREATE INDEX IF NOT EXISTS idx_yt_attn_window ON youtube_attention_scores (window_end DESC);
 
 CREATE TABLE IF NOT EXISTS youtube_mention_forward_returns (
@@ -310,7 +313,7 @@ def save_mentions(dsn: str, records: list[dict]) -> int:
                         r["video_id"], r["video_date"], r.get("speaker"),
                         r["stock_name_raw"], r.get("ticker"),
                         r.get("direction"), r.get("horizon"),
-                        r.get("rationale_summary"), r["source_quote"],
+                        r.get("rationale_summary"), r["source_quote"][:500],
                     )
                     for r in records
                 ],
@@ -585,7 +588,13 @@ if __name__ == "__main__":
         n = run_sync(dsn, api_key, gemini_key, from_date, to_date)
         logger.info("[yt-sync] 백필 완료: 총 %d건 저장", n)
         fill_forward_returns(dsn)
-        compute_attention_scores(dsn)
+        # 백테스트 SQL이 ON window_end = video_date 조인이므로
+        # 각 날짜마다 attention_score를 개별 집계해야 함
+        current = from_date
+        while current <= to_date:
+            compute_attention_scores(dsn, window_end=current)
+            current += timedelta(days=1)
+        logger.info("[yt-sync] attention_score 집계 완료: %s ~ %s", from_date, to_date)
 
     else:
         # 운영 모드: 전일 업로드 수집
