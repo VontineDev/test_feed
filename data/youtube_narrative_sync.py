@@ -537,7 +537,20 @@ if __name__ == "__main__":
     parser.add_argument("--compute-scores", action="store_true", help="attention_score 집계만")
     args = parser.parse_args()
 
-    dsn         = _get_env("DATABASE_URL")
+    # .env를 스크립트 위치 기준으로 명시적 로드 (백그라운드 실행 대응)
+    _root = Path(__file__).parent.parent
+    try:
+        from dotenv import load_dotenv as _ldenv
+        _ldenv(_root / ".env", override=True)
+    except ImportError:
+        pass
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(_root))
+        from core.db import get_dsn as _get_dsn
+        dsn = _get_dsn()
+    except Exception:
+        dsn = _get_env("DATABASE_URL")
     api_key     = _get_env("YOUTUBE_API_KEY")
     gemini_key  = _get_env("GEMINI_API_KEY")
 
