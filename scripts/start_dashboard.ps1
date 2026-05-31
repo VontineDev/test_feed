@@ -1,4 +1,4 @@
-# start_dashboard.ps1 — 대시보드 백엔드 시작/재시작 (단일 진입점)
+﻿# start_dashboard.ps1 — 대시보드 백엔드 시작/재시작 (단일 진입점)
 # 용도: 수동 실행 및 재시작. 자동 시작은 Task Scheduler(TradingDashboard)가 담당.
 # 실행: .\scripts\start_dashboard.ps1
 
