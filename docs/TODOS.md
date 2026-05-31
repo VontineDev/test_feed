@@ -50,6 +50,7 @@ forward return은 `youtube_forward_return_job` (15:40 KST)이 자동 채움.
 **Effort:** XS (human: ~5min / CC: ~5min)
 **Priority:** P2
 **Depends on:** 블라인드 백테스트 실행 후
+**Completed:** v0.10.0.0 (2026-06-01)
 
 ---
 

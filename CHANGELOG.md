@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0.0] - 2026-06-01
+
+### Added
+- YouTube 내러티브 파이프라인: 삼프로TV 자막 수집 → Gemini 2.5 Flash LLM 종목 언급 추출 → `youtube_mention_raw` 저장
+- 5영업일 롤링 `attention_score` 집계 (`youtube_attention_scores`)
+- 언급 종목 +1d/+5d/+20d forward return 자동 채우기 (`youtube_mention_forward_returns`)
+- 블라인드 백테스트 스크립트 (`scripts/youtube_backtest.py`): Spearman IC / t-stat / 종목 히트율 산출
+- 스케줄러 3개 잡 등록: 09:05 수집, 09:35 집계, 15:40 수익률 (KST 기준)
+- `data/youtube_ticker_aliases.json`: 100개 한국어 약칭 → KRX 코드 수동 매핑 테이블
+- `--backfill`, `--ensure-tables`, `--fill-returns`, `--compute-scores` CLI 플래그
+- 순수 로직 단위 테스트: `normalize_ticker`, `_prev/_next_business_day`, `_get_env`, `_load_aliases`, `_parse_json3` (26 cases)
+
+### Fixed
+- `youtube_backtest.py`: `ret_col` f-string SQL 인젝션 패턴 → dict 조회 방식으로 교체
+- `extract_mentions()`: LLM이 dict 반환 시 AttributeError 크래시 → isinstance 가드 추가
+- `extract_mentions()`: `direction`/`horizon` 비정상 값 경고 로그 후 기본값으로 대체
+- `normalize_ticker()`: 빈 문자열 입력 시 첫 번째 종목 반환 버그 → None 반환으로 수정
+- `kiwoom_aftermarket_sync.py`: `trde_prica` 누락 필드 시 행 스킵 버그 수정 (명시적 0만 스킵)
+- `--backfill` 백테스트용 날짜별 `attention_score` 집계 누락 수정 (IC 항상 NULL 방지)
+- `source_quote` 500자 truncation으로 PostgreSQL B-tree 인덱스 크기 초과 방지
+- `attention_score` 컬럼 `NUMERIC(6,4)` → `NUMERIC(10,4)` 오버플로우 방지
+- `youtube_attention_score_job` 스케줄 09:10 → 09:35 KST (sync 완료 대기 여유 확보)
+
 ## [0.9.9.6] - 2026-05-28
 
 ### Added
