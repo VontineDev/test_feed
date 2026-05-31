@@ -38,7 +38,12 @@ def _connect():
     return psycopg2.connect(dsn)
 
 
+_VALID_RET_COLS = {"ret_1d", "ret_5d", "ret_20d"}
+
+
 def run_backtest(ret_col: str = "ret_5d", min_samples: int = 100) -> dict:
+    if ret_col not in _VALID_RET_COLS:
+        raise ValueError(f"Invalid ret_col: {ret_col!r}. Must be one of {_VALID_RET_COLS}")
     from scipy import stats
     import statistics
 
@@ -79,6 +84,8 @@ def run_backtest(ret_col: str = "ret_5d", min_samples: int = 100) -> dict:
         return {"n": len(rows), "ic": None}
 
     # ── 전체 IC ───────────────────────────────────────
+    import math
+    ic = pval = t_stat = None
     scores = []
     rets   = []
     for r in rows:
@@ -91,14 +98,16 @@ def run_backtest(ret_col: str = "ret_5d", min_samples: int = 100) -> dict:
     else:
         ic, pval = stats.spearmanr(scores, rets)
         n = len(scores)
-        # t-stat (단측)
-        import math
-        t_stat = ic * math.sqrt(n - 2) / math.sqrt(max(1 - ic**2, 1e-9))
-        print(f"\n[IC 분석] n={n}")
-        print(f"  Spearman IC : {ic:+.4f}")
-        print(f"  t-stat      : {t_stat:+.2f}")
-        print(f"  p-value     : {pval:.4f}")
-        _verdict(ic, abs(t_stat), n)
+        if math.isnan(ic):
+            print("  IC = NaN (점수가 모두 동일 — 분산 없음). 데이터 품질 확인 필요.")
+            ic = pval = None
+        else:
+            t_stat = ic * math.sqrt(n - 2) / math.sqrt(max(1 - ic**2, 1e-9))
+            print(f"\n[IC 분석] n={n}")
+            print(f"  Spearman IC : {ic:+.4f}")
+            print(f"  t-stat      : {t_stat:+.2f}")
+            print(f"  p-value     : {pval:.4f}")
+            _verdict(ic, abs(t_stat), n)
 
     # ── direction별 평균 return ───────────────────────
     from collections import defaultdict
@@ -133,12 +142,7 @@ def run_backtest(ret_col: str = "ret_5d", min_samples: int = 100) -> dict:
 
     print(f"\n{'='*55}\n")
 
-    result = {
-        "n": len(rows),
-        "ic": ic if len(scores) >= 10 else None,
-        "t_stat": t_stat if len(scores) >= 10 else None,
-        "pval": pval if len(scores) >= 10 else None,
-    }
+    result = {"n": len(rows), "ic": ic, "t_stat": t_stat, "pval": pval}
     return result
 
 

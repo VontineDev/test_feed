@@ -490,7 +490,7 @@ KOSPI/KOSDAQ 지수 현재가 + 등락률을 반환합니다. KRX OpenAPI + yfin
 
 | 시각 (KST) | 잡 | 대상 테이블 | 설명 |
 |-----------|-----|------------|------|
-| 09:05 | `youtube_narrative_sync_job` | `youtube_video_catalog`, `youtube_stock_mentions` | 삼프로TV 전일 영상 → LLM 종목 언급 추출 |
+| 09:05 | `youtube_narrative_sync_job` | `youtube_mention_raw` | 삼프로TV 전일 영상 → LLM 종목 언급 추출 |
 | 09:10 | `youtube_attention_score_job` | `youtube_attention_scores` | 5영업일 롤링 attention_score 집계 |
 | 15:40 | `youtube_forward_return_job` | `youtube_mention_forward_returns` | 언급 종목 +1d/+5d/+20d 수익률 채우기 |
 | 16:05 | `daily_aftermarket_sync_job` | `aftermarket_snap` | NXT 시간외 단일가 종목 수집 (`--incremental`) |
@@ -517,8 +517,7 @@ YouTube Data API v3 → 영상 목록
 
 | 테이블 | 설명 |
 |--------|------|
-| `youtube_video_catalog` | 수집 영상 목록 (video_id, title, published_at, processed_at) |
-| `youtube_stock_mentions` | LLM 추출 종목 언급 (ticker, direction: buy/sell/neutral, horizon, rationale_summary, source_quote) |
+| `youtube_mention_raw` | 수집 영상별 종목 언급 (video_id, video_date, ticker, direction: buy/sell/neutral, horizon, rationale_summary, source_quote) |
 | `youtube_attention_scores` | 5영업일 롤링 attention_score, 영상 수 가중 평균 |
 | `youtube_mention_forward_returns` | 언급 종목 +1d/+5d/+20d 수익률 — 블라인드 백테스트 재료 |
 

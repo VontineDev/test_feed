@@ -392,7 +392,7 @@ def fill_forward_returns(dsn: str) -> int:
                 LEFT JOIN youtube_mention_forward_returns fr ON fr.mention_id = r.id
                 WHERE  r.ticker IS NOT NULL
                   AND  fr.mention_id IS NULL
-                ORDER  BY r.video_date
+                ORDER  BY r.video_date DESC
                 LIMIT  500
             """)
             rows = cur.fetchall()
@@ -481,6 +481,7 @@ def run_sync(
             continue
 
         mentions = extract_mentions(transcript, gemini_key)
+        time.sleep(4)  # Gemini free tier: 15 RPM → 4초/건
         if not mentions:
             continue
 
@@ -502,7 +503,6 @@ def run_sync(
         n = save_mentions(dsn, records)
         total_saved += n
         logger.info("[yt-sync]   -> %d/%d건 저장", n, len(records))
-        time.sleep(0.5)  # API rate limit 방어
 
     return total_saved
 
