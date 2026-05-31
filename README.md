@@ -87,6 +87,8 @@ data/                     # 데이터 수집·동기화
   krx_aftermarket_sync.py # KRX 장후 데이터 동기화
   kiwoom_aftermarket_sync.py  # Kiwoom REST API 클라이언트
   kiwoom_paper_trader.py  # 모의투자 Kiwoom 연동
+  youtube_narrative_sync.py   # 삼프로TV 자막 수집 → Gemini LLM 종목 언급 추출 → attention_score
+  youtube_ticker_aliases.json # 한국어 종목명 약칭 → KRX 코드 수동 매핑 (100개)
 
 analysis/                 # 분석·전략
   signal_detector.py      # LLM 매매 신호 감지
@@ -110,7 +112,7 @@ dashboard/                # 웹 대시보드 (FastAPI + React)
   backend/                # FastAPI 서버 (포트 8000)
   frontend/               # React + Vite (dist/ 정적 빌드)
 
-tests/                    # pytest 테스트 (601개)
+tests/                    # pytest 테스트 (622개)
 docs/                     # 문서
 scripts/                  # 운영 스크립트
   start_dashboard.ps1     # 대시보드 서버 시작/재시작 (단일 진입점)
@@ -119,6 +121,7 @@ scripts/                  # 운영 스크립트
   duckdns_update.bat      # DuckDNS IP 업데이트
   restart_scheduler.bat   # Windows 작업 스케줄러 NewsCrawler 재시작
   run_sweep.py            # 백테스트 파라미터 그리드서치
+  youtube_backtest.py     # YouTube 내러티브 블라인드 백테스트 — Spearman IC / 종목 히트율
   register_tasks.ps1      # Windows 작업 스케줄러 통합 등록 (-Task all|crawler|aftermarket|dashboard)
   start_dashboard_service.bat  # 대시보드 서비스 래퍼 (Task Scheduler용)
 sql/                      # DB 스키마 마이그레이션
@@ -192,6 +195,7 @@ pytest tests/test_watchlist_brief.py -v
 - [docs/HowToBacktest.md](docs/HowToBacktest.md) — 통합 백테스트 엔진 사용 가이드
 - [docs/Dashboard.md](docs/Dashboard.md) — 웹 대시보드 개발·배포 가이드
 - [docs/HTTPS-Setup.md](docs/HTTPS-Setup.md) — Caddy HTTPS 설정 (Let's Encrypt + DuckDNS)
+- [docs/youtube_narrative_screening_concept.md](docs/youtube_narrative_screening_concept.md) — YouTube 내러티브 스크리닝 설계 개념·블라인드 백테스트 프로토콜
 
 **레퍼런스**
 - [docs/reference-env-vars.md](docs/reference-env-vars.md) — 환경변수 전체 목록

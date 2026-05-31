@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [0.10.0.0] - 2026-06-01
 
 ### Added
-- YouTube 내러티브 파이프라인: 삼프로TV 자막 수집 → Gemini 2.5 Flash LLM 종목 언급 추출 → `youtube_mention_raw` 저장
+- **YouTube 내러티브 스크리닝**: 삼프로TV 전문가 멘션을 정량 신호로 전환할 수 있습니다. 자막 수집(YouTube Data API v3) → Gemini 2.5 Flash 종목 언급 추출 → `youtube_mention_raw` 저장
 - 5영업일 롤링 `attention_score` 집계 (`youtube_attention_scores`)
 - 언급 종목 +1d/+5d/+20d forward return 자동 채우기 (`youtube_mention_forward_returns`)
 - 블라인드 백테스트 스크립트 (`scripts/youtube_backtest.py`): Spearman IC / t-stat / 종목 히트율 산출

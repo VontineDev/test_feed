@@ -139,6 +139,19 @@ Caddy basicauth와 병행 사용하지 마세요. 두 인증 레이어가 충돌
 
 ---
 
+## YouTube 내러티브 스크리닝
+
+삼프로TV 자막 수집·LLM 추출 파이프라인(`data/youtube_narrative_sync.py`). 세 변수 모두 설정 시 활성화.
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `YOUTUBE_API_KEY` | *(없음)* | [Google Cloud Console](https://console.cloud.google.com) YouTube Data API v3 키. 삼프로TV 영상 목록 수집에 사용. 미설정 시 `youtube_narrative_sync_job`이 조기 종료 |
+| `GEMINI_API_KEY` | *(없음)* | [Google AI Studio](https://aistudio.google.com) Gemini API 키. 자막 → 종목 언급 JSON 추출에 사용. Gemini 2.5 Flash 모델. 미설정 시 `youtube_narrative_sync_job`이 조기 종료 |
+
+두 키 모두 무료 등급으로 운영 가능합니다. YouTube Data API는 일일 할당량 10,000 units (영상 목록 조회 기준 약 100회), Gemini Free Tier는 분당 15 요청(15 RPM) 제한이 있어 `youtube_narrative_sync.py`가 영상당 4초 대기를 삽입합니다.
+
+---
+
 ## 빠른 진단
 
 환경변수가 제대로 로드되었는지 확인:
