@@ -484,15 +484,64 @@ KOSPI/KOSDAQ 지수 현재가 + 등락률을 반환합니다. KRX OpenAPI + yfin
 
 ---
 
-## 장 마감 데이터 수집 스케줄
+## 데이터 수집 스케줄
+
+`run_scheduler.py`에 평일(mon-fri)로 등록된 주요 잡.
 
 | 시각 (KST) | 잡 | 대상 테이블 | 설명 |
 |-----------|-----|------------|------|
+| 09:05 | `youtube_narrative_sync_job` | `youtube_video_catalog`, `youtube_stock_mentions` | 삼프로TV 전일 영상 → LLM 종목 언급 추출 |
+| 09:10 | `youtube_attention_score_job` | `youtube_attention_scores` | 5영업일 롤링 attention_score 집계 |
+| 15:40 | `youtube_forward_return_job` | `youtube_mention_forward_returns` | 언급 종목 +1d/+5d/+20d 수익률 채우기 |
 | 16:05 | `daily_aftermarket_sync_job` | `aftermarket_snap` | NXT 시간외 단일가 종목 수집 (`--incremental`) |
 | 16:10 | `daily_market_snap_job` | `daily_market_snap` | ka10032 top100 최종 스냅샷 저장 |
 
-두 잡 모두 `run_scheduler.py`에 평일(mon-fri)로 등록됩니다.  
-16:05 → NXT 거래 종목 보완, 16:10 → 전 종목 KRX+NXT 합산 확정.
+---
+
+## YouTube 내러티브 파이프라인
+
+삼프로TV(채널 ID: `UChlv4GSd7OQl3js-jkLOnFA`) 자막을 LLM으로 분석해 종목 언급·방향성을 추출하고, 5영업일 롤링 `attention_score`를 산출합니다.
+
+### 파이프라인 흐름
+
+```
+YouTube Data API v3 → 영상 목록
+  → youtube-transcript-api → 한국어 자막
+  → Gemini 2.5 Flash LLM → 종목 언급 JSON
+  → youtube_stock_mentions 테이블
+  → 5영업일 롤링 → youtube_attention_scores
+  → 15:40 KST pykrx → youtube_mention_forward_returns (백테스트 재료)
+```
+
+### 테이블 구조
+
+| 테이블 | 설명 |
+|--------|------|
+| `youtube_video_catalog` | 수집 영상 목록 (video_id, title, published_at, processed_at) |
+| `youtube_stock_mentions` | LLM 추출 종목 언급 (ticker, direction: buy/sell/neutral, horizon, rationale_summary, source_quote) |
+| `youtube_attention_scores` | 5영업일 롤링 attention_score, 영상 수 가중 평균 |
+| `youtube_mention_forward_returns` | 언급 종목 +1d/+5d/+20d 수익률 — 블라인드 백테스트 재료 |
+
+### attention_score 계산
+
+```
+attention_score = SUM(sentiment_weight) / distinct_video_count
+  sentiment_weight: buy=1.0, neutral=0.5, sell=0.0
+  rolling window: 5 영업일
+```
+
+### 블라인드 백테스트
+
+방법론을 `git tag backtest-v1-blind`(2026-05-31)로 동결 후 과거 데이터에 적용해 IC(Information Coefficient)를 측정합니다.
+
+합격 기준: **IC(ret_5d) > 0.05 AND t-stat > 1.65 AND 샘플 ≥ 100**
+
+실행 (2026-06-05 이후, ret_5d 확보 시):
+```bash
+python scripts/youtube_backtest.py --ret ret_5d
+```
+
+상세 설계: [유튜브 내러티브 스크리닝 설계 문서](youtube_narrative_screening_concept.md)
 
 ---
 
@@ -558,3 +607,4 @@ uvicorn main:app --port 8000
 - [HTTPS 설정 가이드](HTTPS-Setup.md) — Caddy로 외부 HTTPS 접속 설정
 - [ARCHITECTURE.md](ARCHITECTURE.md) — 전체 시스템 아키텍처
 - [../CHANGELOG.md](../CHANGELOG.md) — 버전별 변경 이력
+- [유튜브 내러티브 스크리닝 설계](youtube_narrative_screening_concept.md) — 삼프로TV LLM 파이프라인 설계 문서
