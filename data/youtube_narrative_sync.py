@@ -51,7 +51,7 @@ import psycopg2.extras
 logger = logging.getLogger(__name__)
 
 # ── 상수 ──────────────────────────────────────────────
-_CHANNEL_ID = "UCnUYZLuoy1rq1aVMwx4aTzw"  # 삼프로TV
+_CHANNEL_ID = "UChlv4GSd7OQl3js-jkLOnFA"  # 삼프로TV 3PROTV
 _ALIASES_PATH = Path(__file__).parent / "youtube_ticker_aliases.json"
 _SENTIMENT_WEIGHT = {"buy": 1.0, "neutral": 0.5, "sell": 0.0}
 _MIN_TRANSCRIPT_LEN = 200  # 자막이 이보다 짧으면 유효하지 않은 것으로 간주
@@ -157,21 +157,22 @@ def fetch_video_list(api_key: str, from_date: date, to_date: date) -> list[dict]
 
 # ── Transcript ────────────────────────────────────────
 def fetch_transcript(video_id: str) -> str | None:
-    """자막 텍스트 반환. 없으면 None."""
+    """자막 텍스트 반환. 없으면 None. (youtube-transcript-api v1.2+)"""
     try:
         from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
-        langs = ["ko", "ko-KR"]
+        api = YouTubeTranscriptApi()
+        # ko 우선, auto-generated 포함 fallback
         try:
-            entries = YouTubeTranscriptApi.get_transcript(video_id, languages=langs)
+            fetched = api.fetch(video_id, languages=["ko", "ko-KR"])
         except NoTranscriptFound:
-            # auto-generated 자막 시도
-            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
             try:
-                t = transcript_list.find_generated_transcript(langs)
-                entries = t.fetch()
+                tlist = api.list(video_id)
+                # 한국어 자동 생성 자막 시도
+                t = tlist.find_generated_transcript(["ko", "ko-KR"])
+                fetched = t.fetch()
             except Exception:
                 return None
-        text = " ".join(e["text"] for e in entries)
+        text = " ".join(s.text for s in fetched)
         if len(text) < _MIN_TRANSCRIPT_LEN:
             return None
         return text
@@ -213,7 +214,7 @@ def extract_mentions(transcript: str, gemini_api_key: str) -> list[dict]:
         client = genai.Client(api_key=gemini_api_key)
         prompt = _EXTRACT_PROMPT + transcript[:8000]  # 토큰 제한 방어
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             contents=prompt,
         )
         text = response.text.strip()
