@@ -521,6 +521,21 @@ async def _weekly_screener_job():
     _screener_tickers = await weekly_screener_job(_db_pool)
 
 
+async def _youtube_narrative_sync_job():
+    from jobs.infra_jobs import youtube_narrative_sync_job
+    await youtube_narrative_sync_job()
+
+
+async def _youtube_attention_score_job():
+    from jobs.infra_jobs import youtube_attention_score_job
+    await youtube_attention_score_job()
+
+
+async def _youtube_forward_return_job():
+    from jobs.infra_jobs import youtube_forward_return_job
+    await youtube_forward_return_job()
+
+
 async def _daily_market_snap_job():
     from jobs.infra_jobs import daily_market_snap_job
     await daily_market_snap_job()
@@ -776,6 +791,36 @@ async def main(interval: int, enable_summary: bool) -> None:
         id="daily_watchlist_brief",
         max_instances=1,
         misfire_grace_time=3600,
+        replace_existing=True,
+    )
+    # ── YouTube 내러티브 수집: 평일 09:05 KST (00:05 UTC) ──────────
+    # 전일 삼프로TV 업로드 → LLM 추출 → youtube_mention_raw
+    # YOUTUBE_API_KEY / GEMINI_API_KEY 미설정 시 잡이 자동으로 건너뜀
+    scheduler.add_job(
+        _youtube_narrative_sync_job,
+        CronTrigger(day_of_week="mon-fri", hour=0, minute=5, timezone="UTC"),  # = 09:05 KST
+        id="youtube_narrative_sync",
+        max_instances=1,
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+    # ── YouTube attention_score 집계: 평일 09:35 KST (00:35 UTC) ───
+    # sync 잡(09:05) 대비 30분 여유 — 삼프로TV 15개 영상 × 4s/Gemini ≈ 60~120s
+    scheduler.add_job(
+        _youtube_attention_score_job,
+        CronTrigger(day_of_week="mon-fri", hour=0, minute=35, timezone="UTC"),  # = 09:35 KST
+        id="youtube_attention_score",
+        max_instances=1,
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+    # ── YouTube forward return 채우기: 평일 15:40 KST (06:40 UTC) ──
+    scheduler.add_job(
+        _youtube_forward_return_job,
+        CronTrigger(day_of_week="mon-fri", hour=6, minute=40, timezone="UTC"),  # = 15:40 KST
+        id="youtube_forward_return",
+        max_instances=1,
+        misfire_grace_time=1800,
         replace_existing=True,
     )
     # ── 당일 최종 스냅샷: 평일 16:10 KST (07:10 UTC) ─────────────

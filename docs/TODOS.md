@@ -4,6 +4,89 @@ Items deferred from code review and planning sessions.
 
 ---
 
+## P1: YouTube 내러티브 — 블라인드 백테스트 실행 (6/5 이후)
+
+**What:** `python scripts/youtube_backtest.py --ret ret_5d` 실행.
+
+**When:** 2026-05-29 데이터의 +5영업일 = 2026-06-05(금) 이후.
+forward return은 `youtube_forward_return_job` (15:40 KST)이 자동 채움.
+
+**합격 기준:**
+- IC(ret_5d) > 0.05 AND t-stat > 1.65 AND 샘플 ≥ 100
+- 합격 → `attention_score`를 `effective_confidence`에 낮은 가중치로 편입
+- IC 음수 → 역지표(청산 경계 신호)로 재설계
+- IC ≈ 0 → 채널 교체 or 전처리 개선 후 v2 재검증
+
+**Effort:** XS (human: ~5min / CC: ~2min)
+**Priority:** P1
+**Depends on:** 스케줄러 운영 중 (forward return 자동 누적)
+
+---
+
+## P1: YouTube 내러티브 — 스케줄러 재시작으로 운영 시작
+
+**What:** `run_scheduler.py` 재시작. 이미 09:05/09:10/15:40 KST 잡 등록 완료.
+`.env`에 `YOUTUBE_API_KEY` + `GEMINI_API_KEY` 있으면 자동 가동.
+
+**체크리스트:**
+- [ ] 서버 재시작 (또는 스케줄러 프로세스 재시작)
+- [ ] 다음날 09:10 이후 `youtube_attention_scores` 테이블에 데이터 확인
+- [ ] 6/2(월) 15:40 이후 `youtube_mention_forward_returns` 채워졌는지 확인
+
+**Effort:** XS (human: ~2min)
+**Priority:** P1
+**Depends on:** 없음 (즉시 가능)
+
+---
+
+## P2: YouTube 내러티브 — feat 브랜치 머지
+
+**What:** `feat/youtube-narrative-screening` → `master` PR 생성 및 머지.
+
+**머지 조건:**
+- 백테스트 결과 확인 후 (합격/불합격 무관하게 파이프라인은 머지)
+- attention_score 가중치는 백테스트 결과 반영 후 별도 PR
+
+**Effort:** XS (human: ~5min / CC: ~5min)
+**Priority:** P2
+**Depends on:** 블라인드 백테스트 실행 후
+**Completed:** v0.10.0.0 (2026-06-01)
+
+---
+
+## P2: YouTube 내러티브 — Whisper STT 폴백 (v2)
+
+**What:** `youtube_narrative_sync.py`에 `--backfill` 모드에서
+자막 없는 영상 → `openai-whisper` 또는 `faster-whisper`로 STT 폴백.
+
+**Why:** 삼프로TV 라이브 방송(핵심 콘텐츠)은 자막 자동 생성이 안 되는 경우 많음.
+현재 파이프라인은 자막 있는 영상만 처리 → 라이브 방송 누락.
+
+**구현 포인트:**
+- `is_live_fallback=True` 플래그 영상에만 STT 적용
+- 로컬 faster-whisper(small/medium 모델) 우선, 실패 시 OpenAI Whisper API
+- 비용 추정: faster-whisper 로컬 → 무료, API → $0.006/min
+
+**Effort:** M (human: ~1h / CC: ~30min)
+**Priority:** P2
+**Depends on:** 백테스트 합격 (신호 가치 확인 후 투자 결정)
+
+---
+
+## P3: YouTube 내러티브 — 테마/섹터 오버레이 (v3)
+
+**What:** 개별 종목 점수 대신 섹터(반도체/배터리/AI/방산 등) 레벨 attention_score.
+히트맵에 섹터 오버레이로 표시.
+
+**Why:** 삼프로TV는 개별 종목 진입 타이밍보다 섹터·테마 내러티브에 강함.
+개별 종목 disambiguation 노이즈 없이 더 높은 정확도 가능.
+
+**Effort:** M (human: ~2h / CC: ~45min)
+**Priority:** P3
+**Depends on:** 백테스트 결과 (개별 종목 IC ≈ 0이면 P2로 승격)
+
+---
+
 ## P3: 모의투자 — 모델별 요약 카드에 통계 통합
 
 **What:** `PaperPortfolio` 상단의 "모델별 요약" 카드(오픈·대기·청산 건수, 평균수익)에 승률·실현누적 통계를 추가. 모델 카드 클릭 시 통계 행이 확장되는 형태로 재설계.
@@ -432,6 +515,36 @@ Stage 2 conditions to replay:
 **Priority:** P3
 **Depends on:** `watchlist_vol_log` populated for at least 1 trading day (now being built).
 **Completed:** v0.9.3.0 (2026-05-20) — `vol_ratio_delta` 계산·전달; `send_watchlist_brief`에서 `+5%▲`/`-12%▼` 포맷 표시.
+
+---
+
+## P3: YouTube 내러티브 — fill_forward_returns 배치 처리 개선
+
+**What:** `fill_forward_returns()`를 현재의 per-row commit 루프에서 단일 배치 upsert로 변경.
+130줄 함수를 `_calc_returns()` + `_upsert_forward_return()` 헬퍼로 분리.
+
+**Why:** pre-landing review에서 발견. 현재 루프는 종목당 개별 `commit()`을 호출해
+N회 트랜잭션이 발생. `save_mentions()` / `compute_attention_scores()`의 배치 패턴과 불일치.
+
+**Effort:** S (human: ~30min / CC: ~15min)
+**Priority:** P3
+**Depends on:** 없음
+
+---
+
+## P3: YouTube 내러티브 — 매직 넘버 상수화
+
+**What:** `youtube_narrative_sync.py`의 인라인 리터럴을 모듈 레벨 상수로 추출.
+- `8000` → `_MAX_TRANSCRIPT_CHARS = 8000` (Gemini 토큰 상한)
+- `4` → `_GEMINI_RPM_SLEEP = 4.0` (free-tier 15 RPM 대응)
+- `500` → `_FILL_RETURNS_BATCH = 500` (per-call 처리 행 수)
+
+**Why:** pre-landing review에서 발견. 숫자만으로는 조정 의도를 알기 어렵고
+변경 시 같은 값을 두 곳에서 수정해야 하는 위험 있음.
+
+**Effort:** XS (human: ~5min / CC: ~5min)
+**Priority:** P3
+**Depends on:** 없음
 
 ---
 

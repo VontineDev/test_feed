@@ -344,8 +344,8 @@ class KiwoomClient:
         result: list[dict] = []
         for i, r in enumerate(rows[:n]):
             raw_amt = _parse_int(r.get("trde_prica"))
-            if not raw_amt:
-                # 거래대금 0 = 장 미개장 또는 무의미한 행 → 건너뜀
+            if raw_amt is not None and raw_amt == 0:
+                # 거래대금 명시적 0 = 장 미개장 또는 무의미한 행 → 건너뜀
                 continue
             result.append({
                 "rank":       _parse_int(r.get("now_rank")) or (i + 1),
@@ -353,7 +353,7 @@ class KiwoomClient:
                 "name":       str(r.get("stk_nm") or r.get("stk_cd") or "").strip(),
                 "price":      abs(_parse_int(r.get("cur_prc")) or 0),
                 "change_pct": _parse_float(r.get("flu_rt")) or 0.0,
-                "amount":     raw_amt * _VALUE_UNIT,
+                "amount":     (raw_amt or 0) * _VALUE_UNIT,
             })
         return result
 
