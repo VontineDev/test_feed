@@ -214,6 +214,7 @@ pytest tests/test_watchlist_brief.py -v
 - [docs/explanation-signal-pipeline.md](docs/explanation-signal-pipeline.md) — 신호 파이프라인·게이팅·HIGH CONFIDENCE 설계 이유
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 시스템 아키텍처, 모듈 상세, 데이터 흐름
 - [docs/explanation-dart-design.md](docs/explanation-dart-design.md) — DART 3계층 설계 이유 (download/sync/extract 분리)
+- [docs/explanation-paper-trading.md](docs/explanation-paper-trading.md) — 모의투자 3-잡 파이프라인 설계 이유 (가격 소스 분리, exit 상태 머신, 모델별 파라미터 출처)
 
 **변경 이력**
 - [CHANGELOG.md](CHANGELOG.md) — 버전별 변경 이력
