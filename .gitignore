@@ -46,3 +46,9 @@ Thumbs.db
 .context/
 cloudflared.exe
 docs/youtube.com_cookies.txt
+
+# ── docs/ 내 바이너리 및 개인 파일 ────────────────────────
+docs/*.pdf
+docs/*.txt
+docs/삼프로TV_자막샘플.md
+docs/차트분석가이드

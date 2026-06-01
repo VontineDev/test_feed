@@ -540,7 +540,7 @@ attention_score = SUM(sentiment_weight) / distinct_video_count
 python scripts/youtube_backtest.py --ret ret_5d
 ```
 
-상세 설계: [유튜브 내러티브 스크리닝 설계 문서](youtube_narrative_screening_concept.md)
+상세 설계: [유튜브 내러티브 스크리닝 설계 문서](explanation-youtube-narrative-design.md)
 
 ---
 
@@ -606,4 +606,4 @@ uvicorn main:app --port 8000
 - [HTTPS 설정 가이드](HTTPS-Setup.md) — Caddy로 외부 HTTPS 접속 설정
 - [ARCHITECTURE.md](ARCHITECTURE.md) — 전체 시스템 아키텍처
 - [../CHANGELOG.md](../CHANGELOG.md) — 버전별 변경 이력
-- [유튜브 내러티브 스크리닝 설계](youtube_narrative_screening_concept.md) — 삼프로TV LLM 파이프라인 설계 문서
+- [유튜브 내러티브 스크리닝 설계](explanation-youtube-narrative-design.md) — 삼프로TV LLM 파이프라인 설계 문서

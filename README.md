@@ -195,7 +195,7 @@ pytest tests/test_watchlist_brief.py -v
 - [docs/HowToBacktest.md](docs/HowToBacktest.md) — 통합 백테스트 엔진 사용 가이드
 - [docs/Dashboard.md](docs/Dashboard.md) — 웹 대시보드 개발·배포 가이드
 - [docs/HTTPS-Setup.md](docs/HTTPS-Setup.md) — Caddy HTTPS 설정 (Let's Encrypt + DuckDNS)
-- [docs/youtube_narrative_screening_concept.md](docs/youtube_narrative_screening_concept.md) — YouTube 내러티브 스크리닝 설계 개념·블라인드 백테스트 프로토콜
+- [docs/explanation-youtube-narrative-design.md](docs/explanation-youtube-narrative-design.md) — YouTube 내러티브 스크리닝 설계 개념·블라인드 백테스트 프로토콜
 - [docs/howto-dart-setup.md](docs/howto-dart-setup.md) — DART 공시 파이프라인 설정 (API 키 → 다운로드 → 추출)
 - [docs/howto-youtube-backfill.md](docs/howto-youtube-backfill.md) — YouTube 내러티브 소급 수집 및 forward return 채우기
 - [docs/howto-krx-flow-import.md](docs/howto-krx-flow-import.md) — KRX 외국인·기관 수급 데이터 초기 적재

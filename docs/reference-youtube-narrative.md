@@ -171,4 +171,4 @@ UNIQUE 제약: `(video_id, stock_name_raw, source_quote)` — 동일 영상 내 
 
 - [YouTube 내러티브 소급 수집 방법](howto-youtube-backfill.md)
 - [스케줄러 레퍼런스](reference-scheduler.md)
-- [youtube_narrative_screening_concept.md](../youtube_narrative_screening_concept.md) — 설계 개념 문서
+- [explanation-youtube-narrative-design.md](explanation-youtube-narrative-design.md) — 설계 개념·블라인드 백테스트 프로토콜
