@@ -196,14 +196,24 @@ pytest tests/test_watchlist_brief.py -v
 - [docs/Dashboard.md](docs/Dashboard.md) — 웹 대시보드 개발·배포 가이드
 - [docs/HTTPS-Setup.md](docs/HTTPS-Setup.md) — Caddy HTTPS 설정 (Let's Encrypt + DuckDNS)
 - [docs/youtube_narrative_screening_concept.md](docs/youtube_narrative_screening_concept.md) — YouTube 내러티브 스크리닝 설계 개념·블라인드 백테스트 프로토콜
+- [docs/howto-dart-setup.md](docs/howto-dart-setup.md) — DART 공시 파이프라인 설정 (API 키 → 다운로드 → 추출)
+- [docs/howto-youtube-backfill.md](docs/howto-youtube-backfill.md) — YouTube 내러티브 소급 수집 및 forward return 채우기
+- [docs/howto-krx-flow-import.md](docs/howto-krx-flow-import.md) — KRX 외국인·기관 수급 데이터 초기 적재
+- [docs/howto-kiwoom-paper-trade.md](docs/howto-kiwoom-paper-trade.md) — 키움 모의투자 설정
 
 **레퍼런스**
 - [docs/reference-env-vars.md](docs/reference-env-vars.md) — 환경변수 전체 목록
 - [docs/reference-telegram-commands.md](docs/reference-telegram-commands.md) — Telegram 명령어 전체 목록
+- [docs/reference-dart-pipeline.md](docs/reference-dart-pipeline.md) — DART 파이프라인 완전 레퍼런스 (download/sync/extractor/export)
+- [docs/reference-youtube-narrative.md](docs/reference-youtube-narrative.md) — YouTube 내러티브 수집 레퍼런스
+- [docs/reference-krx-pipeline.md](docs/reference-krx-pipeline.md) — KRX 데이터 파이프라인 레퍼런스
+- [docs/reference-kiwoom.md](docs/reference-kiwoom.md) — 키움 REST API 연동 레퍼런스
+- [docs/reference-scheduler.md](docs/reference-scheduler.md) — 스케줄러 잡 전체 목록 및 운영 방법
 
 **설계 해설 (Explanation)**
 - [docs/explanation-signal-pipeline.md](docs/explanation-signal-pipeline.md) — 신호 파이프라인·게이팅·HIGH CONFIDENCE 설계 이유
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 시스템 아키텍처, 모듈 상세, 데이터 흐름
+- [docs/explanation-dart-design.md](docs/explanation-dart-design.md) — DART 3계층 설계 이유 (download/sync/extract 분리)
 
 **변경 이력**
 - [CHANGELOG.md](CHANGELOG.md) — 버전별 변경 이력
