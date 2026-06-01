@@ -1,5 +1,5 @@
 # 한국 주식 뉴스 기반 매매 신호 알림 시스템
-## 아키텍처 문서 v3.1
+## 아키텍처 문서 v4.0
 
 > **v2.x → v3.0 전면 재작성 안내**
 > 기존 설계서(v2.1)는 기술적 지표(MA·RSI·볼린저) 기반 시스템을 기술했으나,
@@ -29,6 +29,8 @@
 > v0.9.9.6부터 **3단계 역할 기반 접근 제어 + 포트폴리오 탭**이 추가되었습니다. `SPECIAL_USER`/`SPECIAL_PASSWORD` 환경변수로 admin·special·user 3단계 인증 체계 구성. `GET /api/auth/me` — 현재 역할 반환. `GET /api/portfolio` — admin·special 전용, 키움 REST API(`kt00018`·`kt00001`)로 실계좌 총자산·종목별 보유현황 반환(5분 stale-while-revalidate). React `Portfolio.tsx` 컴포넌트 신설. `useRole()` 훅 + `getVisibleTabs(role)` 함수로 탭 목록을 역할에 따라 동적 렌더링.
 > v0.9.9.5부터 **OpenDART 전자공시 통합**이 추가되었습니다. `data/dart_sync.py` — Top 20 기업 공시 이벤트 수집·XBRL 재무수치·사업보고서 세그먼트 Ollama 파싱. DB 테이블 4종(`dart_companies`·`dart_disclosures`·`dart_xbrl`·`dart_segments`). 스케줄러 잡 3종(일별 공시·월별 XBRL·연간 세그먼트). `data/dart_download.py` — 보고서 원문 로컬 다운로더. 공시 갭 자동 백필(최대 90일).
 > v0.10.0.0부터 **YouTube 내러티브 스크리닝 파이프라인**이 추가되었습니다. `data/youtube_narrative_sync.py` — 삼프로TV(채널 ID: `UChlv4GSd7OQl3js-jkLOnFA`) 자막을 YouTube Data API v3로 수집하고 Gemini 2.5 Flash로 종목 언급을 JSON 구조화 추출. DB 테이블 3종(`youtube_mention_raw`·`youtube_attention_scores`·`youtube_mention_forward_returns`). 스케줄러 잡 3종(09:05 수집·09:35 attention_score 집계·15:40 forward return 채우기 KST 기준). `data/youtube_ticker_aliases.json` — 100개 한국어 약칭 → KRX 코드 수동 매핑. `scripts/youtube_backtest.py` — Spearman IC·t-stat·종목 히트율 블라인드 백테스트. 블라인드 백테스트 프로토콜: `git tag backtest-v1-blind` 후 `--backfill` 실행으로 방법론 동결 보장. attention_score는 soft feature(LEFT JOIN)로 기존 시스템에 영향 없음.
+> v0.10.0.0부터 **DART XML Ollama 추출기**(`data/dart_extractor.py`)가 추가되었습니다. `reports/dart/`의 로컬 XML 파일을 keyword grep + 헤더 앵커 2-트랙으로 최대 20,000자 컨텍스트 추출 후 Ollama(`qwen3.5:9b`)로 투자 판단 내러티브 생성. 결과를 `dart_extractions` 테이블에 저장. `scripts/export_dart_md.py` — `dart_extractions` DB → `dart/{날짜}_{기업명}_{기간}_{보고서유형}.md` 내보내기.
+> v0.10.0.1부터 **모의투자 exit checker 가격 소스 수정** — `paper_exit_checker_job`의 현재가 조회를 `KiwoomPaperTrader.get_current_price()`(mockapi.kiwoom.com ka10001 — 시장 데이터 미지원)에서 **yfinance 배치 조회**(`_fetch_prices_yf()`)로 교체. 대시보드와 동일 소스 통일. 수정 전: 매일 전 포지션이 "현재가 조회 실패"로 스킵 → 손절·익절 무발동.
 
 ---
 
@@ -401,6 +403,56 @@ CREATE TABLE aftermarket_snap (
     PRIMARY KEY (trade_date, ticker)
 );
 
+-- YouTube 종목 언급 원시 데이터
+CREATE TABLE youtube_mention_raw (
+    id                BIGSERIAL PRIMARY KEY,
+    video_id          TEXT         NOT NULL,
+    video_date        DATE         NOT NULL,
+    speaker           TEXT,
+    stock_name_raw    TEXT         NOT NULL,
+    ticker            VARCHAR(12),
+    direction         TEXT,                      -- buy | neutral | sell
+    horizon           TEXT,
+    rationale_summary TEXT,
+    source_quote      TEXT         NOT NULL,
+    created_at        TIMESTAMPTZ  DEFAULT NOW(),
+    UNIQUE (video_id, stock_name_raw, source_quote)
+);
+
+-- YouTube attention_score (5영업일 rolling)
+CREATE TABLE youtube_attention_scores (
+    ticker            VARCHAR(12)  NOT NULL,
+    window_end        DATE         NOT NULL,
+    mention_count     INT,
+    sentiment_weighted NUMERIC(10,3),
+    attention_score   NUMERIC(10,4),
+    distinct_videos   INT,
+    PRIMARY KEY (ticker, window_end)
+);
+
+-- YouTube forward return (백테스트용)
+CREATE TABLE youtube_mention_forward_returns (
+    mention_id  BIGINT  PRIMARY KEY REFERENCES youtube_mention_raw(id) ON DELETE CASCADE,
+    ret_1d      NUMERIC(9,4),
+    ret_5d      NUMERIC(9,4),
+    ret_20d     NUMERIC(9,4),
+    filled_at   DATE
+);
+
+-- DART XML Ollama 추출 결과
+CREATE TABLE dart_extractions (
+    id              BIGSERIAL PRIMARY KEY,
+    corp_name       TEXT         NOT NULL,
+    rcept_no        VARCHAR(20)  NOT NULL,
+    report_type     TEXT,
+    period          TEXT,
+    extraction_text TEXT,
+    model           TEXT,
+    xml_chars       INT,
+    extracted_at    TIMESTAMPTZ,
+    UNIQUE (corp_name, rcept_no)
+);
+
 -- 키움 모의투자 포지션
 CREATE TABLE paper_positions (
     id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -632,7 +684,9 @@ class ScreenResult:
 - `16:10 KST` — `paper_exit_checker_job`: open 포지션 EOD 가격 → 손절/익절/트레일 매도주문
 - `16:40 KST` — `paper_eod_sampler_job`: Stage1·Ichimoku·Cross 신호 샘플링 → pending 삽입
 
-**exit_type 분류**: `hard_stop` → `tp1` 기록 → `trailing` → `max_hold`(91일) → `manual`
+**exit_type 분류**: `hard_stop` → `tp1` 기록 → `trail` → `period_end`(91일) → `manual`
+
+**가격 소스 (v0.10.0.1~)**: exit checker는 yfinance 배치 조회(`_fetch_prices_yf()`)로 당일 1분봉 최신가를 전 포지션 일괄 조회. 대시보드 `/api/positions`와 동일 소스. 주문 실행(place_sell)만 Kiwoom mock API 사용.
 
 **슬리피지 측정 목표**: `-0.5% ~ +0.5%` 범위 내 유지 시 백테스트 엣지 유효 판정
 
@@ -707,18 +761,22 @@ python analysis/macro_tracker.py --snapshot-only            # 매크로 현황 �
 
 | 모듈 | 잡 함수 | 스케줄 |
 |------|---------|--------|
-| `stage_job.py` | `daily_stage_job(db_pool)` | 매일 16:30 KST |
-| `screener_job.py` | `weekly_screener_job(db_pool)` | 매주 일요일 20:30 KST |
-| `infra_jobs.py` | `daily_krx_refresh_job(db_pool)` | 매일 08:00 KST |
-| `infra_jobs.py` | `daily_flow_sync_job()` | 매일 17:30 KST |
+| `stage_job.py` | `daily_stage_job(db_pool)` | 평일 16:30 KST |
+| `screener_job.py` | `weekly_screener_job(db_pool)` | 일요일 20:30 KST |
+| `infra_jobs.py` | `daily_krx_refresh_job(db_pool)` | 평일 20:00 KST |
+| `infra_jobs.py` | `daily_aftermarket_sync_job()` | 평일 16:05 KST |
+| `infra_jobs.py` | `daily_flow_sync_job()` | 평일 18:00 KST |
+| `infra_jobs.py` | `daily_market_snap_job()` | 평일 16:10 KST |
 | `infra_jobs.py` | `daily_dart_disclosure_job(db_pool)` | 평일 09:00 KST |
-| `infra_jobs.py` | `monthly_dart_xbrl_job(db_pool)` | 매월 1일 02:00 KST |
-| `infra_jobs.py` | `annual_dart_segments_job(db_pool)` | 매년 5월 1일 03:00 KST |
-| `watchlist_job.py` | `watchlist_brief_job(db_pool)` | 매일 17:00 KST |
+| `infra_jobs.py` | `monthly_dart_xbrl_job(db_pool)` | 매월 1일 09:10 KST |
+| `infra_jobs.py` | `youtube_narrative_sync_job()` | 평일 09:05 KST |
+| `infra_jobs.py` | `youtube_attention_score_job()` | 평일 09:35 KST |
+| `infra_jobs.py` | `youtube_forward_return_job()` | 평일 15:40 KST |
+| `watchlist_job.py` | `watchlist_brief_job(db_pool)` | 평일 17:00 KST |
 | `watchlist_job.py` | `build_watchlist_entries(pool)` | on-demand (`/watchlist` 봇 커맨드) |
-| `paper_jobs.py` | `paper_open_entry_job(db_pool, trader)` | 매일 09:05 KST |
-| `paper_jobs.py` | `paper_exit_checker_job(db_pool, trader)` | 매일 16:10 KST |
-| `paper_jobs.py` | `paper_eod_sampler_job(db_pool, trader)` | 매일 16:40 KST |
+| `paper_jobs.py` | `paper_open_entry_job(db_pool, trader)` | 평일 09:05 KST |
+| `paper_jobs.py` | `paper_exit_checker_job(db_pool, trader)` | 평일 16:10 KST |
+| `paper_jobs.py` | `paper_eod_sampler_job(db_pool, trader)` | 평일 16:40 KST |
 
 **설계 원칙**: 각 잡 함수는 `db_pool`/`trader` 등 의존성을 인자로 받아 전역 상태 없이 동작. 전역 캐시(`_screener_tickers`, `_active_stage_tickers`)를 갱신하는 잡은 새 값을 반환 — 호출자(`run_scheduler.py`)가 전역에 대입.
 
@@ -795,6 +853,69 @@ python data/dart_download.py --year 2026 --zip            # ZIP 파일 그대로
 
 ---
 
+### 3-16. `data/youtube_narrative_sync.py` — YouTube 내러티브 수집 파이프라인 (v0.10.0.0~)
+
+**역할**: 삼프로TV 유튜브 영상 자막에서 종목 언급을 수집·추출·집계합니다.
+
+**파이프라인**:
+```
+YouTube Data API v3 (삼프로TV 채널 영상 목록)
+    ↓ youtube-transcript-api (한국어 자막)
+    ↓ Gemini 2.5 Flash LLM (종목 언급 JSON 구조화)
+    ↓ youtube_mention_raw  ← 원시 언급
+    ↓ youtube_attention_scores  ← 5영업일 rolling attention_score
+    ↓ youtube_mention_forward_returns  ← 1d/5d/20d 수익률
+```
+
+**attention_score 계산**:
+```
+attention_score = SUM(sentiment_weight) / distinct_videos
+  buy=1.0, neutral=0.5, sell=0.0
+```
+
+**CLI**:
+```bash
+python data/youtube_narrative_sync.py                             # 전일 수집
+python data/youtube_narrative_sync.py --backfill --from 2026-01-01  # 소급 수집
+python data/youtube_narrative_sync.py --fill-returns              # forward return만
+```
+
+**한국어 약칭 매핑**: `youtube_ticker_aliases.json` — "삼전" → "005930.KS" 등 100개 항목.
+
+**블라인드 백테스트 보장**: `git tag backtest-v1-blind` → `--backfill` 순서로 방법론 확정 후 데이터 채우기. 방법론 역산 방지.
+
+**환경변수**: `YOUTUBE_API_KEY`, `GEMINI_API_KEY`
+
+---
+
+### 3-17. `data/dart_extractor.py` — DART XML Ollama 추출기 (v0.10.0.0~)
+
+**역할**: `reports/dart/` 하위 로컬 DART XML 파일을 Ollama로 처리하여 투자 판단 내러티브를 `dart_extractions` 테이블에 저장합니다.
+
+**2-트랙 컨텍스트 추출**:
+
+| 트랙 | 방식 | 예산 |
+|------|------|------|
+| anchor_xml | 재무표 헤더 앵커 탐색 → 이하 50행 수집 | 8,000자 |
+| grep_xml | KEYWORDS 포함 행 추출 | 나머지 (합산 20,000자 상한) |
+
+**KEYWORDS**: `AI`, `인공지능`, `데이터센터`, `냉각`, `칠러`, `로봇`, `매출`, `영업이익` 등 14개
+
+**ANCHORS**: `부문별 매출실적`, `사업부문별 매출`, `세그먼트별` 등 12개 재무표 헤더
+
+**Ollama 호출**: `qwen3.5:9b` (기본), `OLLAMA_MODEL` 환경변수로 변경 가능. 결과 최대 20,000자 컨텍스트 전달.
+
+**CLI**:
+```bash
+python data/dart_extractor.py --company LG전자   # 단일 기업 (콘솔 출력)
+python data/dart_extractor.py --all              # 전체 처리 + DB 저장
+python data/dart_extractor.py --all --force      # 기존 결과 덮어쓰기
+```
+
+**내보내기**: `scripts/export_dart_md.py` — `dart_extractions` → `dart/YYYYMMDD_{기업명}_{기간}_{종류}.md`
+
+---
+
 ## 4. 프로젝트 구조
 
 v0.9.6.0부터 루트 평면 구조 → 기능별 패키지로 재편. v0.9.8.1부터 `jobs/` 패키지 추가.
@@ -828,7 +949,10 @@ test_feed/
 │   ├── kiwoom_aftermarket_sync.py # Kiwoom REST API 시간외 단일가 → aftermarket_snap 적재
 │   ├── kiwoom_paper_trader.py     # 키움 모의투자 자동주문 — 4모델, paper_positions 테이블
 │   ├── dart_sync.py               # DART 전자공시 수집·XBRL 파싱·세그먼트 Ollama 추출
-│   └── dart_download.py           # DART 보고서 원문 로컬 다운로더 (CLI 독립 실행)
+│   ├── dart_download.py           # DART 보고서 원문 로컬 다운로더 (CLI 독립 실행)
+│   ├── dart_extractor.py          # DART XML → Ollama 내러티브 추출 → dart_extractions
+│   ├── youtube_narrative_sync.py  # 삼프로TV 자막 수집 → Gemini 종목 언급 추출 → attention_score
+│   └── youtube_ticker_aliases.json # 한국어 약칭 → yfinance 심볼 수동 매핑 (100개)
 │
 ├── analysis/                      # 분석·전략 (v0.9.6.0~)
 │   ├── signal_detector.py         # LLM 매매 신호 감지 (JSON 구조화 출력)
@@ -867,7 +991,7 @@ test_feed/
 │       │                          # Portfolio (admin·special 전용 — 실계좌 포트폴리오) 등
 │       └── dist/                  # Vite 빌드 산출물 (백엔드가 정적 서빙)
 │
-├── tests/                         # pytest 테스트 (596개, v0.9.8.1 기준)
+├── tests/                         # pytest 테스트 (622개, v0.10.0.0 기준)
 │   ├── conftest.py
 │   ├── test_article_type.py       # 기사 유형 분류
 │   ├── test_backtest_engine.py    # 통합 백테스트 엔진 (ichimoku/stage/cross/stage2)
@@ -901,7 +1025,9 @@ test_feed/
 │   ├── test_trade_journal.py      # /buy /sell /port /pnl 거래 저널
 │   ├── test_volume_integration.py # _send_plain, fetch_data 시간대 회귀
 │   ├── test_watchlist_brief.py    # 워치리스트 일보 포맷 + DB 헬퍼
-│   └── test_watchlist_features.py # vol_ratio_delta, retiring, Stage2 알림
+│   ├── test_watchlist_features.py # vol_ratio_delta, retiring, Stage2 알림
+│   ├── test_dart_extract.py       # DART XML 추출기 (anchor/grep, Ollama 연동)
+│   └── test_youtube_narrative_pure.py # YouTube 내러티브 파싱 순수 단위 테스트
 │
 ├── scripts/                       # 운영 스크립트
 │   ├── register_tasks.ps1         # Windows 작업 스케줄러 통합 등록 (-Task all|crawler|aftermarket|dashboard)
@@ -911,22 +1037,40 @@ test_feed/
 │   ├── start_crawler.bat          # NewsCrawler 배치 실행
 │   ├── run_aftermarket_sync.bat   # 장후 동기화 실행
 │   ├── duckdns_update.bat         # DuckDNS IP 업데이트
-│   └── run_sweep.py               # 백테스트 파라미터 그리드서치 (288 조합)
+│   ├── run_sweep.py               # 백테스트 파라미터 그리드서치 (288 조합)
+│   ├── export_dart_md.py          # dart_extractions DB → dart/{날짜}_{기업}.md 내보내기
+│   └── youtube_backtest.py        # YouTube attention_score 블라인드 백테스트 (Spearman IC)
 │
-├── docs/                          # 문서
-│   ├── ARCHITECTURE.md            # 본 아키텍처 문서
+├── docs/                          # 문서 (Diataxis 프레임워크 기반)
+│   ├── ARCHITECTURE.md            # 본 아키텍처 문서 (v4.0)
 │   ├── TODOS.md                   # 미결 작업 목록
 │   ├── USER_MANUAL.md             # 설치부터 첫 알림까지 전체 가이드
-│   ├── Dashboard.md               # 웹 대시보드 개발·배포 가이드
-│   ├── DESIGN.md                  # 디자인 토큰 시스템 가이드
+│   ├── Dashboard.md               # 웹 대시보드 API 레퍼런스 + 개발 가이드
+│   ├── DESIGN.md                  # UI 디자인 토큰 시스템 (색·컴포넌트 패턴)
 │   ├── HTTPS-Setup.md             # Caddy HTTPS 설정 (Let's Encrypt + DuckDNS)
 │   ├── HowToBacktest.md           # 백테스트 엔진 사용 가이드
+│   │
 │   ├── howto-screener.md          # 주봉 Ichimoku 스크리너 설정·Calibration
 │   ├── howto-stage-classifier.md  # 일봉 3단계 분류기 설정
 │   ├── howto-watchlist.md         # 거래대금 워치리스트 온디맨드 조회
-│   ├── explanation-signal-pipeline.md # 신호 파이프라인·게이팅·HIGH CONFIDENCE 설계
+│   ├── howto-dart-setup.md        # DART 파이프라인 설정 + Claude 직접 추출 프롬프트
+│   ├── howto-youtube-backfill.md  # YouTube 내러티브 소급 수집 + forward return 채우기
+│   ├── howto-krx-flow-import.md   # KRX 외국인·기관 수급 데이터 초기 적재
+│   ├── howto-kiwoom-paper-trade.md # 키움 모의투자 설정 (API 키 → 포지션 확인)
+│   │
 │   ├── reference-env-vars.md      # 환경변수 전체 목록
 │   ├── reference-telegram-commands.md # Telegram 명령어 전체 목록
+│   ├── reference-dart-pipeline.md # DART 파이프라인 완전 레퍼런스
+│   ├── reference-youtube-narrative.md # YouTube 내러티브 수집 레퍼런스
+│   ├── reference-krx-pipeline.md  # KRX 데이터 파이프라인 레퍼런스
+│   ├── reference-kiwoom.md        # 키움 REST API 연동 레퍼런스
+│   ├── reference-scheduler.md     # 스케줄러 잡 전체 목록 및 운영 방법
+│   │
+│   ├── explanation-signal-pipeline.md # 신호 파이프라인·게이팅·HIGH CONFIDENCE 설계 이유
+│   ├── explanation-dart-design.md # DART 3계층 설계 이유 (download/sync/extract 분리)
+│   ├── explanation-paper-trading.md # 모의투자 3-잡 파이프라인 설계 (가격 소스 분리, exit 상태 머신)
+│   ├── explanation-youtube-narrative-design.md # YouTube 내러티브 설계 개념·블라인드 백테스트 프로토콜
+│   │
 │   └── krx openapi specs/         # KRX OpenAPI 스펙 문서 (본드·파생·주식·ETF 등)
 │
 ├── sql/
@@ -1096,7 +1240,7 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 
 ---
 
-*현재 코드베이스 v0.9.9.6 (2026-05-28) 기준*
+*현재 코드베이스 v0.10.0.0 (2026-06-01) 기준*
 
 ---
 
