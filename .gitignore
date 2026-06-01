@@ -30,6 +30,7 @@ logs/
 reports/
 results/
 exports/
+dart/
 volume_pattern_report_*.html
 screening_report_*.txt
 
