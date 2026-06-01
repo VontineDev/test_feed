@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(Path(__file__).parent.parent / ".env")
 except ImportError:
     pass
 
@@ -36,10 +36,8 @@ import psycopg2.extras
 
 
 def _connect():
-    dsn = os.environ.get("DATABASE_URL", "")
-    if not dsn:
-        raise SystemExit("DATABASE_URL 환경변수 미설정")
-    return psycopg2.connect(dsn)
+    from core.db import get_dsn
+    return psycopg2.connect(get_dsn())
 
 
 _VALID_RET_COLS = {"ret_1d", "ret_5d", "ret_20d"}
