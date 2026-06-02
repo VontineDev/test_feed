@@ -391,19 +391,34 @@ def compute_attention_scores(dsn: str, window_end: date | None = None) -> int:
 
 
 # ── Forward Return 채우기 ─────────────────────────────
+def _prev_business_day_or_self(d: date) -> date:
+    """주말이면 직전 금요일 반환 (공휴일 미보정)."""
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
 def fill_forward_returns(dsn: str) -> int:
-    """아직 채워지지 않은 언급 레코드에 pykrx 과거 가격으로 forward return 채우기."""
-    try:
-        from pykrx import stock as pykrx_stock
-    except ImportError:
-        logger.warning("[yt-sync] pykrx 없음, forward return 채우기 건너뜀")
-        return 0
+    """미채워진 언급 레코드에 yfinance 과거 가격으로 forward return 채우기.
+
+    설계:
+      - ticker_names DB 테이블로 6자리 코드 → yfinance 심볼(.KS/.KQ) 매핑
+      - 전 레코드 날짜 범위를 yfinance 배치 다운로드 한 번으로 처리
+      - video_date가 주말이면 직전 금요일 종가를 기준가로 사용
+      - 레코드 단위 예외 격리: 개별 실패가 루프 전체를 중단시키지 않음
+    """
+    import pandas as pd
+    import yfinance as yf
 
     conn = _connect(dsn)
     filled = 0
     try:
+        # ticker_names에서 6자리 코드 → yfinance 심볼 매핑 구성
         with conn.cursor() as cur:
-            # 미채워진 레코드 조회
+            cur.execute("SELECT LEFT(ticker, 6), ticker FROM ticker_names")
+            ticker_to_sym: dict[str, str] = dict(cur.fetchall())
+
+        with conn.cursor() as cur:
             cur.execute("""
                 SELECT r.id, r.ticker, r.video_date
                 FROM   youtube_mention_raw r
@@ -415,33 +430,76 @@ def fill_forward_returns(dsn: str) -> int:
             """)
             rows = cur.fetchall()
 
+        if not rows:
+            logger.info("[yt-sync] forward return 채우기: 미채움 레코드 없음")
+            return 0
+
         today = date.today()
-        for mention_id, ticker, video_date in rows:
+
+        # 고유 yfinance 심볼 목록
+        yf_symbols: list[str] = list({
+            ticker_to_sym.get(t, t + ".KS")
+            for _, t, _ in rows
+        })
+
+        # 날짜 범위: 가장 오래된 video_date 직전 금요일 ~ 오늘
+        dates = [
+            date.fromisoformat(str(vd)) if isinstance(vd, str) else vd
+            for _, _, vd in rows
+        ]
+        start_date = _prev_business_day_or_self(min(dates))
+
+        logger.info("[yt-sync] yfinance 배치 다운로드: %d종목 (%s ~ %s)",
+                    len(yf_symbols), start_date, today)
+        raw = yf.download(
+            yf_symbols,
+            start=start_date.strftime("%Y-%m-%d"),
+            end=_next_business_day(today, 1).strftime("%Y-%m-%d"),
+            auto_adjust=True,
+            progress=False,
+        )
+
+        # 가격 캐시 구성: {yf_symbol: {date: close}}
+        price_cache: dict[str, dict[date, float]] = {}
+        if not raw.empty:
+            close = raw["Close"] if len(yf_symbols) > 1 else raw[["Close"]].rename(
+                columns={"Close": yf_symbols[0]}
+            )
+            for sym in close.columns:
+                price_cache[sym] = {
+                    idx.date(): float(v)
+                    for idx, v in close[sym].items()
+                    if pd.notna(v)
+                }
+
+        logger.info("[yt-sync] 가격 캐시: %d종목", len(price_cache))
+
+        # 레코드별 수익률 계산 및 저장
+        for mention_id, ticker6, video_date in rows:
             if isinstance(video_date, str):
                 video_date = date.fromisoformat(video_date)
-            results = {"ret_1d": None, "ret_5d": None, "ret_20d": None}
-            for horizon, bdays in [("ret_1d", 1), ("ret_5d", 5), ("ret_20d", 20)]:
+
+            yf_sym = ticker_to_sym.get(ticker6, ticker6 + ".KS")
+            sym_cache = price_cache.get(yf_sym, {})
+
+            base_date = _prev_business_day_or_self(video_date)
+            close_base = sym_cache.get(base_date)
+            if not close_base:
+                continue
+
+            results: dict[str, float | None] = {"ret_1d": None, "ret_5d": None, "ret_20d": None}
+            for ret_col, bdays in (("ret_1d", 1), ("ret_5d", 5), ("ret_20d", 20)):
                 target = _next_business_day(video_date, bdays)
                 if target > today:
                     continue
-                try:
-                    s = target.strftime("%Y%m%d")
-                    df = pykrx_stock.get_market_ohlcv(s, s, ticker)
-                    if df.empty:
-                        continue
-                    close_target = float(df["종가"].iloc[0])
-                    # 기준: video_date 당일 종가
-                    s0 = video_date.strftime("%Y%m%d")
-                    df0 = pykrx_stock.get_market_ohlcv(s0, s0, ticker)
-                    if df0.empty:
-                        continue
-                    close_base = float(df0["종가"].iloc[0])
-                    if close_base > 0:
-                        results[horizon] = round((close_target / close_base) - 1, 6)
-                except Exception as e:
-                    logger.debug("[yt-sync] forward return %s %s: %s", ticker, horizon, e)
+                close_target = sym_cache.get(target)
+                if close_target:
+                    results[ret_col] = round((close_target / close_base) - 1, 6)
 
-            if any(v is not None for v in results.values()):
+            if not any(v is not None for v in results.values()):
+                continue
+
+            try:
                 with conn.cursor() as cur:
                     cur.execute("""
                         INSERT INTO youtube_mention_forward_returns
@@ -456,6 +514,10 @@ def fill_forward_returns(dsn: str) -> int:
                           results["ret_20d"], today))
                 conn.commit()
                 filled += 1
+            except Exception as e:
+                logger.warning("[yt-sync] forward return 저장 실패 id=%d: %s", mention_id, e)
+                conn.rollback()
+
         logger.info("[yt-sync] forward return 채우기: %d건", filled)
         return filled
     finally:
