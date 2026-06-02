@@ -51,6 +51,7 @@ logger = logging.getLogger(__name__)
 # ── 상수 ──────────────────────────────────────────────
 _CHANNEL_ID = "UChlv4GSd7OQl3js-jkLOnFA"  # 삼프로TV 3PROTV
 _ALIASES_PATH = Path(__file__).parent / "youtube_ticker_aliases.json"
+_COOKIES_PATH = Path(__file__).parent.parent / "docs" / "youtube.com_cookies.txt"
 _SENTIMENT_WEIGHT = {"buy": 1.0, "neutral": 0.5, "sell": 0.0}
 _MIN_TRANSCRIPT_LEN = 200  # 자막이 이보다 짧으면 유효하지 않은 것으로 간주
 _ROLLING_DAYS = 5           # attention_score rolling window (영업일)
@@ -157,18 +158,35 @@ def fetch_video_list(api_key: str, from_date: date, to_date: date) -> list[dict]
 
 
 # ── Transcript ────────────────────────────────────────
+def _make_yt_api() -> "YouTubeTranscriptApi":
+    """YouTubeTranscriptApi 인스턴스 생성. docs/youtube.com_cookies.txt 있으면 쿠키 적용."""
+    from youtube_transcript_api import YouTubeTranscriptApi
+    if _COOKIES_PATH.exists():
+        import http.cookiejar, requests
+        jar = http.cookiejar.MozillaCookieJar(str(_COOKIES_PATH))
+        try:
+            jar.load(ignore_discard=True, ignore_expires=True)
+        except Exception as e:
+            logger.warning("[yt-sync] 쿠키 파일 로드 실패: %s", e)
+            return YouTubeTranscriptApi()
+        session = requests.Session()
+        session.cookies = jar
+        logger.debug("[yt-sync] 쿠키 적용: %s", _COOKIES_PATH.name)
+        return YouTubeTranscriptApi(http_client=session)
+    return YouTubeTranscriptApi()
+
+
 def fetch_transcript(video_id: str) -> str | None:
     """자막 텍스트 반환. 없으면 None. (youtube-transcript-api v1.2+)"""
     try:
-        from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
-        api = YouTubeTranscriptApi()
+        from youtube_transcript_api import NoTranscriptFound
+        api = _make_yt_api()
         # ko 우선, auto-generated 포함 fallback
         try:
             fetched = api.fetch(video_id, languages=["ko", "ko-KR"])
         except NoTranscriptFound:
             try:
                 tlist = api.list(video_id)
-                # 한국어 자동 생성 자막 시도
                 t = tlist.find_generated_transcript(["ko", "ko-KR"])
                 fetched = t.fetch()
             except Exception:
@@ -178,7 +196,7 @@ def fetch_transcript(video_id: str) -> str | None:
             return None
         return text
     except Exception as e:
-        logger.debug("[yt-sync] 자막 없음 %s: %s", video_id, e)
+        logger.warning("[yt-sync] 자막 없음 %s: %s", video_id, e)
         return None
 
 
