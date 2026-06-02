@@ -134,7 +134,7 @@ NotebookLM을 파이프라인에서 제거하고, 전 과정을 코드로 묶는
 
 ### 소급 백테스트 (즉시 실행 가능)
 
-YouTube Data API로 과거 영상을 날짜 범위 지정 수집 → Gemini 추출 → attention_score 재계산 → pykrx 실제 수익률과 IC 측정.
+YouTube Data API로 과거 영상을 날짜 범위 지정 수집 → Gemini 추출 → attention_score 재계산 → yfinance 실제 수익률과 IC 측정.
 
 **핵심 방법론 — 주간 신호 → 1달 수익률:**
 
@@ -167,6 +167,8 @@ YouTube Data API로 과거 영상을 날짜 범위 지정 수집 → Gemini 추�
 | 종목명 모호성 | 동음이의·약칭·계열사 혼동 | pykrx 마스터 매핑 + 디스앰비규에이션 |
 | YouTube ToS | 대량 전사·스크래핑 회색지대 | 개인·비상업 범위 유지, 호출 빈도 제한 |
 | 귀인 손실 | 내러티브·정량 혼합으로 출처 불명 | feature 분리 + ablation |
+| YouTube IP 차단 | 단기 집중 요청 시 IP 차단 (`IpBlocked`) — 백필 도중 발생 가능 | `docs/youtube.com_cookies.txt` 로그인 쿠키 적용; 차단 해제 후 재실행 (UNIQUE 제약으로 중복 없음). 클라우드 서버 IP는 상시 차단 상태일 수 있음 |
+| 주말 기준가 누락 | `video_date`가 토·일이면 해당 날짜 종가 없음 → forward return 계산 불가 | `_prev_business_day_or_self()`로 직전 금요일 종가를 기준가로 사용 |
 
 ---
 

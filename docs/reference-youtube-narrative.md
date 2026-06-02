@@ -8,7 +8,7 @@
 YouTube Data API v3
     │  (삼프로TV 채널 영상 목록)
     ↓
-youtube-transcript-api
+youtube-transcript-api  [쿠키 선택 적용]
     │  (한국어 자막 텍스트)
     ↓
 Gemini Flash LLM
@@ -17,6 +17,8 @@ Gemini Flash LLM
 youtube_mention_raw         ← 원시 언급 데이터
     ↓
 youtube_attention_scores    ← 5영업일 rolling attention_score
+    ↓
+yfinance (배치 다운로드)    ← 종가 데이터
     ↓
 youtube_mention_forward_returns  ← 1d/5d/20d 수익률 (백테스트용)
 ```
@@ -28,6 +30,8 @@ youtube_mention_forward_returns  ← 1d/5d/20d 수익률 (백테스트용)
 | `YOUTUBE_API_KEY` | 필수 | YouTube Data API v3 키 |
 | `GEMINI_API_KEY` | 필수 | Google Gemini API 키 |
 | `DATABASE_URL` | 필수 | PostgreSQL DSN |
+
+**쿠키 파일 (선택)**: `docs/youtube.com_cookies.txt` — Netscape 형식 쿠키. 파일이 존재하면 자막 요청에 자동 적용됩니다. IP 차단 우회에 사용. `.gitignore` 등록됨.
 
 ## CLI
 
@@ -60,11 +64,15 @@ python data/youtube_narrative_sync.py --ensure-tables
 [{"video_id": "abc123", "video_date": "2026-05-29", "title": "제목"}]
 ```
 
+### `_make_yt_api() -> YouTubeTranscriptApi`
+
+`YouTubeTranscriptApi` 인스턴스를 생성합니다. `docs/youtube.com_cookies.txt`가 존재하면 `http.cookiejar.MozillaCookieJar`로 로드해 `requests.Session`에 적용한 뒤 `YouTubeTranscriptApi(http_client=session)`으로 반환합니다. 파일이 없으면 쿠키 없이 반환합니다. `fetch_transcript` 내부에서 매 호출마다 인스턴스를 새로 생성합니다.
+
 ### `fetch_transcript(video_id) -> str | None`
 
-한국어 자막 텍스트 반환. 언어 우선순위: `["ko", "ko-KR"]` → 자동 생성 자막 fallback. 자막이 `_MIN_TRANSCRIPT_LEN = 200`자 미만이면 `None` 반환.
+한국어 자막 텍스트 반환. 언어 우선순위: `["ko", "ko-KR"]` → 자동 생성 자막 fallback. 자막이 `_MIN_TRANSCRIPT_LEN = 200`자 미만이면 `None` 반환. YouTube IP 차단 시 `IpBlocked` 예외가 발생하며 `None`을 반환하고 WARNING 로그를 남깁니다.
 
-### `extract_mentions(transcript, video_id, video_date) -> list[dict]`
+### `extract_mentions(transcript, gemini_api_key) -> list[dict]`
 
 Gemini Flash로 종목 언급 추출. 응답 형식:
 
@@ -83,6 +91,26 @@ Gemini Flash로 종목 언급 추출. 응답 형식:
 `direction`: `buy` / `sell` / `neutral`. `horizon`: `short` / `mid` / `long` / `unknown`.
 
 LLM이 배열 대신 객체를 반환하면 빈 배열로 처리 (버그 방어).
+
+### `_prev_business_day_or_self(d: date) -> date`
+
+날짜가 토요일·일요일이면 직전 금요일을 반환합니다. 공휴일은 보정하지 않습니다. `fill_forward_returns` 내부에서 `video_date`가 주말일 때 기준 종가를 찾기 위해 사용됩니다.
+
+### `fill_forward_returns(dsn: str) -> int`
+
+미채워진 `youtube_mention_raw` 레코드에 1d/5d/20d forward return을 채웁니다.
+
+**동작 방식**:
+1. `ticker_names` 테이블에서 6자리 KRX 코드 → yfinance 심볼(`.KS`/`.KQ`) 매핑 구성
+2. `LEFT JOIN`으로 미채움 레코드 최대 500건 조회
+3. 전체 종목·전체 날짜 범위를 yfinance 배치 다운로드 한 번으로 처리 (`auto_adjust=True`)
+4. `video_date`가 주말이면 `_prev_business_day_or_self`로 기준가 날짜 롤백
+5. 레코드 단위 `try/except` + `conn.rollback()` — 개별 실패가 루프 전체를 중단하지 않음
+6. `ON CONFLICT DO UPDATE SET ... COALESCE` — 부분 채움 후 재실행 시 기존 값 보존
+
+반환값: 저장된 forward return 레코드 수.
+
+미채움 레코드가 500건 초과면 반복 실행이 필요합니다. `ticker_names` 테이블에 없는 종목은 `<코드>.KS`로 fallback 처리됩니다 (KOSDAQ 종목은 수동으로 `ticker_names`에 `.KQ` 심볼을 추가해야 정확합니다).
 
 ### `compute_attention_scores(dsn, window_end, rolling_days=5)`
 
