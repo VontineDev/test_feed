@@ -55,9 +55,10 @@ _COOKIES_PATH = Path(__file__).parent.parent / "docs" / "youtube.com_cookies.txt
 _SENTIMENT_WEIGHT = {"buy": 1.0, "neutral": 0.5, "sell": 0.0}
 _MIN_TRANSCRIPT_LEN = 200   # 자막이 이보다 짧으면 유효하지 않은 것으로 간주
 _ROLLING_DAYS = 5            # attention_score rolling window (영업일)
-_MAX_TRANSCRIPT_CHARS = 8000 # Gemini 토큰 상한
-_GEMINI_RPM_SLEEP = 4.0      # free-tier 15 RPM 대응 (60s / 15 = 4s)
-_FILL_RETURNS_BATCH = 500    # fill_forward_returns per-call 처리 행 수
+_MAX_TRANSCRIPT_CHARS = 8000    # Gemini 토큰 상한
+_GEMINI_RPM_SLEEP = 4.0         # free-tier 15 RPM 대응 (60s / 15 = 4s)
+_FILL_RETURNS_BATCH = 500       # fill_forward_returns per-call 처리 행 수
+_TRANSCRIPT_FETCH_SLEEP = 2.0   # YouTube IP 차단 방지 — 자막 요청 간격
 
 # ── DDL ───────────────────────────────────────────────
 _DDL = """
@@ -588,6 +589,7 @@ def run_sync(
         logger.info("[yt-sync] [%d/%d] %s %s", i, len(videos), vdate, v["title"][:40])
 
         transcript = fetch_transcript(vid)
+        time.sleep(_TRANSCRIPT_FETCH_SLEEP)
         if not transcript:
             logger.debug("[yt-sync] 자막 없음: %s", vid)
             continue
