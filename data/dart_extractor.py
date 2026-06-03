@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
+import json
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from reports.summarizer import _call_ollama_native, _ollama_is_alive, OLLAMA_BASE
@@ -60,6 +61,87 @@ CHAR_LIMIT = 20_000     # grep + anchor 합산 상한 (자)
 DART_DIR = Path(__file__).parent.parent / "reports" / "dart"
 PROMPT_TEMPLATE_PATH = Path(__file__).parent.parent / "공시추출프롬프트.md"
 DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:9b")
+
+# ── 3-Pass 추출 앵커 ───────────────────────────────────────────────────────────
+
+_SEGMENT_ANCHORS = [
+    "주요 제품 및 서비스",
+    "사업부문별 주요 제품",
+    "주요 제품",
+    "제품 및 서비스 현황",
+    "주요제품",
+]
+
+_REVENUE_ANCHORS = [
+    "부문별 매출실적",
+    "사업부문별 매출",
+    "매출실적",
+    "세그먼트별 매출",
+    "사업별 매출",
+    "매출현황",
+]
+
+# ── 3-Pass 프롬프트 ────────────────────────────────────────────────────────────
+
+_JSON_ONLY = (
+    "반드시 순수 JSON만 출력하세요. 설명이나 마크다운 코드블록 없이.\n"
+    "추출 항목이 없으면 빈 배열 [] 를 반환하세요.\n\n"
+)
+
+SEGMENT_EXTRACTOR_PROMPT = _JSON_ONLY + """\
+아래는 DART 사업보고서의 '주요 제품 및 서비스' 섹션입니다.
+각 사업부문명, 주요 제품 목록, 매출 비중을 추출해 JSON 배열로만 반환하세요.
+
+[
+  {
+    "segment_name": "부문명",
+    "products": ["제품1", "제품2"],
+    "revenue_share_pct": 43.89,
+    "note": "특이사항 또는 null"
+  }
+]
+
+섹션 원문:
+"""
+
+REVENUE_ANALYZER_PROMPT = _JSON_ONLY + """\
+아래는 DART 사업보고서의 매출실적 섹션입니다.
+연도별 부문별 매출을 추출해 JSON으로 반환하세요. 계산값은 computed:true로 표기.
+
+{
+  "periods": ["2023", "2024"],
+  "segments": [
+    {
+      "name": "부문명",
+      "revenues": [금액, 금액],
+      "yoy_growth": [null, 0.0]
+    }
+  ],
+  "consolidated": {
+    "revenue": [금액, 금액],
+    "op_profit": [금액, 금액]
+  }
+}
+
+섹션 원문:
+"""
+
+COMPETITOR_EXTRACTOR_PROMPT = _JSON_ONLY + """\
+아래는 DART 사업보고서에서 경쟁 관련 내용입니다.
+명시적으로 경쟁사로 언급된 회사만 추출하세요. 없으면 [] 반환.
+
+[
+  {
+    "name": "회사명",
+    "relation_type": "direct|indirect|global",
+    "competing_segment": "경쟁 사업부문",
+    "source_quote": "원문 인용 (30자 이내)",
+    "confidence": "high|medium|low"
+  }
+]
+
+본문:
+"""
 
 # ── XML 필터링 ─────────────────────────────────────────────────────────────────
 
@@ -136,6 +218,76 @@ def extract_xml(xml_path: str | Path, char_limit: int = CHAR_LIMIT) -> str:
     grep_text = grep_xml(path, remaining) if remaining > 0 else ""
     combined = (anchor_text + "\n" + grep_text).strip()
     return combined[:char_limit]
+
+
+# ── 3-Pass 헬퍼 ───────────────────────────────────────────────────────────────
+
+def _section_text(xml_path: str | Path, anchors: list[str], max_chars: int = 6000) -> str:
+    """앵커 기반 섹션 추출. 없으면 빈 문자열 반환."""
+    return anchor_xml(xml_path, anchors)[:max_chars]
+
+
+async def _call_with_retry(
+    http: httpx.AsyncClient,
+    model: str,
+    prompt: str,
+    max_retries: int = 3,
+) -> list | dict | None:
+    """Ollama JSON 추출 with retry. 3회 실패 시 None 반환."""
+    for attempt in range(max_retries):
+        try:
+            raw = await _call_ollama_native(
+                http=http,
+                model=model,
+                prompt=prompt,
+                timeout=120.0,
+                max_tokens=2000,
+                enable_thinking=False,
+            )
+            text = raw.strip()
+            if text.startswith("```"):
+                parts = text.split("```")
+                text = parts[1] if len(parts) > 1 else text
+                if text.startswith("json"):
+                    text = text[4:]
+            return json.loads(text.strip())
+        except (json.JSONDecodeError, ValueError) as e:
+            if attempt < max_retries - 1:
+                logger.debug("[dart-extractor] JSON 파싱 실패 (시도 %d): %s", attempt + 1, e)
+                await asyncio.sleep(1.0)
+            else:
+                logger.warning("[dart-extractor] JSON 파싱 %d회 모두 실패: %s", max_retries, e)
+                return None
+        except Exception as e:
+            logger.warning("[dart-extractor] Ollama 호출 오류: %s", e)
+            return None
+    return None
+
+
+async def extract_structured(
+    http: httpx.AsyncClient,
+    xml_path: str | Path,
+    model: str,
+) -> dict:
+    """3-Pass Ollama 구조화 추출 (asyncio 병렬).
+
+    반환: {"segments_json": list|None, "revenue_json": dict|None, "competitors_json": list|None}
+    각 추출기가 실패해도 None으로 저장 — 전체 중단 없음.
+    """
+    full_text = extract_xml(xml_path)
+    seg_text  = _section_text(xml_path, _SEGMENT_ANCHORS) or full_text[:5000]
+    rev_text  = _section_text(xml_path, _REVENUE_ANCHORS) or full_text[:5000]
+
+    seg_json, rev_json, comp_json = await asyncio.gather(
+        _call_with_retry(http, model, SEGMENT_EXTRACTOR_PROMPT + seg_text),
+        _call_with_retry(http, model, REVENUE_ANALYZER_PROMPT  + rev_text),
+        _call_with_retry(http, model, COMPETITOR_EXTRACTOR_PROMPT + full_text[:6000]),
+    )
+    return {
+        "segments_json":    seg_json,
+        "revenue_json":     rev_json,
+        "competitors_json": comp_json,
+    }
 
 
 # ── 디렉터리 파싱 ──────────────────────────────────────────────────────────────
@@ -314,23 +466,40 @@ async def extract_all(
                     )
                     continue
 
+                # 3-Pass 구조화 추출
+                try:
+                    structured = await extract_structured(http, xml_path, model)
+                except Exception as e:
+                    logger.warning("[dart-extractor] 구조화 추출 오류: %s", e)
+                    structured = {"segments_json": None, "revenue_json": None, "competitors_json": None}
+
+                def _to_jsonb(v) -> Optional[str]:
+                    return json.dumps(v, ensure_ascii=False) if v is not None else None
+
                 async with pool.acquire() as conn:
                     await conn.execute(
                         """
                         INSERT INTO dart_extractions
                             (corp_name, rcept_no, report_type, period,
-                             extraction_text, model, xml_chars, extracted_at)
-                        VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
+                             extraction_text, model, xml_chars, extracted_at,
+                             segments_json, revenue_json, competitors_json)
+                        VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),$8,$9,$10)
                         ON CONFLICT (corp_name, rcept_no) DO UPDATE SET
-                            report_type     = EXCLUDED.report_type,
-                            period          = EXCLUDED.period,
-                            extraction_text = EXCLUDED.extraction_text,
-                            model           = EXCLUDED.model,
-                            xml_chars       = EXCLUDED.xml_chars,
-                            extracted_at    = NOW()
+                            report_type      = EXCLUDED.report_type,
+                            period           = EXCLUDED.period,
+                            extraction_text  = EXCLUDED.extraction_text,
+                            model            = EXCLUDED.model,
+                            xml_chars        = EXCLUDED.xml_chars,
+                            extracted_at     = NOW(),
+                            segments_json    = COALESCE(EXCLUDED.segments_json,    dart_extractions.segments_json),
+                            revenue_json     = COALESCE(EXCLUDED.revenue_json,     dart_extractions.revenue_json),
+                            competitors_json = COALESCE(EXCLUDED.competitors_json, dart_extractions.competitors_json)
                         """,
                         corp_name, rcept_no, report_type, period,
                         extraction_text, model, xml_chars,
+                        _to_jsonb(structured["segments_json"]),
+                        _to_jsonb(structured["revenue_json"]),
+                        _to_jsonb(structured["competitors_json"]),
                     )
                 total += 1
                 logger.info(
@@ -349,12 +518,31 @@ def _main_cli() -> None:
     parser.add_argument("--all", action="store_true", help="전체 기업 처리")
     parser.add_argument("--force", action="store_true", help="기존 결과 덮어쓰기")
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--migrate-schema", action="store_true",
+                        help="dart_extractions에 segments_json/revenue_json/competitors_json 컬럼 추가")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
-    if args.company:
-        # 단일 기업 콘솔 출력 (DB 없음)
+    if args.migrate_schema:
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from core.db import create_pool
+
+        async def _migrate():
+            pool = await create_pool()
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    ALTER TABLE dart_extractions
+                        ADD COLUMN IF NOT EXISTS segments_json    JSONB,
+                        ADD COLUMN IF NOT EXISTS revenue_json     JSONB,
+                        ADD COLUMN IF NOT EXISTS competitors_json JSONB
+                """)
+            print("마이그레이션 완료: segments_json / revenue_json / competitors_json 컬럼 추가")
+
+        asyncio.run(_migrate())
+
+    elif args.company:
+        # 단일 기업 콘솔 출력 (DB 없음) — 기존 서술 + 3-Pass 구조화 JSON
         company_dir = DART_DIR / args.company
         if not company_dir.exists():
             print(f"디렉터리 없음: {company_dir}")
@@ -363,7 +551,7 @@ def _main_cli() -> None:
         if not report_dirs:
             print(f"리포트 디렉터리 없음: {company_dir}")
             sys.exit(1)
-        report_dir = report_dirs[-1]  # 가장 최근 (알파벳 마지막)
+        report_dir = report_dirs[-1]  # 가장 최근
         dir_name = report_dir.name
         rcept_no, report_type, period = _parse_report_dir(dir_name)
         xml_path = _pick_main_xml(report_dir, rcept_no)
@@ -371,11 +559,11 @@ def _main_cli() -> None:
             print(f"XML 없음: {report_dir}")
             sys.exit(1)
 
-        print(f"[1/3] XML 추출: {xml_path}")
+        print(f"[1/4] XML 추출: {xml_path}")
         context = extract_xml(xml_path)
         print(f"      anchor+grep: {len(context):,}자")
 
-        print("[2/3] Ollama 호출")
+        print("[2/4] 서술 추출 (기존)")
 
         async def _run():
             async with httpx.AsyncClient() as http:
@@ -384,15 +572,36 @@ def _main_cli() -> None:
                         f"Ollama 서버 미응답 — `ollama serve` 실행 후 재시도. "
                         f"OLLAMA_BASE={OLLAMA_BASE}"
                     )
-                return await extract_company(http, args.company, xml_path, args.model, report_type, period)
+                # 서술 추출 — 프롬프트 파일 없으면 스킵
+                narrative_result = None
+                if PROMPT_TEMPLATE_PATH.exists():
+                    print("[2/4] 서술 추출 (기존)")
+                    narrative_result = await extract_company(
+                        http, args.company, xml_path, args.model, report_type, period
+                    )
+                else:
+                    print("[2/4] 서술 추출 스킵 (프롬프트 파일 없음)")
 
-        text, xml_chars = asyncio.run(_run())
-        print(f"[3/3] 결과 ({xml_chars:,}자 컨텍스트)\n")
+                print("[3/4] 3-Pass 구조화 추출 (병렬)")
+                structured_result = await extract_structured(http, xml_path, args.model)
+                return narrative_result, structured_result
+
+        (narrative, structured) = asyncio.run(_run())
+
         import io
         out = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-        out.write("=" * 72 + "\n")
-        out.write(text + "\n")
-        out.write("=" * 72 + "\n")
+        out.write(f"\n[4/4] 결과 ({len(context):,}자 컨텍스트)\n")
+        if narrative:
+            text, xml_chars = narrative
+            out.write("─" * 72 + "\n[서술 텍스트]\n" + "─" * 72 + "\n")
+            out.write(text + "\n")
+        out.write("─" * 72 + "\n[구조화 JSON]\n" + "─" * 72 + "\n")
+        for key, val in structured.items():
+            status = "OK" if val is not None else "FAIL(None)"
+            out.write(f"\n## {key} [{status}]\n")
+            if val is not None:
+                out.write(json.dumps(val, ensure_ascii=False, indent=2)[:2000] + "\n")
+        out.write("─" * 72 + "\n")
         out.flush()
 
     elif args.all:
