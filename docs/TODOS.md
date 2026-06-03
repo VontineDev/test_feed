@@ -29,13 +29,14 @@ forward return은 `youtube_forward_return_job` (15:40 KST)이 자동 채움.
 `.env`에 `YOUTUBE_API_KEY` + `GEMINI_API_KEY` 있으면 자동 가동.
 
 **체크리스트:**
-- [ ] 서버 재시작 (또는 스케줄러 프로세스 재시작)
+- [x] 서버 재시작 (또는 스케줄러 프로세스 재시작) — 2026-06-03 12:53 KST, `schtasks /Run "NewsCrawler"`
 - [ ] 다음날 09:10 이후 `youtube_attention_scores` 테이블에 데이터 확인
-- [ ] 6/2(월) 15:40 이후 `youtube_mention_forward_returns` 채워졌는지 확인
+- [ ] 6/4(목) 15:40 이후 `youtube_mention_forward_returns` 채워졌는지 확인
 
 **Effort:** XS (human: ~2min)
 **Priority:** P1
 **Depends on:** 없음 (즉시 가능)
+**Completed:** 2026-06-03 — 스케줄러 재시작 완료. 내일(6/4) 09:10 이후 테이블 확인 필요.
 
 ---
 
