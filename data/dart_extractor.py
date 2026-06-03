@@ -73,6 +73,12 @@ _SEGMENT_ANCHORS = [
 ]
 
 _REVENUE_ANCHORS = [
+    # 영업이익 포함 섹션 (우선순위 높음)
+    "사업부문별 요약 재무 현황",   # 삼성전자: 라. 사업부문별 요약 재무 현황
+    "사업부문별 요약",              # LG전자 등 유사 헤더
+    "요약 재무 현황",               # fallback
+    "사업부문별 실적",
+    # 매출 전용 섹션 (op_profit 없을 수 있음)
     "부문별 매출실적",
     "사업부문별 매출",
     "매출실적",
@@ -222,9 +228,14 @@ def extract_xml(xml_path: str | Path, char_limit: int = CHAR_LIMIT) -> str:
 
 # ── 3-Pass 헬퍼 ───────────────────────────────────────────────────────────────
 
-def _section_text(xml_path: str | Path, anchors: list[str], max_chars: int = 6000) -> str:
+def _section_text(
+    xml_path: str | Path,
+    anchors: list[str],
+    max_chars: int = 6000,
+    lines_per_anchor: int = ANCHOR_LINES,
+) -> str:
     """앵커 기반 섹션 추출. 없으면 빈 문자열 반환."""
-    return anchor_xml(xml_path, anchors)[:max_chars]
+    return anchor_xml(xml_path, anchors, lines_per_anchor=lines_per_anchor)[:max_chars]
 
 
 async def _call_with_retry(
@@ -276,7 +287,8 @@ async def extract_structured(
     """
     full_text = extract_xml(xml_path)
     seg_text  = _section_text(xml_path, _SEGMENT_ANCHORS) or full_text[:5000]
-    rev_text  = _section_text(xml_path, _REVENUE_ANCHORS) or full_text[:5000]
+    # revenue 섹션은 부문별 매출+영업이익 테이블 전체가 필요 → lines_per_anchor=120
+    rev_text  = _section_text(xml_path, _REVENUE_ANCHORS, lines_per_anchor=120) or full_text[:5000]
 
     seg_json, rev_json, comp_json = await asyncio.gather(
         _call_with_retry(http, model, SEGMENT_EXTRACTOR_PROMPT + seg_text),
@@ -450,21 +462,28 @@ async def extract_all(
                     corp_name, report_type, period,
                 )
 
-                try:
-                    extraction_text, xml_chars = await extract_company(
-                        http=http,
-                        corp_name=corp_name,
-                        xml_path=xml_path,
-                        model=model,
-                        report_type=report_type,
-                        period=period,
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "[dart-extractor] 오류 (건너뜀): %s / %s — %s",
-                        corp_name, rcept_no, e,
-                    )
-                    continue
+                # 서술 추출 — 프롬프트 템플릿 없으면 스킵 (3-Pass는 계속 실행)
+                extraction_text = ""
+                xml_chars = 0
+                if PROMPT_TEMPLATE_PATH.exists():
+                    try:
+                        extraction_text, xml_chars = await extract_company(
+                            http=http,
+                            corp_name=corp_name,
+                            xml_path=xml_path,
+                            model=model,
+                            report_type=report_type,
+                            period=period,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "[dart-extractor] 서술 추출 오류 (건너뜀): %s / %s — %s",
+                            corp_name, rcept_no, e,
+                        )
+                        continue
+                else:
+                    context = extract_xml(xml_path)
+                    xml_chars = len(context)
 
                 # 3-Pass 구조화 추출
                 try:
