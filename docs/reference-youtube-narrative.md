@@ -31,6 +31,16 @@ youtube_mention_forward_returns  ← 1d/5d/20d 수익률 (백테스트용)
 | `GEMINI_API_KEY` | 필수 | Google Gemini API 키 |
 | `DATABASE_URL` | 필수 | PostgreSQL DSN |
 
+## 모듈 상수
+
+| 상수 | 값 | 설명 |
+|------|-----|------|
+| `_MIN_TRANSCRIPT_LEN` | `200` | 이보다 짧은 자막은 유효하지 않은 것으로 간주 |
+| `_ROLLING_DAYS` | `5` | attention_score rolling window (영업일) |
+| `_MAX_TRANSCRIPT_CHARS` | `8000` | Gemini 프롬프트에 전달하는 자막 최대 길이 |
+| `_GEMINI_RPM_SLEEP` | `4.0` | Gemini free tier 15 RPM 대응 대기 시간(초) |
+| `_FILL_RETURNS_BATCH` | `500` | `fill_forward_returns` 1회 처리 최대 행 수 |
+
 **쿠키 파일 (선택)**: `docs/youtube.com_cookies.txt` — Netscape 형식 쿠키. 파일이 존재하면 자막 요청에 자동 적용됩니다. IP 차단 우회에 사용. `.gitignore` 등록됨.
 
 ## CLI
@@ -102,10 +112,10 @@ LLM이 배열 대신 객체를 반환하면 빈 배열로 처리 (버그 방어)
 
 **동작 방식**:
 1. `ticker_names` 테이블에서 6자리 KRX 코드 → yfinance 심볼(`.KS`/`.KQ`) 매핑 구성
-2. `LEFT JOIN`으로 미채움 레코드 최대 500건 조회
-3. 전체 종목·전체 날짜 범위를 yfinance 배치 다운로드 한 번으로 처리 (`auto_adjust=True`)
+2. `LEFT JOIN`으로 미채움 레코드 최대 `_FILL_RETURNS_BATCH`(500)건 조회
+3. 전체 종목·전체 날짜 범위를 yfinance 배치 다운로드 한 번으로 처리 (`auto_adjust=True`, `timeout=60`)
 4. `video_date`가 주말이면 `_prev_business_day_or_self`로 기준가 날짜 롤백
-5. 레코드 단위 `try/except` + `conn.rollback()` — 개별 실패가 루프 전체를 중단하지 않음
+5. 수익률 계산 후 전체 결과를 `psycopg2.extras.execute_values`로 **단일 배치 upsert** (트랜잭션 1회)
 6. `ON CONFLICT DO UPDATE SET ... COALESCE` — 부분 채움 후 재실행 시 기존 값 보존
 
 반환값: 저장된 forward return 레코드 수.
@@ -197,6 +207,9 @@ UNIQUE 제약: `(video_id, stock_name_raw, source_quote)` — 동일 영상 내 
 
 ## 관련 문서
 
-- [YouTube 내러티브 소급 수집 방법](howto-youtube-backfill.md)
-- [스케줄러 레퍼런스](reference-scheduler.md)
-- [explanation-youtube-narrative-design.md](explanation-youtube-narrative-design.md) — 설계 개념·블라인드 백테스트 프로토콜
+- [튜토리얼 — 첫 설정부터 첫 수집까지](tutorial-youtube-narrative-quickstart.md)
+- [소급 수집 방법 (how-to)](howto-youtube-backfill.md)
+- [백테스트 실행 방법 (how-to)](howto-youtube-run-backtest.md)
+- [월별 백필 스크립트 레퍼런스](reference-youtube-backfill-monthly.md)
+- [백필 계획](plan-youtube-backfill.md)
+- [설계 개념·블라인드 백테스트 프로토콜](explanation-youtube-narrative-design.md)

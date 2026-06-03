@@ -18,12 +18,30 @@ python data/youtube_narrative_sync.py --ensure-tables
 
 ## 2단계: 과거 소급 수집
 
-```bash
-# 2026년 1월 1일부터 전일까지 전체 소급
-python data/youtube_narrative_sync.py --backfill --from 2026-01-01
+> **권장 방법**: `youtube_backfill_monthly.py` 스크립트를 사용한다.
+> 단계 분리(sync → fill-returns → scores)와 월별 오류 격리가 내장되어 있어,
+> 네트워크 hang이나 API 차단 시에도 안전하게 재실행할 수 있다.
 
-# 특정 기간만
-python data/youtube_narrative_sync.py --backfill --from 2025-07-01 --to 2025-12-31
+```bash
+# 1~5월 전체 자동 실행 (권장)
+python scripts/youtube_backfill_monthly.py
+
+# 특정 월만
+python scripts/youtube_backfill_monthly.py --from 2026-02 --to 2026-03
+
+# 단계 분리 실행 (문제 발생 시)
+python scripts/youtube_backfill_monthly.py --step sync
+python scripts/youtube_backfill_monthly.py --step fill-returns
+python scripts/youtube_backfill_monthly.py --step scores
+```
+
+스크립트 상세 옵션은 [reference-youtube-backfill-monthly.md](reference-youtube-backfill-monthly.md)를 참고한다.
+
+### 직접 CLI 사용 (단일 기간)
+
+```bash
+# 특정 날짜 범위를 한 번에 실행 (단계 분리 불필요할 때)
+python data/youtube_narrative_sync.py --backfill --from 2026-01-01 --to 2026-01-31
 ```
 
 **소요 시간**: 날짜당 ~10초 (YouTube API 호출 + Gemini 호출). 1년치 백필은 수십 분~수 시간 소요. YouTube API 일일 쿼터(10,000 units) 확인 필요.
