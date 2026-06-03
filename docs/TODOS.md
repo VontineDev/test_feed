@@ -529,6 +529,7 @@ N회 트랜잭션이 발생. `save_mentions()` / `compute_attention_scores()`의
 **Effort:** S (human: ~30min / CC: ~15min)
 **Priority:** P3
 **Depends on:** 없음
+**Completed:** v0.10.1.0 (2026-06-03) — per-row commit 루프 → 단일 execute_values + commit으로 교체.
 
 ---
 
@@ -545,6 +546,7 @@ N회 트랜잭션이 발생. `save_mentions()` / `compute_attention_scores()`의
 **Effort:** XS (human: ~5min / CC: ~5min)
 **Priority:** P3
 **Depends on:** 없음
+**Completed:** v0.10.1.0 (2026-06-03) — 모듈 상수 3개 추출; 참조 3곳 교체.
 
 ---
 

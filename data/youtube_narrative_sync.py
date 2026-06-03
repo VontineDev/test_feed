@@ -53,8 +53,11 @@ _CHANNEL_ID = "UChlv4GSd7OQl3js-jkLOnFA"  # 삼프로TV 3PROTV
 _ALIASES_PATH = Path(__file__).parent / "youtube_ticker_aliases.json"
 _COOKIES_PATH = Path(__file__).parent.parent / "docs" / "youtube.com_cookies.txt"
 _SENTIMENT_WEIGHT = {"buy": 1.0, "neutral": 0.5, "sell": 0.0}
-_MIN_TRANSCRIPT_LEN = 200  # 자막이 이보다 짧으면 유효하지 않은 것으로 간주
-_ROLLING_DAYS = 5           # attention_score rolling window (영업일)
+_MIN_TRANSCRIPT_LEN = 200   # 자막이 이보다 짧으면 유효하지 않은 것으로 간주
+_ROLLING_DAYS = 5            # attention_score rolling window (영업일)
+_MAX_TRANSCRIPT_CHARS = 8000 # Gemini 토큰 상한
+_GEMINI_RPM_SLEEP = 4.0      # free-tier 15 RPM 대응 (60s / 15 = 4s)
+_FILL_RETURNS_BATCH = 500    # fill_forward_returns per-call 처리 행 수
 
 # ── DDL ───────────────────────────────────────────────
 _DDL = """
@@ -231,7 +234,7 @@ def extract_mentions(transcript: str, gemini_api_key: str) -> list[dict]:
     try:
         from google import genai
         client = genai.Client(api_key=gemini_api_key)
-        prompt = _EXTRACT_PROMPT + transcript[:8000]  # 토큰 제한 방어
+        prompt = _EXTRACT_PROMPT + transcript[:_MAX_TRANSCRIPT_CHARS]
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,
@@ -444,8 +447,8 @@ def fill_forward_returns(dsn: str) -> int:
                 WHERE  r.ticker IS NOT NULL
                   AND  fr.mention_id IS NULL
                 ORDER  BY r.video_date DESC
-                LIMIT  500
-            """)
+                LIMIT  %s
+            """, (_FILL_RETURNS_BATCH,))
             rows = cur.fetchall()
 
         if not rows:
@@ -492,7 +495,8 @@ def fill_forward_returns(dsn: str) -> int:
 
         logger.info("[yt-sync] 가격 캐시: %d종목", len(price_cache))
 
-        # 레코드별 수익률 계산 및 저장
+        # 레코드별 수익률 계산
+        upsert_rows: list[tuple] = []
         for mention_id, ticker6, video_date in rows:
             if isinstance(video_date, str):
                 video_date = date.fromisoformat(video_date)
@@ -505,36 +509,45 @@ def fill_forward_returns(dsn: str) -> int:
             if not close_base:
                 continue
 
-            results: dict[str, float | None] = {"ret_1d": None, "ret_5d": None, "ret_20d": None}
-            for ret_col, bdays in (("ret_1d", 1), ("ret_5d", 5), ("ret_20d", 20)):
+            ret_1d = ret_5d = ret_20d = None
+            for ret_val_ref, bdays in (("ret_1d", 1), ("ret_5d", 5), ("ret_20d", 20)):
                 target = _next_business_day(video_date, bdays)
                 if target > today:
                     continue
                 close_target = sym_cache.get(target)
                 if close_target:
-                    results[ret_col] = round((close_target / close_base) - 1, 6)
+                    val = round((close_target / close_base) - 1, 6)
+                    if ret_val_ref == "ret_1d":
+                        ret_1d = val
+                    elif ret_val_ref == "ret_5d":
+                        ret_5d = val
+                    else:
+                        ret_20d = val
 
-            if not any(v is not None for v in results.values()):
+            if ret_1d is None and ret_5d is None and ret_20d is None:
                 continue
 
-            try:
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        INSERT INTO youtube_mention_forward_returns
-                            (mention_id, ret_1d, ret_5d, ret_20d, filled_at)
-                        VALUES (%s, %s, %s, %s, %s)
-                        ON CONFLICT (mention_id) DO UPDATE SET
-                            ret_1d    = COALESCE(EXCLUDED.ret_1d,  youtube_mention_forward_returns.ret_1d),
-                            ret_5d    = COALESCE(EXCLUDED.ret_5d,  youtube_mention_forward_returns.ret_5d),
-                            ret_20d   = COALESCE(EXCLUDED.ret_20d, youtube_mention_forward_returns.ret_20d),
-                            filled_at = EXCLUDED.filled_at
-                    """, (mention_id, results["ret_1d"], results["ret_5d"],
-                          results["ret_20d"], today))
-                conn.commit()
-                filled += 1
-            except Exception as e:
-                logger.warning("[yt-sync] forward return 저장 실패 id=%d: %s", mention_id, e)
-                conn.rollback()
+            upsert_rows.append((mention_id, ret_1d, ret_5d, ret_20d, today))
+
+        # 단일 배치 upsert
+        if upsert_rows:
+            with conn.cursor() as cur:
+                psycopg2.extras.execute_values(
+                    cur,
+                    """
+                    INSERT INTO youtube_mention_forward_returns
+                        (mention_id, ret_1d, ret_5d, ret_20d, filled_at)
+                    VALUES %s
+                    ON CONFLICT (mention_id) DO UPDATE SET
+                        ret_1d    = COALESCE(EXCLUDED.ret_1d,  youtube_mention_forward_returns.ret_1d),
+                        ret_5d    = COALESCE(EXCLUDED.ret_5d,  youtube_mention_forward_returns.ret_5d),
+                        ret_20d   = COALESCE(EXCLUDED.ret_20d, youtube_mention_forward_returns.ret_20d),
+                        filled_at = EXCLUDED.filled_at
+                    """,
+                    upsert_rows,
+                )
+            conn.commit()
+            filled = len(upsert_rows)
 
         logger.info("[yt-sync] forward return 채우기: %d건", filled)
         return filled
@@ -579,7 +592,7 @@ def run_sync(
             continue
 
         mentions = extract_mentions(transcript, gemini_key)
-        time.sleep(4)  # Gemini free tier: 15 RPM → 4초/건
+        time.sleep(_GEMINI_RPM_SLEEP)
         if not mentions:
             continue
 
