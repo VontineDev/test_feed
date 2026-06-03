@@ -478,6 +478,7 @@ def fill_forward_returns(dsn: str) -> int:
             end=_next_business_day(today, 1).strftime("%Y-%m-%d"),
             auto_adjust=True,
             progress=False,
+            timeout=60,
         )
 
         # 가격 캐시 구성: {yf_symbol: {date: close}}
