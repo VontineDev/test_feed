@@ -408,6 +408,24 @@ async def extract_structured(
         max_chars=8000, lines_per_anchor=200,
         priority=True, require_keyword="영업이익",
     ) or full_text[:5000]
+    # 손익계산서 시작점 탐색: 요약재무정보 섹션은 재무상태표→손익계산서 순.
+    # 재무상태표(자산/부채 항목) 부분을 제거하고 손익계산서부터 사용한다.
+    _INCOME_START_KWS = [
+        "매출액", "영업수익", "총영업이익", "순영업이익",
+        "이자수익", "수수료수익", "보험료수익",
+    ]
+    if rev_text:
+        _rv_lines = rev_text.splitlines()
+        _income_start = -1
+        for _i, _l in enumerate(_rv_lines):
+            stripped = _l.strip()
+            if any(kw == stripped or (kw in stripped and len(stripped) <= len(kw) + 5)
+                   for kw in _INCOME_START_KWS):
+                _income_start = _i
+                break
+        if _income_start > 5:            # 의미있는 앞부분이 있을 때만 잘라냄
+            rev_text = "\n".join(_rv_lines[_income_start:])
+
     # 마지막 영업이익 줄 이후 30줄에서 자름 — 재무 표 뒤의 사업 설명 제거
     if rev_text:
         _rv_lines = rev_text.splitlines()
