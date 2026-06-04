@@ -62,6 +62,16 @@ DART_DIR = Path(__file__).parent.parent / "reports" / "dart"
 PROMPT_TEMPLATE_PATH = Path(__file__).parent.parent / "공시추출프롬프트.md"
 DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:9b")
 
+# ── 금액 단위 감지 ────────────────────────────────────────────────────────────
+_UNIT_RE = re.compile(r"단위\s*[:：]\s*(원|천원|백만원|억원|조원)")
+
+def _detect_unit(text: str) -> str:
+    """rev_text 에서 '(단위 : XXX)' 패턴으로 금액 단위를 감지."""
+    if not text:
+        return "unknown"
+    m = _UNIT_RE.search(text)
+    return m.group(1) if m else "unknown"
+
 # ── 3-Pass 추출 앵커 ───────────────────────────────────────────────────────────
 
 _SEGMENT_ANCHORS = [
@@ -122,7 +132,7 @@ REVENUE_ANALYZER_PROMPT = (
 아래는 DART 사업보고서의 매출실적 섹션입니다.
 연도별 부문별 매출을 추출해 JSON으로 반환하세요. 계산값은 computed:true로 표기.
 
-참고: "총부문수익", "외부고객으로부터의 수익", "영업수익", "순이자수익", "이자수익", "수수료수익"도 매출액(revenue)으로 처리하세요.
+참고: "총부문수익", "외부고객으로부터의 수익", "영업수익", "순이자수익", "이자수익", "수수료수익", "총영업이익", "순영업이익", "매출액(영업수익)"도 매출액(revenue)으로 처리하세요.
 
 {
   "periods": ["2023", "2024"],
@@ -436,11 +446,68 @@ async def extract_structured(
         if _last_op >= 0:
             rev_text = "\n".join(_rv_lines[:_last_op + 31])
 
+    # 합계행 보완: rev_text에 "합계/총계" 행이 없으면 매출실적 표 병합
+    # (삼성전자 등 부문별 요약은 내부거래 포함 — 실제 연결 합계는 매출실적 표에 있음)
+    _SUM_INDICATORS = ["합계", "총계", "합     계", "합  계"]
+    if not any(kw in (rev_text or "") for kw in _SUM_INDICATORS):
+        _sales_text = _section_text(
+            xml_path, ["매출실적", "부문별 매출실적", "매출현황"],
+            max_chars=4000, lines_per_anchor=100,
+            priority=False, require_keyword=None,
+        )
+        if _sales_text and any(kw in _sales_text for kw in _SUM_INDICATORS):
+            rev_text = (rev_text or "") + "\n\n[매출실적 합계]\n" + _sales_text
+
+    # 금융사 폴백: rev_text에 매출 지표가 없으면 금융사 전용 앵커로 재시도
+    _REV_INDICATORS = ["매출액", "영업수익", "이자수익", "총영업이익", "순영업이익"]
+    _FIN_REVENUE_ANCHORS = ["영업수익", "총영업이익", "이자이익", "이자수익", "핵심이익"]
+    if not any(kw in (rev_text or "") for kw in _REV_INDICATORS):
+        for _fin_anc in _FIN_REVENUE_ANCHORS:
+            _fin_text = _section_text(
+                xml_path, [_fin_anc],
+                max_chars=8000, lines_per_anchor=200,
+                priority=False, require_keyword=None,
+            )
+            if _fin_text and len(_fin_text) > 200:
+                rev_text = _fin_text
+                break
+
+    # rev_text 에서 금액 단위 감지 (Ollama 호출 전)
+    unit = _detect_unit(rev_text or "")
+
     seg_json, rev_json, comp_json = await asyncio.gather(
         _call_with_retry(http, model, SEGMENT_EXTRACTOR_PROMPT + seg_text),
         _call_with_retry(http, model, REVENUE_ANALYZER_PROMPT  + rev_text),
         _call_with_retry(http, model, COMPETITOR_EXTRACTOR_PROMPT + full_text[:6000]),
     )
+
+    # revenue_json에 단위 주입
+    if rev_json and isinstance(rev_json, dict):
+        rev_json["unit"] = unit
+
+    # 금융사 규칙 기반 폴백: Ollama가 revenue를 비워두면 regex로 직접 추출
+    def _is_empty_rev(rj) -> bool:
+        if not rj or not isinstance(rj, dict): return True
+        c = rj.get("consolidated", {})
+        has_num = lambda lst: any(v not in (None, 0, "", "-") for v in (lst or []))
+        return not (has_num(c.get("revenue", [])) or has_num(c.get("op_profit", [])))
+
+    if _is_empty_rev(rev_json) and rev_text:
+        _FIN_REV_PATTERNS = [
+            (r"매출액\(영업수익\)\s*\n([\d,]+)\n([\d,]+)\n([\d,]+)", "revenue"),
+            (r"총영업이익\s*\n([\d,]+)\s*\n([\d,]+)\s*\n([\d,]+)", "revenue"),
+            (r"순영업이익\s*\n([\d,]+)\s*\n([\d,]+)\s*\n([\d,]+)", "revenue"),
+        ]
+        for _pat, _field in _FIN_REV_PATTERNS:
+            _m = re.search(_pat, rev_text)
+            if _m:
+                _vals = [int(g.replace(",", "")) for g in _m.groups()]
+                if not rev_json or not isinstance(rev_json, dict):
+                    rev_json = {"periods": [], "segments": [], "consolidated": {"revenue": [], "op_profit": []}}
+                rev_json["consolidated"][_field] = _vals
+                rev_json["unit"] = unit
+                break
+
     return {
         "segments_json":    seg_json,
         "revenue_json":     rev_json,
