@@ -115,9 +115,14 @@ SEGMENT_EXTRACTOR_PROMPT = _JSON_ONLY + """\
 섹션 원문:
 """
 
-REVENUE_ANALYZER_PROMPT = _JSON_ONLY + """\
+REVENUE_ANALYZER_PROMPT = (
+    "반드시 순수 JSON만 출력하세요. 설명이나 마크다운 코드블록 없이.\n"
+    "매출 데이터가 없으면 {\"periods\":[],\"segments\":[],\"consolidated\":{\"revenue\":[],\"op_profit\":[]}} 를 반환하세요.\n\n"
+    """\
 아래는 DART 사업보고서의 매출실적 섹션입니다.
 연도별 부문별 매출을 추출해 JSON으로 반환하세요. 계산값은 computed:true로 표기.
+
+참고: "총부문수익", "외부고객으로부터의 수익", "영업수익", "순이자수익", "이자수익", "수수료수익"도 매출액(revenue)으로 처리하세요.
 
 {
   "periods": ["2023", "2024"],
@@ -136,6 +141,7 @@ REVENUE_ANALYZER_PROMPT = _JSON_ONLY + """\
 
 섹션 원문:
 """
+)
 
 COMPETITOR_EXTRACTOR_PROMPT = _JSON_ONLY + """\
 아래는 DART 사업보고서에서 경쟁 관련 내용입니다.
@@ -263,8 +269,32 @@ def _anchor_best(
     def _block(i: int) -> str:
         return "\n".join(lines[i: i + 1 + lines_per_anchor])
 
+    # DART 보고서의 처음 ~200줄은 대부분 목차. keyword 탐색 시 목차 히트를
+    # 낮은 우선순위로 처리해 실제 섹션을 우선 선택한다.
+    _TOC_CUTOFF = 200
+
     if kw:
-        # Pass 1: 헤더 + keyword
+        # Pass 1: 헤더 + keyword, 목차 외 위치 우선
+        for anchor in anchors:
+            al = anchor.lower()
+            for i, line in enumerate(lines):
+                if i <= _TOC_CUTOFF:
+                    continue
+                if al in line.lower() and len(line) <= 80:
+                    b = _block(i)
+                    if kw in b.lower():
+                        return b
+        # Pass 2: 본문 + keyword, 목차 외 위치 우선
+        for anchor in anchors:
+            al = anchor.lower()
+            for i, line in enumerate(lines):
+                if i <= _TOC_CUTOFF:
+                    continue
+                if al in line.lower():
+                    b = _block(i)
+                    if kw in b.lower():
+                        return b
+        # Pass 3: 헤더 + keyword (목차 위치 포함 fallback)
         for anchor in anchors:
             al = anchor.lower()
             for i, line in enumerate(lines):
@@ -272,7 +302,7 @@ def _anchor_best(
                     b = _block(i)
                     if kw in b.lower():
                         return b
-        # Pass 2: 본문 포함 + keyword
+        # Pass 4: 본문 + keyword (목차 위치 포함 fallback)
         for anchor in anchors:
             al = anchor.lower()
             for i, line in enumerate(lines):
@@ -339,7 +369,13 @@ async def _call_with_retry(
                 text = parts[1] if len(parts) > 1 else text
                 if text.startswith("json"):
                     text = text[4:]
-            return json.loads(text.strip())
+            text = text.strip()
+            # Ollama가 설명과 함께 JSON을 반환하는 경우 JSON 블록만 추출
+            if text and not text[0] in ("{", "["):
+                m = re.search(r"(\{[\s\S]*\}|\[[\s\S]*\])", text)
+                if m:
+                    text = m.group(1)
+            return json.loads(text)
         except (json.JSONDecodeError, ValueError) as e:
             if attempt < max_retries - 1:
                 logger.debug("[dart-extractor] JSON 파싱 실패 (시도 %d): %s", attempt + 1, e)
@@ -372,6 +408,15 @@ async def extract_structured(
         max_chars=8000, lines_per_anchor=200,
         priority=True, require_keyword="영업이익",
     ) or full_text[:5000]
+    # 마지막 영업이익 줄 이후 30줄에서 자름 — 재무 표 뒤의 사업 설명 제거
+    if rev_text:
+        _rv_lines = rev_text.splitlines()
+        _last_op = max(
+            (i for i, l in enumerate(_rv_lines) if "영업이익" in l),
+            default=-1,
+        )
+        if _last_op >= 0:
+            rev_text = "\n".join(_rv_lines[:_last_op + 31])
 
     seg_json, rev_json, comp_json = await asyncio.gather(
         _call_with_retry(http, model, SEGMENT_EXTRACTOR_PROMPT + seg_text),
