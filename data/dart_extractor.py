@@ -73,14 +73,19 @@ _SEGMENT_ANCHORS = [
 ]
 
 _REVENUE_ANCHORS = [
-    # 영업이익 포함 섹션 (우선순위 높음)
-    "사업부문별 요약 재무 현황",   # 삼성전자: 라. 사업부문별 요약 재무 현황
+    # ── Priority 1: 영업이익 포함 부문별 요약 ──────────────────────────────
+    "사업부문별 요약 재무 현황",    # 삼성전자: 라. 사업부문별 요약 재무 현황
+    "사업부문별 요약 재무현황",     # 풍산: 가. 사업부문별 요약 재무현황 (공백 없는 변형)
     "사업부문별 요약",              # LG전자 등 유사 헤더
-    "요약 재무 현황",               # fallback
+    "요약 재무 현황",
     "사업부문별 실적",
-    # 매출 전용 섹션 (op_profit 없을 수 있음)
+    # ── Priority 2: 연결 요약 재무정보 (지주사·에코프로 등) ─────────────────
+    "요약연결재무정보",             # III. 재무 → 가. 요약연결재무정보 (지주사 consolidated P&L)
+    "요약재무정보",
+    "주요재무정보",
+    # ── Priority 3: 매출 전용 섹션 ──────────────────────────────────────────
     "부문별 매출실적",
-    "사업부문별 매출",
+    "사업부문별 매출",              # 삼표시멘트: [사업부문별 매출액 및 영업이익]
     "매출실적",
     "세그먼트별 매출",
     "사업별 매출",
@@ -228,13 +233,86 @@ def extract_xml(xml_path: str | Path, char_limit: int = CHAR_LIMIT) -> str:
 
 # ── 3-Pass 헬퍼 ───────────────────────────────────────────────────────────────
 
+def _anchor_best(
+    xml_path: str | Path,
+    anchors: list[str],
+    lines_per_anchor: int = 200,
+    require_keyword: str | None = None,
+) -> str:
+    """우선순위 앵커 탐색: 앵커 목록 순서대로 시도, 최적 블록 단일 반환.
+
+    탐색 순서:
+      Pass 1: 헤더(줄 길이 ≤ 80) + require_keyword 포함
+      Pass 2: 본문 포함  + require_keyword 포함  (keyword 있는 경우만)
+      Pass 3: 헤더        (keyword 없이 fallback)
+      Pass 4: 길이 무관   (최종 fallback)
+
+    require_keyword: 블록에 이 키워드가 없으면 다음 앵커로 건너뜀.
+    → 단일 블록만 반환하므로 max_chars 예산 경쟁 없음.
+    """
+    path = Path(xml_path)
+    lines: list[str] = []
+    with path.open(encoding="utf-8", errors="ignore") as f:
+        for raw in f:
+            s = _TAG_RE.sub("", raw).strip()
+            if s:
+                lines.append(s)
+
+    kw = require_keyword.lower() if require_keyword else None
+
+    def _block(i: int) -> str:
+        return "\n".join(lines[i: i + 1 + lines_per_anchor])
+
+    if kw:
+        # Pass 1: 헤더 + keyword
+        for anchor in anchors:
+            al = anchor.lower()
+            for i, line in enumerate(lines):
+                if al in line.lower() and len(line) <= 80:
+                    b = _block(i)
+                    if kw in b.lower():
+                        return b
+        # Pass 2: 본문 포함 + keyword
+        for anchor in anchors:
+            al = anchor.lower()
+            for i, line in enumerate(lines):
+                if al in line.lower():
+                    b = _block(i)
+                    if kw in b.lower():
+                        return b
+
+    # Pass 3: 헤더 (keyword 무관 fallback)
+    for anchor in anchors:
+        al = anchor.lower()
+        for i, line in enumerate(lines):
+            if al in line.lower() and len(line) <= 80:
+                return _block(i)
+
+    # Pass 4: 길이 무관 (최종 fallback)
+    for anchor in anchors:
+        al = anchor.lower()
+        for i, line in enumerate(lines):
+            if al in line.lower():
+                return _block(i)
+
+    return ""
+
+
 def _section_text(
     xml_path: str | Path,
     anchors: list[str],
     max_chars: int = 6000,
     lines_per_anchor: int = ANCHOR_LINES,
+    priority: bool = False,
+    require_keyword: str | None = None,
 ) -> str:
-    """앵커 기반 섹션 추출. 없으면 빈 문자열 반환."""
+    """앵커 기반 섹션 추출. 없으면 빈 문자열 반환.
+
+    priority=True  → _anchor_best() 단일 블록 반환 (max_chars 경쟁 없음).
+    priority=False → anchor_xml() 전체 매치 합산 (기존 동작).
+    """
+    if priority:
+        return _anchor_best(xml_path, anchors, lines_per_anchor, require_keyword)[:max_chars]
     return anchor_xml(xml_path, anchors, lines_per_anchor=lines_per_anchor)[:max_chars]
 
 
@@ -287,8 +365,13 @@ async def extract_structured(
     """
     full_text = extract_xml(xml_path)
     seg_text  = _section_text(xml_path, _SEGMENT_ANCHORS) or full_text[:5000]
-    # revenue 섹션은 부문별 매출+영업이익 테이블 전체가 필요 → lines_per_anchor=120
-    rev_text  = _section_text(xml_path, _REVENUE_ANCHORS, lines_per_anchor=120) or full_text[:5000]
+    # revenue: 우선순위 단일 블록 + 200줄 + 8000자
+    # require_keyword="영업이익" → 블록에 영업이익 없으면 다음 앵커로 계속 탐색
+    rev_text  = _section_text(
+        xml_path, _REVENUE_ANCHORS,
+        max_chars=8000, lines_per_anchor=200,
+        priority=True, require_keyword="영업이익",
+    ) or full_text[:5000]
 
     seg_json, rev_json, comp_json = await asyncio.gather(
         _call_with_retry(http, model, SEGMENT_EXTRACTOR_PROMPT + seg_text),
