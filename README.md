@@ -196,6 +196,7 @@ pytest tests/test_watchlist_brief.py -v
 - [docs/Dashboard.md](docs/Dashboard.md) — 웹 대시보드 개발·배포 가이드
 - [docs/HTTPS-Setup.md](docs/HTTPS-Setup.md) — Caddy HTTPS 설정 (Let's Encrypt + DuckDNS)
 - [docs/explanation-youtube-narrative-design.md](docs/explanation-youtube-narrative-design.md) — YouTube 내러티브 스크리닝 설계 개념·블라인드 백테스트 프로토콜
+- [docs/dart-pipeline.md](docs/dart-pipeline.md) — DART 파이프라인 개요 (구조·스케줄·문서 인덱스)
 - [docs/howto-dart-setup.md](docs/howto-dart-setup.md) — DART 공시 파이프라인 설정 (API 키 → 다운로드 → 추출)
 - [docs/howto-youtube-backfill.md](docs/howto-youtube-backfill.md) — YouTube 내러티브 소급 수집 및 forward return 채우기
 - [docs/howto-krx-flow-import.md](docs/howto-krx-flow-import.md) — KRX 외국인·기관 수급 데이터 초기 적재
@@ -213,7 +214,7 @@ pytest tests/test_watchlist_brief.py -v
 **설계 해설 (Explanation)**
 - [docs/explanation-signal-pipeline.md](docs/explanation-signal-pipeline.md) — 신호 파이프라인·게이팅·HIGH CONFIDENCE 설계 이유
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 시스템 아키텍처, 모듈 상세, 데이터 흐름
-- [docs/explanation-dart-design.md](docs/explanation-dart-design.md) — DART 3계층 설계 이유 (download/sync/extract 분리)
+- [docs/explanation-dart-design.md](docs/explanation-dart-design.md) — DART 설계 이유 (3계층 분리, 3-Pass 구조화 추출, 금융사 폴백, 손익계산서 트리밍)
 - [docs/explanation-paper-trading.md](docs/explanation-paper-trading.md) — 모의투자 3-잡 파이프라인 설계 이유 (가격 소스 분리, exit 상태 머신, 모델별 파라미터 출처)
 
 **변경 이력**

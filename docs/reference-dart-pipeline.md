@@ -133,7 +133,9 @@ class DartClient:
 
 ## dart_extractor.py
 
-로컬 XML을 읽어 Ollama로 투자 판단 서술 텍스트를 추출. `dart_extractions` 테이블에 저장.
+로컬 XML을 읽어 Ollama로 두 가지 결과를 `dart_extractions` 테이블에 저장:
+1. **서술 텍스트** (`extraction_text`) — 투자 판단용 내러티브 (프롬프트 템플릿 기반)
+2. **3-Pass 구조화 JSON** (`segments_json`, `revenue_json`, `competitors_json`)
 
 ### CLI
 
@@ -142,6 +144,7 @@ python data/dart_extractor.py --company LG전자    # 단일 기업 (콘솔 출�
 python data/dart_extractor.py --all               # 전체 처리 → DB 저장
 python data/dart_extractor.py --all --force       # 기존 결과 덮어쓰기
 python data/dart_extractor.py --all --model gemma3:9b
+python data/dart_extractor.py --migrate-schema    # dart_extractions에 3-Pass 컬럼 추가 (최초 1회)
 ```
 
 ### 플래그
@@ -152,11 +155,12 @@ python data/dart_extractor.py --all --model gemma3:9b
 | `--all` | `reports/dart/` 전체 처리. DB 저장 |
 | `--force` | 이미 저장된 `(corp_name, rcept_no)` 건너뛰지 않고 덮어쓰기 |
 | `--model MODEL` | Ollama 모델 (기본: `OLLAMA_MODEL` 환경변수 또는 `qwen3.5:9b`) |
+| `--migrate-schema` | `dart_extractions`에 `segments_json`/`revenue_json`/`competitors_json` 컬럼 추가 |
 
 ### XML 추출 전략
 
 ```
-extract_xml(xml_path) → max 20,000자
+extract_xml(xml_path) → max 20,000자  (서술 추출 + 3-Pass 공통 기반)
   ├─ anchor_xml()   헤더 앵커 발견 시 이하 50행 수집 → max 8,000자 (우선)
   └─ grep_xml()     키워드 포함 행 추출 → 나머지 예산 (char_limit - anchor_text)
 ```
@@ -167,11 +171,58 @@ extract_xml(xml_path) → max 20,000자
 
 리포트 디렉터리에 복수 XML이 있으면 `{rcept_no}.xml`(suffix 없는 메인) 우선 선택.
 
-### `extract_all(pool, model, force, dart_dir) -> int`
+---
+
+### 3-Pass 구조화 추출 (`extract_structured`)
+
+`extract_structured(http, xml_path, model)` 은 단일 XML에서 세 개의 JSON을 병렬 추출한다.
+
+```
+Pass 1 (segments)  ─ _SEGMENT_ANCHORS → SEGMENT_EXTRACTOR_PROMPT
+                      → segments_json: [{segment_name, products, revenue_share_pct, note}]
+
+Pass 2 (revenue)   ─ _REVENUE_ANCHORS → REVENUE_ANALYZER_PROMPT
+                      → revenue_json: {periods, segments, consolidated, unit}
+                      ※ 손익계산서 트리밍 + 합계행 보완 + 금융사 폴백 후 전달
+
+Pass 3 (competitors) ─ extract_xml() 전체 6,000자 → COMPETITOR_EXTRACTOR_PROMPT
+                        → competitors_json: [{name, relation_type, competing_segment,
+                                              source_quote, confidence}]
+```
+
+세 Pass는 `asyncio.gather`로 병렬 실행된다. 하나가 실패해도 나머지는 계속된다.
+
+#### `_anchor_best()` 우선순위 탐색 (Pass 2에 사용)
+
+`_REVENUE_ANCHORS` 목록을 순서대로 시도하며 4단계로 최적 블록을 찾는다:
+
+| 패스 | 조건 |
+|------|------|
+| 1 | 헤더 길이 ≤ 80 + `영업이익` 포함 + 목차(처음 200줄) 제외 |
+| 2 | 본문 모든 길이 + `영업이익` 포함 + 목차 제외 |
+| 3 | 헤더 + `영업이익` 포함 (목차 위치 포함 fallback) |
+| 4 | 길이 무관 최종 fallback |
+
+이 탐색 덕분에 "사업부문별 요약 재무현황"처럼 목차에도 등장하는 헤더가 실제 섹션 대신 목차를 히트하는 문제를 방지한다.
+
+#### revenue 전처리 3단계
+
+Pass 2 추출 후 Ollama에 전달하기 전에 rev_text에 3가지 전처리를 적용한다:
+
+1. **손익계산서 트리밍**: 요약재무정보 섹션은 `재무상태표 → 손익계산서` 순으로 나열된다. "매출액" / "영업수익" 등 손익 시작 키워드가 등장하는 줄부터 잘라낸다 (재무상태표 오염 방지).
+2. **영업이익 이후 30줄 절단**: 마지막 "영업이익" 줄 다음 30줄에서 자른다. 재무 표 이후의 사업 설명이 Ollama 입력에 포함되어 파싱을 방해하는 것을 막는다.
+3. **합계행 보완**: rev_text에 "합계/총계" 행이 없으면 `매출실적` 표를 추가로 병합한다. 삼성전자처럼 부문별 요약에 내부거래가 포함돼 실제 연결 합계가 별도 표에 있는 경우에 대응한다.
+
+#### 금융사 폴백
+
+rev_text에 "매출액", "영업수익", "이자수익", "총영업이익" 등 매출 지표가 없으면 금융사 전용 앵커(`영업수익`, `총영업이익`, `이자이익` 등)로 재탐색한다. Ollama가 revenue를 빈 값으로 반환하면 regex로 `매출액(영업수익)`, `총영업이익`, `순영업이익` 패턴을 직접 추출한다.
+
+#### `extract_all(pool, model, force, dart_dir) -> int`
 
 - 단일 `httpx.AsyncClient` 공유
 - Ollama 미응답 시 전체 중단
 - 개별 기업 오류는 catch+log 후 계속 (전체 중단 없음)
+- UPSERT 시 `segments_json`/`revenue_json`/`competitors_json`는 `COALESCE(EXCLUDED, 기존값)` — 새로 추출된 값이 None이어도 기존 성공 결과를 덮어쓰지 않는다
 - 예상 실행 시간: 10~60분 (기업당 Ollama 응답 시간 의존)
 
 ---
@@ -241,10 +292,17 @@ python scripts/export_dart_md.py
 | PK | (corp_name, rcept_no) | UPSERT 키 |
 | `report_type` | TEXT | 사업보고서 / 분기보고서 등 |
 | `period` | TEXT | 예: `2025.12` |
-| `extraction_text` | TEXT | Ollama 추출 서술 텍스트 |
+| `extraction_text` | TEXT | Ollama 추출 서술 텍스트 (프롬프트 템플릿 기반) |
 | `model` | TEXT | 사용 모델명 |
 | `xml_chars` | INT | 입력 XML 컨텍스트 크기 |
 | `extracted_at` | TIMESTAMPTZ | |
+| `segments_json` | JSONB | 3-Pass Pass 1 결과: `[{segment_name, products, revenue_share_pct, note}]` |
+| `revenue_json` | JSONB | 3-Pass Pass 2 결과: `{periods, segments, consolidated, unit}` |
+| `competitors_json` | JSONB | 3-Pass Pass 3 결과: `[{name, relation_type, competing_segment, source_quote, confidence}]` |
+
+`segments_json`/`revenue_json`/`competitors_json`는 `--migrate-schema` 로 추가되는 컬럼이다. UPSERT 시 새 값이 NULL이면 기존 값을 보존한다 (`COALESCE`).
+
+`revenue_json.unit` 필드: Ollama 호출 전 rev_text에서 `(단위 : XXX)` 패턴을 감지해 주입한다. 값은 `원` / `천원` / `백만원` / `억원` / `조원` / `unknown` 중 하나.
 
 ---
 
