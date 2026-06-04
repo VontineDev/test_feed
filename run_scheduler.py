@@ -909,16 +909,23 @@ async def main(interval: int, enable_summary: bool) -> None:
         misfire_grace_time=86400,
         replace_existing=True,
     )
-    # ── OpenDART XML Ollama 추출: 매년 5월 1일 18:00 UTC (03:00 KST) ──
-    # 사업보고서 공시 시즌(3-4월) 완료 후 → dart_extractions
-    scheduler.add_job(
-        _annual_dart_extractor_job,
-        CronTrigger(month=5, day=1, hour=18, minute=0, timezone="UTC"),  # = 03:00 KST
-        id="annual_dart_extractions",
-        max_instances=1,
-        misfire_grace_time=86400,
-        replace_existing=True,
-    )
+    # ── OpenDART XML Ollama 추출: 연 3회 → dart_extractions ──────────────────
+    # 봄(5/20):  사업보고서(12월결산, 3월말 제출) + 1분기(5월중 제출) 완료 후
+    # 가을(9/1): 반기보고서(6월결산, 8월중 제출) 완료 후
+    # 겨울(11/20): 3분기보고서(9월결산, 11월중 제출) 완료 후
+    for _dart_month, _dart_day, _dart_id_suffix in [
+        (5,  20, "spring"),   # 봄: 사업보고서 + 1분기
+        (9,   1, "autumn"),   # 가을: 반기보고서
+        (11, 20, "winter"),   # 겨울: 3분기보고서
+    ]:
+        scheduler.add_job(
+            _annual_dart_extractor_job,
+            CronTrigger(month=_dart_month, day=_dart_day, hour=18, minute=0, timezone="UTC"),  # = 03:00 KST
+            id=f"dart_extractions_{_dart_id_suffix}",
+            max_instances=1,
+            misfire_grace_time=86400,
+            replace_existing=True,
+        )
 
     scheduler.add_job(
         _trigger_watcher_job,
