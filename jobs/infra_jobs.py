@@ -204,6 +204,28 @@ async def youtube_forward_return_job() -> None:
         logger.error("[yt-ret] 실패: %s", e)
 
 
+async def dart_screened_sync_job(
+    db_pool,
+    days:  int  = 30,
+    limit: int  = 30,
+    force: bool = False,
+) -> None:
+    """스크리닝 후 자동 DART 분석 — 최근 days일 Stage/스크리너 종목 대상.
+
+    screener_job / stage_job 완료 후 호출하거나 독립 스케줄로 실행.
+    Ollama 미응답 시 조용히 종료 (스케줄러 크래시 방지).
+    """
+    try:
+        from scripts.dart_screened_sync import dart_screened_sync_job as _impl
+        stats = await _impl(db_pool, days=days, limit=limit, force=force)
+        logger.info(
+            "[dart-screened] 잡 완료 — 추출:%d 스킵:%d 실패:%d",
+            stats["extracted"], stats["skipped"], stats["failed"],
+        )
+    except Exception as e:
+        logger.error("[dart-screened] 잡 실패: %s", e)
+
+
 async def daily_flow_sync_job() -> None:
     logger.info("[flow-sync] krx_flow_sync --incremental 시작")
     try:

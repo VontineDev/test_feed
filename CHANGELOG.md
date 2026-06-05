@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.1.0] - 2026-06-05
+
+### Added
+- **DART 재무 현황 패널** (`StageHistoryPopup.tsx`): 종목 상세 팝업 하단에 `DartFinancials` 컴포넌트 추가. `/api/dart/summary/{ticker}` 조회 결과로 최신 보고서 기준 연결 매출·영업이익·이익률 테이블, YoY 등락률, 사업부문별 매출 구성을 표시.
+- **`GET /api/dart/summary/{ticker}`** (`dashboard/backend/main.py`): DART 최신 추출 결과에서 corp_name → stock_code 조인 후 `revenue_json`·`segments_json` 반환. 기간·보고서 유형 뱃지 포함.
+- **`extract_all_for_company()`** (`data/dart_extractor.py`): 단일 기업만 3-Pass 추출하는 함수. `dart_screened_sync` 잡에서 호출.
+- **`dart_screened_sync_job()`** (`jobs/infra_jobs.py`): 최근 N일 Stage/스크리너 종목 대상 자동 DART 분석 잡. 스케줄러 트리거 허용 목록(`_VALID_JOBS`)에 `dart_screened` 추가.
+
+### Fixed
+- **`_is_holiday()` 타이밍 버그** (`dashboard/backend/main.py`): 서버 새벽 시작 시 네이버 Finance API에 오늘 거래 데이터가 없어 오늘 날짜를 휴장일로 잘못 캐싱하던 문제 수정. 과거 날짜만 "데이터 부재 = 휴장"으로 판정하고, 오늘/미래 날짜는 데이터가 있을 때만 영업일로 확정. 장 개시 전 서버 기동 시에도 `_is_market_open()` 이 09:00 이후 정상적으로 `True` 반환.
+- **지수 데이터 로딩 실패 수정** (`dashboard/backend/main.py`): KRX OpenAPI 지수 엔드포인트(401/404) 실패 시 yfinance `period='10d', interval='1d'`로 KOSPI·KOSDAQ close + prev_close를 가져오는 fallback 추가. 오늘 부분 데이터를 제외하고 직전 영업일 종가를 prev_close로 사용해 등락률 정확 계산. 기존 KRX 성공 시 yfinance 실시간(1m)으로 업데이트하는 로직은 유지.
+
 ## [0.10.0.0] - 2026-06-01
 
 ### Added

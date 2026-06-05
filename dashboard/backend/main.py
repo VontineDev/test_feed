@@ -15,6 +15,7 @@ dashboard/backend/main.py
   GET  /api/history/stage        — 기간별 Stage 분류 집계 (이력 트래킹)
   GET  /api/history/screener     — 기간별 스크리너 집계 (이력 트래킹)
   GET  /api/history/ticker/{t}   — 종목별 Stage+스크리너 이력
+  GET  /api/dart/summary/{t}    — DART 최신 보고서 재무요약 (매출/영업이익/사업부문)
   POST /api/feedback             — 피드백 텍스트+스크린샷 → Telegram 전송
 
 개발: uvicorn main:app --reload --port 8000
@@ -146,7 +147,13 @@ def _is_holiday(d: date) -> bool:
             for offset in range(-15, 4):
                 cd = today + timedelta(days=offset)
                 if cd.weekday() < 5:   # 평일만 판단
-                    _HOLIDAY_CACHE[cd] = cd not in trading
+                    if cd < today:
+                        # 과거 날짜: 거래 데이터 부재 = 휴장
+                        _HOLIDAY_CACHE[cd] = cd not in trading
+                    elif cd in trading:
+                        # 오늘/미래: 데이터가 있을 때만 영업일로 확정
+                        # (장 개시 전엔 데이터 없음 → 캐시 미설정, fallback으로 고정공휴일만 체크)
+                        _HOLIDAY_CACHE[cd] = False
             _HOLIDAY_CACHE_DATE = today
             logger.info("[holidays] 영업일 캐시 갱신 (±15일, %d일 반영)", len(trading))
             if d in _HOLIDAY_CACHE:
@@ -902,7 +909,7 @@ async def signals_stream(request: Request):
 
 
 # ── POST /api/scheduler/trigger ───────────────────────────────
-_VALID_JOBS = {"stage", "screener", "paper_sample"}
+_VALID_JOBS = {"stage", "screener", "paper_sample", "dart_screened"}
 
 
 class TriggerBody(BaseModel):
@@ -2055,6 +2062,43 @@ async def _fetch_market_index_data() -> dict:
             logger.warning("[market_index] KRX 조회 실패: %s", e)
             return None, None
 
+    def _fetch_yf_daily():
+        """yfinance 10일 일별 데이터 → (close, prev_close) 쌍 반환.
+        KRX 실패 시 current+prev_close 모두 yfinance로 커버.
+        오늘 부분 데이터가 마지막 행에 있을 수 있으므로
+        오늘 이전(today) 마지막 완결 행을 prev_close로 사용."""
+        try:
+            import yfinance as _yf
+            from datetime import date as _date
+            hist = _yf.download(["^KS11", "^KQ11"], period="10d", interval="1d",
+                                auto_adjust=True, progress=False, threads=True)
+            if hist.empty:
+                return None, None, None, None
+            close_df = hist["Close"]
+            today_str = _date.today().isoformat()
+
+            def _close_prev(s):
+                if s is None:
+                    return None, None
+                s = s.dropna()
+                if s.empty:
+                    return None, None
+                # 오늘 날짜 행과 그 이전 행 분리
+                idx_strs = [str(i.date()) if hasattr(i, "date") else str(i)[:10] for i in s.index]
+                past = [v for dt, v in zip(idx_strs, s) if dt < today_str]
+                current = float(s.iloc[-1])
+                prev = float(past[-1]) if past else None
+                return current, prev
+
+            ks_s = close_df["^KS11"] if "^KS11" in close_df.columns else None
+            kq_s = close_df["^KQ11"] if "^KQ11" in close_df.columns else None
+            ks_close, ks_prev = _close_prev(ks_s)
+            kq_close, kq_prev = _close_prev(kq_s)
+            return ks_close, ks_prev, kq_close, kq_prev
+        except Exception as e:
+            logger.warning("[market_index] yfinance daily 조회 실패: %s", e)
+            return None, None, None, None
+
     def _fetch_realtime():
         try:
             import yfinance as _yf
@@ -2079,8 +2123,22 @@ async def _fetch_market_index_data() -> dict:
     is_realtime = False
     kospi_close = krx_kospi["close"] if krx_kospi else None
     kosdaq_close = krx_kosdaq["close"] if krx_kosdaq else None
+    kospi_prev  = krx_kospi["prev_close"]  if krx_kospi  else None
+    kosdaq_prev = krx_kosdaq["prev_close"] if krx_kosdaq else None
 
-    if is_open and (krx_kospi or krx_kosdaq):
+    # KRX 지수 조회 실패 시 yfinance daily로 close + prev_close 보완
+    if not krx_kospi and not krx_kosdaq:
+        try:
+            yf_ks, yf_ks_prev, yf_kq, yf_kq_prev = await _ext_thread(_fetch_yf_daily, timeout=20.0)
+        except asyncio.TimeoutError:
+            logger.warning("[market_index] yfinance daily 타임아웃 (20s)")
+            yf_ks = yf_ks_prev = yf_kq = yf_kq_prev = None
+        if yf_ks:
+            kospi_close, kospi_prev = yf_ks, yf_ks_prev
+        if yf_kq:
+            kosdaq_close, kosdaq_prev = yf_kq, yf_kq_prev
+
+    if is_open and (kospi_close or kosdaq_close):
         try:
             rt_ks, rt_kq = await _ext_thread(_fetch_realtime, timeout=20.0)
         except asyncio.TimeoutError:
@@ -2097,9 +2155,6 @@ async def _fetch_market_index_data() -> dict:
         if close and prev and prev > 0:
             return round((close - prev) / prev * 100, 2)
         return None
-
-    kospi_prev  = krx_kospi["prev_close"]  if krx_kospi  else None
-    kosdaq_prev = krx_kosdaq["prev_close"] if krx_kosdaq else None
     kospi_pct   = _pct(kospi_close,  kospi_prev)
     kosdaq_pct  = _pct(kosdaq_close, kosdaq_prev)
 
@@ -2561,6 +2616,64 @@ async def lookup_ticker(q: str):
         pass
 
     raise HTTPException(status_code=404, detail="종목을 찾을 수 없습니다")
+
+
+# ── GET /api/dart/summary/{ticker} ───────────────────────────
+@app.get("/api/dart/summary/{ticker}")
+async def get_dart_summary(ticker: str):
+    """DART 재무 현황 — 최신 보고서 기준 매출/영업이익/사업부문.
+
+    ticker: yfinance 형식 (005930.KS, 005930.KQ)
+    dart_companies.stock_code(6자리)와 매핑 후 가장 최근 추출 결과 반환.
+    응답: {data: {corp_name, period, report_type, extracted_at, revenue, segments}}
+    """
+    stock_code = ticker.split(".")[0]
+    if not stock_code.isdigit() or len(stock_code) != 6:
+        return {"data": None}
+
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT de.corp_name, de.period, de.report_type, de.extracted_at,
+                       de.revenue_json, de.segments_json
+                FROM   dart_extractions de
+                JOIN   dart_companies dc ON dc.corp_name = de.corp_name
+                WHERE  dc.stock_code = $1
+                  AND  de.revenue_json IS NOT NULL
+                ORDER  BY de.extracted_at DESC
+                LIMIT  1
+                """,
+                stock_code,
+            )
+    except Exception as e:
+        logger.warning("[dart/summary] DB 조회 실패 (%s): %s", ticker, e)
+        return {"data": None}
+
+    if not row:
+        return {"data": None}
+
+    def _parse(v):
+        if v is None:
+            return None
+        if isinstance(v, (dict, list)):
+            return v
+        try:
+            return json.loads(v)
+        except Exception:
+            return None
+
+    return {
+        "data": {
+            "corp_name":   row["corp_name"],
+            "period":      row["period"],
+            "report_type": row["report_type"],
+            "extracted_at": str(row["extracted_at"]) if row["extracted_at"] else None,
+            "revenue":     _parse(row["revenue_json"]),
+            "segments":    _parse(row["segments_json"]),
+        }
+    }
 
 
 # ── GET /health ───────────────────────────────────────────────

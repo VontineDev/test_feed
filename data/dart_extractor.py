@@ -742,6 +742,108 @@ async def extract_all(
     return total
 
 
+# ── 단일 기업 추출 (dart_screened_sync 용) ───────────────────────────────────
+
+async def extract_all_for_company(
+    pool,
+    corp_name: str,
+    http: httpx.AsyncClient | None = None,
+    model: str = DEFAULT_MODEL,
+    force: bool = False,
+    dart_dir: Path = DART_DIR,
+) -> int:
+    """특정 기업 디렉터리만 3-Pass 추출. extract_all의 단일 기업 버전.
+
+    http: 외부에서 공유 클라이언트를 넘길 수 있음. None이면 내부에서 생성.
+    반환: 저장/갱신 건수.
+    """
+    company_dir = dart_dir / corp_name
+    if not company_dir.exists():
+        logger.warning("[dart-extractor] 디렉터리 없음: %s", company_dir)
+        return 0
+
+    async def _run(http_client: httpx.AsyncClient) -> int:
+        total = 0
+        report_dirs = sorted(d for d in company_dir.iterdir() if d.is_dir())
+        for report_dir in report_dirs:
+            dir_name = report_dir.name
+            rcept_no, report_type, period = _parse_report_dir(dir_name)
+
+            if not force:
+                async with pool.acquire() as conn:
+                    done = await conn.fetchval(
+                        "SELECT COUNT(*) FROM dart_extractions "
+                        "WHERE corp_name=$1 AND rcept_no=$2",
+                        corp_name, rcept_no,
+                    )
+                if done:
+                    logger.debug("[dart-extractor] 건너뜀(기존): %s/%s", corp_name, rcept_no)
+                    continue
+
+            xml_path = _pick_main_xml(report_dir, rcept_no)
+            if xml_path is None:
+                continue
+
+            logger.info("[dart-extractor] 처리: %s / %s (%s)", corp_name, report_type, period)
+
+            extraction_text = ""
+            xml_chars = 0
+            if PROMPT_TEMPLATE_PATH.exists():
+                try:
+                    extraction_text, xml_chars = await extract_company(
+                        http=http_client, corp_name=corp_name, xml_path=xml_path,
+                        model=model, report_type=report_type, period=period,
+                    )
+                except Exception as e:
+                    logger.warning("[dart-extractor] 서술 추출 오류: %s / %s — %s", corp_name, rcept_no, e)
+                    continue
+            else:
+                xml_chars = len(extract_xml(xml_path))
+
+            try:
+                structured = await extract_structured(http_client, xml_path, model)
+            except Exception as e:
+                logger.warning("[dart-extractor] 구조화 추출 오류: %s", e)
+                structured = {"segments_json": None, "revenue_json": None, "competitors_json": None}
+
+            def _to_jsonb(v) -> Optional[str]:
+                return json.dumps(v, ensure_ascii=False) if v is not None else None
+
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO dart_extractions
+                        (corp_name, rcept_no, report_type, period,
+                         extraction_text, model, xml_chars, extracted_at,
+                         segments_json, revenue_json, competitors_json)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),$8,$9,$10)
+                    ON CONFLICT (corp_name, rcept_no) DO UPDATE SET
+                        report_type      = EXCLUDED.report_type,
+                        period           = EXCLUDED.period,
+                        extraction_text  = EXCLUDED.extraction_text,
+                        model            = EXCLUDED.model,
+                        xml_chars        = EXCLUDED.xml_chars,
+                        extracted_at     = NOW(),
+                        segments_json    = COALESCE(EXCLUDED.segments_json,    dart_extractions.segments_json),
+                        revenue_json     = COALESCE(EXCLUDED.revenue_json,     dart_extractions.revenue_json),
+                        competitors_json = COALESCE(EXCLUDED.competitors_json, dart_extractions.competitors_json)
+                    """,
+                    corp_name, rcept_no, report_type, period,
+                    extraction_text, model, xml_chars,
+                    _to_jsonb(structured["segments_json"]),
+                    _to_jsonb(structured["revenue_json"]),
+                    _to_jsonb(structured["competitors_json"]),
+                )
+            total += 1
+            logger.info("[dart-extractor] 저장: %s/%s (%d자)", corp_name, rcept_no, xml_chars)
+        return total
+
+    if http is not None:
+        return await _run(http)
+    async with httpx.AsyncClient() as http_client:
+        return await _run(http_client)
+
+
 # ── 단독 실행 ─────────────────────────────────────────────────────────────────
 
 def _main_cli() -> None:

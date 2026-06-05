@@ -519,6 +519,8 @@ async def _weekly_screener_job():
         return
     from jobs.screener_job import weekly_screener_job
     _screener_tickers = await weekly_screener_job(_db_pool)
+    # 스크리닝 완료 후 신규 종목 DART 분석 자동 실행
+    await _dart_screened_sync_job()
 
 
 async def _youtube_narrative_sync_job():
@@ -570,6 +572,14 @@ async def _annual_dart_extractor_job():
         return
     from jobs.infra_jobs import annual_dart_extractor_job
     await annual_dart_extractor_job(_db_pool)
+
+
+async def _dart_screened_sync_job():
+    """스크리닝 종목 DART 동기화 — 스크리너/Stage 잡 이후 또는 독립 실행."""
+    if not _db_pool:
+        return
+    from jobs.infra_jobs import dart_screened_sync_job
+    await dart_screened_sync_job(_db_pool, days=30, limit=30)
 
 
 # ── 모의투자 잡 래퍼 ─────────────────────────────────────────
@@ -627,6 +637,8 @@ async def _trigger_watcher_job():
                 await _daily_stage_job()
             elif job_name == "screener":
                 await _weekly_screener_job()
+            elif job_name == "dart_screened":
+                await _dart_screened_sync_job()
             elif job_name == "paper_sample":
                 await _paper_eod_sampler_job()
             else:

@@ -379,7 +379,15 @@ NXT 시간외 단일가에 참여한 종목만 저장 (~800여 종목). `daily_m
 
 ### GET /api/market_index
 
-KOSPI/KOSDAQ 지수 현재가 + 등락률을 반환합니다. KRX OpenAPI + yfinance 혼합 조회, 5분 TTL 캐시.
+KOSPI/KOSDAQ 지수 현재가 + 등락률을 반환합니다. KRX OpenAPI 성공 시 확정 종가, 실패 시 yfinance fallback. 5분 TTL 캐시.
+
+**데이터 소스 우선순위:**
+
+| 단계 | 소스 | 설명 |
+|------|------|------|
+| 1 | KRX OpenAPI `/idx/kospi_dd_trd`, `/idx/ksq_dd_trd` | 확정 종가 + prev_close |
+| 2 (KRX 실패 시) | yfinance `period='10d', interval='1d'` | 일별 데이터로 close + prev_close 보완. 오늘 부분 데이터를 제외하고 직전 완결 영업일을 prev_close로 사용 |
+| 3 (장중 + 데이터 있을 때) | yfinance `period='1d', interval='1m'` | 1분봉 최신값으로 close 덮어쓰기 (`is_realtime: true`) |
 
 ```json
 {
@@ -396,7 +404,7 @@ KOSPI/KOSDAQ 지수 현재가 + 등락률을 반환합니다. KRX OpenAPI + yfin
 | 필드 | 타입 | 설명 |
 |------|------|------|
 | `market_status` | string | `open` (장중) / `closed` (장마감·주말) |
-| `is_realtime` | bool | `true` = yfinance 장중 실시간, `false` = KRX 확정 종가 |
+| `is_realtime` | bool | `true` = yfinance 1분봉 장중 실시간, `false` = 일별 데이터(KRX 또는 yfinance daily) |
 | `kospi` / `kosdaq` | object\|null | 지수 없는 날 `null` |
 | `sentiment` | string | `강세` / `상승` / `보합` / `하락` / `급락` |
 | `sentiment_detail` | string | 한국어 한 줄 설명 |
@@ -405,6 +413,46 @@ KOSPI/KOSDAQ 지수 현재가 + 등락률을 반환합니다. KRX OpenAPI + yfin
 **sentiment 판정:** KOSPI/KOSDAQ 등락률 단순 평균 기준. ±0.5% 이내 = 보합, ±2.0% 초과 = 강세/급락.
 
 `MarketSummaryBanner` 컴포넌트가 이 엔드포인트를 5분 주기로 폴링합니다.
+
+---
+
+### GET /api/dart/summary/{ticker}
+
+DART 최신 보고서 기준 재무 요약(매출·영업이익·사업부문)을 반환합니다.
+
+**경로 파라미터:** `ticker` — yfinance 심볼 (예: `005930.KS`). 앞 6자리 stock_code로 `dart_companies`와 조인.
+
+```json
+{
+  "data": {
+    "corp_name":    "삼성전자",
+    "period":       "2024/12",
+    "report_type":  "사업보고서",
+    "extracted_at": "2026-05-20 03:12:00",
+    "revenue": {
+      "periods":      ["2023/12", "2024/12"],
+      "unit":         "억원",
+      "consolidated": { "revenue": [2589355, 3006947], "op_profit": [-14884, 326454] },
+      "segments": [
+        { "name": "DS", "revenues": [null, 1234000], "yoy_growth": [null, 0.12] }
+      ]
+    },
+    "segments": [
+      { "segment_name": "DS", "revenue_share_pct": 41.0 }
+    ]
+  }
+}
+```
+
+| 필드 | 설명 |
+|------|------|
+| `data` | `null` = DART 데이터 없음 (미수집 종목 or ETF) |
+| `revenue.unit` | `억원` / `백만원` / `조원` 등 |
+| `revenue.consolidated` | 연결 기준 매출·영업이익 배열 (periods 순서와 대응) |
+| `revenue.segments` | 사업부문별 매출·YoY 성장률 배열 |
+| `segments` | 사업부문 구성 요약 (매출 비중, 주요 제품) |
+
+`StageHistoryPopup` 내 `DartFinancials` 컴포넌트가 종목 클릭 시 이 엔드포인트를 호출합니다.
 
 ---
 
