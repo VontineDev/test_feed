@@ -317,6 +317,8 @@ async def lifespan(app: FastAPI):
             ")"
         )
         await conn.execute("ALTER TABLE ticker_names ENABLE ROW LEVEL SECURITY")
+        await conn.execute("ALTER TABLE manual_portfolio ENABLE ROW LEVEL SECURITY")
+        await conn.execute("ALTER TABLE dart_extractions ENABLE ROW LEVEL SECURITY")
         # qty: INTEGER → NUMERIC(14,6) 마이그레이션 (해외주식 소수 수량 지원)
         await conn.execute("""
             DO $$ BEGIN

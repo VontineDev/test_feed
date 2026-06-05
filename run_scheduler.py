@@ -489,6 +489,7 @@ async def _daily_stage_job() -> None:
     global _active_stage_tickers
     from jobs.stage_job import daily_stage_job as _impl
     _active_stage_tickers = await _impl(_db_pool)
+    await _dart_screened_sync_job()
 
 
 async def _build_watchlist_entries(pool) -> dict:

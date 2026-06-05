@@ -115,6 +115,8 @@ def ensure_tables(dsn: str) -> None:
                 s = stmt.strip()
                 if s:
                     cur.execute(s)
+            for tbl in ("youtube_mention_raw", "youtube_attention_scores", "youtube_mention_forward_returns"):
+                cur.execute(f"ALTER TABLE {tbl} ENABLE ROW LEVEL SECURITY")
         conn.commit()
         logger.info("[yt-sync] 테이블 확인 완료")
     finally:

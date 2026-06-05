@@ -17,7 +17,9 @@ DO $$ DECLARE
     'news_articles', 'trade_signals', 'daily_ohlcv', 'daily_flow',
     'chart_signals', 'stage_classifications', 'watchlist_vol_log',
     'intraday_volumes', 'krx_listings', 'ticker_names', 'trade_log',
-    'scheduler_triggers', 'aftermarket_snap', 'paper_positions'
+    'scheduler_triggers', 'aftermarket_snap', 'paper_positions',
+    'manual_portfolio', 'dart_extractions',
+    'youtube_mention_raw', 'youtube_attention_scores', 'youtube_mention_forward_returns'
   ];
 BEGIN
   FOREACH _tbl IN ARRAY _tables LOOP
