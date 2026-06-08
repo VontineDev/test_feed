@@ -100,6 +100,17 @@ CREATE TABLE IF NOT EXISTS youtube_mention_forward_returns (
     ret_20d     NUMERIC(9,4),
     filled_at   DATE
 );
+
+CREATE TABLE IF NOT EXISTS youtube_backfill_queue (
+    video_id        TEXT         PRIMARY KEY,
+    video_date      DATE         NOT NULL,
+    title           TEXT,
+    status          TEXT         NOT NULL DEFAULT 'pending',
+    attempts        INT          NOT NULL DEFAULT 0,
+    last_attempt_at TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ  DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_yt_backfill_queue_status ON youtube_backfill_queue (status, video_date);
 """
 
 
@@ -115,7 +126,8 @@ def ensure_tables(dsn: str) -> None:
                 s = stmt.strip()
                 if s:
                     cur.execute(s)
-            for tbl in ("youtube_mention_raw", "youtube_attention_scores", "youtube_mention_forward_returns"):
+            for tbl in ("youtube_mention_raw", "youtube_attention_scores",
+                        "youtube_mention_forward_returns", "youtube_backfill_queue"):
                 cur.execute(f"ALTER TABLE {tbl} ENABLE ROW LEVEL SECURITY")
         conn.commit()
         logger.info("[yt-sync] 테이블 확인 완료")
@@ -161,6 +173,138 @@ def fetch_video_list(api_key: str, from_date: date, to_date: date) -> list[dict]
         time.sleep(0.2)
     logger.info("[yt-sync] 영상 목록: %d개 (%s ~ %s)", len(videos), from_date, to_date)
     return videos
+
+
+# ── 분산 백필 큐 ───────────────────────────────────────
+def enqueue_backfill_videos(dsn: str, api_key: str, from_date: date, to_date: date) -> int:
+    """기간 내 영상 목록만 수집해 backfill 큐에 적재 (검색 API만 사용 — 자막 요청 없음, 차단 위험 없음).
+
+    재실행 안전: video_id PRIMARY KEY → 이미 큐에 있는 영상은 건너뜀.
+    """
+    videos = fetch_video_list(api_key, from_date, to_date)
+    if not videos:
+        return 0
+    conn = _connect(dsn)
+    try:
+        with conn.cursor() as cur:
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO youtube_backfill_queue (video_id, video_date, title)
+                VALUES %s
+                ON CONFLICT (video_id) DO NOTHING
+                """,
+                [(v["video_id"], v["video_date"], v["title"][:300]) for v in videos],
+            )
+            n = cur.rowcount
+        conn.commit()
+        return n
+    finally:
+        conn.close()
+
+
+def _fetch_transcript_classified(video_id: str) -> tuple[str | None, str]:
+    """자막 텍스트와 실패 분류 반환.
+
+    반환 status: "ok" | "blocked" | "no_transcript"
+      - blocked: YouTube IP 차단(RequestBlocked) — 일시적, 재시도 대상으로 큐에 남겨야 함
+      - no_transcript: 자막 비활성/미존재/길이 부족 — 영구 스킵
+    """
+    from youtube_transcript_api import NoTranscriptFound, RequestBlocked
+    try:
+        api = _make_yt_api()
+        try:
+            fetched = api.fetch(video_id, languages=["ko", "ko-KR"])
+        except NoTranscriptFound:
+            tlist = api.list(video_id)
+            t = tlist.find_generated_transcript(["ko", "ko-KR"])
+            fetched = t.fetch()
+        text = " ".join(s.text for s in fetched)
+        if len(text) < _MIN_TRANSCRIPT_LEN:
+            return None, "no_transcript"
+        return text, "ok"
+    except RequestBlocked as e:
+        logger.warning("[yt-backfill] IP 차단 감지 %s: %s", video_id, type(e).__name__)
+        return None, "blocked"
+    except Exception as e:
+        logger.warning("[yt-backfill] 자막 없음 %s: %s", video_id, e)
+        return None, "no_transcript"
+
+
+def process_backfill_queue(dsn: str, gemini_key: str, limit: int = 8) -> dict:
+    """큐에서 pending 영상을 오래된 날짜순으로 최대 limit개 처리.
+
+    설계 (분산 실행):
+      - 1회 호출 = 1배치. 일일 운영 잡과 동일한 소량(기본 8개)만 처리하고 종료.
+      - IP 차단(blocked) 감지 시 즉시 배치 중단 — 큐 상태를 pending으로 유지해
+        다음 실행(스케줄)에서 자동 재시도.
+      - 외부 스케줄러(Windows 작업 스케줄러 등)가 하루 여러 번 호출하는 것을 전제.
+    """
+    aliases = _load_aliases()
+    master  = _load_ticker_master()
+
+    conn = _connect(dsn)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT video_id, video_date, title
+                FROM   youtube_backfill_queue
+                WHERE  status = 'pending'
+                ORDER  BY video_date ASC, video_id ASC
+                LIMIT  %s
+            """, (limit,))
+            rows = cur.fetchall()
+
+        if not rows:
+            logger.info("[yt-backfill] 처리 대기 영상 없음 — 백필 완료 또는 큐 미적재")
+            return {"processed": 0, "saved": 0, "blocked": False}
+
+        saved_total = 0
+        for i, (video_id, video_date, title) in enumerate(rows, 1):
+            logger.info("[yt-backfill] [%d/%d] %s %s", i, len(rows), video_date, str(title)[:40])
+            text, status = _fetch_transcript_classified(video_id)
+            time.sleep(_TRANSCRIPT_FETCH_SLEEP)
+
+            if status == "blocked":
+                logger.warning("[yt-backfill] IP 차단으로 배치 중단 — 다음 실행에서 재시도 (이번 배치 %d/%d개 처리)",
+                               i - 1, len(rows))
+                return {"processed": i - 1, "saved": saved_total, "blocked": True}
+
+            n_saved = 0
+            if status == "ok" and text:
+                mentions = extract_mentions(text, gemini_key)
+                time.sleep(_GEMINI_RPM_SLEEP)
+                if mentions:
+                    records = [
+                        {
+                            "video_id":          video_id,
+                            "video_date":        video_date,
+                            "speaker":           None,
+                            "stock_name_raw":    m["stock_name_raw"],
+                            "ticker":            normalize_ticker(m["stock_name_raw"], master, aliases),
+                            "direction":         m.get("direction", "neutral"),
+                            "horizon":           m.get("horizon", "unknown"),
+                            "rationale_summary": m.get("rationale_summary"),
+                            "source_quote":      m["source_quote"],
+                        }
+                        for m in mentions
+                    ]
+                    n_saved = save_mentions(dsn, records)
+                    saved_total += n_saved
+
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE youtube_backfill_queue
+                    SET    status = %s, attempts = attempts + 1, last_attempt_at = NOW()
+                    WHERE  video_id = %s
+                """, (status, video_id))
+            conn.commit()
+            logger.info("[yt-backfill]   -> %s (%d건 저장)", status, n_saved)
+
+        logger.info("[yt-backfill] 배치 완료: %d개 처리, %d건 저장", len(rows), saved_total)
+        return {"processed": len(rows), "saved": saved_total, "blocked": False}
+    finally:
+        conn.close()
 
 
 # ── Transcript ────────────────────────────────────────

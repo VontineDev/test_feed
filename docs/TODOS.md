@@ -4,11 +4,16 @@ Items deferred from code review and planning sessions.
 
 ---
 
-## P1: YouTube 내러티브 — 블라인드 백테스트 실행 (6/5 이후)
+## P1: YouTube 내러티브 — 블라인드 백테스트 실행 (분산 백필 완료 후)
 
 **What:** `python scripts/youtube_backtest.py --ret ret_5d` 실행.
 
-**When:** 2026-05-29 데이터의 +5영업일 = 2026-06-05(금) 이후.
+**When:** ~~2026-06-05 이후~~ → **분산 백필(`youtube_backfill_queue`) 완료 후로 변경**
+(2026-06-03 burst 백필이 810/810 IP 차단으로 전량 실패 — 1~5월 과거 데이터가 아직
+거의 없어 6/5 기준으로는 샘플 수(≥100) 미달. `enqueue` 1회 실행으로 큐에 972건 적재
+완료(2026-06-08), `process` 배치(8개/회 × 하루 3회, `schtasks "YTBackfillBatch"`)가
+2026-06-09부터 가동 — 약 40일 후 소진 예상. 큐 소진 → `fill-returns` → `scores`
+재실행 후 백테스트 실행. 자세한 내용은 [백필 계획](plan-youtube-backfill.md) 참고).
 forward return은 `youtube_forward_return_job` (15:40 KST)이 자동 채움.
 
 **합격 기준:**

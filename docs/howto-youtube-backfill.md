@@ -18,33 +18,49 @@ python data/youtube_narrative_sync.py --ensure-tables
 
 ## 2단계: 과거 소급 수집
 
-> **권장 방법**: `youtube_backfill_monthly.py` 스크립트를 사용한다.
-> 단계 분리(sync → fill-returns → scores)와 월별 오류 격리가 내장되어 있어,
-> 네트워크 hang이나 API 차단 시에도 안전하게 재실행할 수 있다.
+> **권장 방법 — 분산 백필**: `youtube_backfill_monthly.py`의 `enqueue`/`process` 단계를 사용한다.
+> 영상 목록을 큐(`youtube_backfill_queue`)에 미리 적재하고, 일일 운영 잡과 동일한 소량(8개/회)으로
+> 외부 스케줄러가 반복 호출해 자막을 수집한다. burst 방식(한 번에 수백 건 연속 요청)은
+> YouTube의 안티스크래핑 임계값을 넘겨 IP 차단을 유발하므로 더 이상 권장하지 않는다
+> (2026-06-03 시도 — 810/810 전부 IP 차단, 저장 0건. 자세한 내용은 [백필 계획](plan-youtube-backfill.md) 참고).
 
 ```bash
-# 1~5월 전체 자동 실행 (권장)
-python scripts/youtube_backfill_monthly.py
+# 1) 큐 적재 — 검색 API만 사용 (자막 요청 없음, 차단 위험 없음). 1회만 실행
+python scripts/youtube_backfill_monthly.py --step enqueue --from 2026-01 --to 2026-05
 
-# 특정 월만
-python scripts/youtube_backfill_monthly.py --from 2026-02 --to 2026-03
+# 2) Windows 작업 스케줄러에 배치 처리 등록 (하루 3회: 11/14/17시)
+schtasks /Create /TN "YTBackfillBatch" ^
+  /TR "<repo>\venv\Scripts\python.exe <repo>\scripts\youtube_backfill_monthly.py --step process --batch-size 8" ^
+  /SC DAILY /ST 11:00 /RI 180 /DU 0006:00
 
-# 단계 분리 실행 (문제 발생 시)
-python scripts/youtube_backfill_monthly.py --step sync
+# 큐 진행 상황 확인
+#   SELECT status, COUNT(*) FROM youtube_backfill_queue GROUP BY status;
+
+# 3) 큐가 모두 done/no_transcript/error가 되면 작업 삭제
+schtasks /Delete /TN "YTBackfillBatch" /F
+
+# 4) 마무리 — forward return 채우기 + attention_score 재집계
 python scripts/youtube_backfill_monthly.py --step fill-returns
-python scripts/youtube_backfill_monthly.py --step scores
+python scripts/youtube_backfill_monthly.py --step scores --from 2026-01 --to 2026-05
 ```
 
 스크립트 상세 옵션은 [reference-youtube-backfill-monthly.md](reference-youtube-backfill-monthly.md)를 참고한다.
 
-### 직접 CLI 사용 (단일 기간)
+### [구버전, 비권장] burst 방식
 
 ```bash
-# 특정 날짜 범위를 한 번에 실행 (단계 분리 불필요할 때)
+# 단계 분리 실행 — IP 차단 위험 (자세한 내용은 백필 계획의 "burst 백필 시도" 참고)
+python scripts/youtube_backfill_monthly.py --step sync
+python scripts/youtube_backfill_monthly.py --step fill-returns
+python scripts/youtube_backfill_monthly.py --step scores
+
+# 특정 날짜 범위를 한 번에 실행
 python data/youtube_narrative_sync.py --backfill --from 2026-01-01 --to 2026-01-31
 ```
 
-**소요 시간**: 날짜당 ~10초 (YouTube API 호출 + Gemini 호출). 1년치 백필은 수십 분~수 시간 소요. YouTube API 일일 쿼터(10,000 units) 확인 필요.
+**소요 시간**: 날짜당 ~10초 (YouTube API 호출 + Gemini 호출). burst 방식은 1년치 백필이 수십 분
+이내에 끝나지만 IP 차단 위험이 크다. 분산 백필은 8개/회 × 하루 3회 = 24개/일로, 810개 기준
+약 34일이 소요된다. YouTube API 일일 쿼터(10,000 units) 확인 필요.
 
 진행 상황은 표준 로그로 출력됩니다:
 
@@ -92,7 +108,17 @@ ORDER BY s.window_end DESC;
 
 ## IP 차단 및 쿠키 우회
 
-YouTube는 자막 요청이 과도하면 IP를 차단합니다 (`IpBlocked` 예외). 차단 시 해당 영상은 스킵되고 mention_raw 저장 건수가 0이 됩니다.
+YouTube는 자막 요청이 과도하면 IP를 차단합니다 (`IpBlocked`/`RequestBlocked` 예외). 차단 시 해당 영상은 스킵되고 mention_raw 저장 건수가 0이 됩니다.
+
+> **분산 백필(`enqueue`/`process`)을 사용하면 이 섹션은 대부분 무관합니다.** `process`
+> 단계는 `RequestBlocked` 감지 시 해당 영상을 `pending`으로 유지하고 배치를 즉시 중단해
+> 다음 스케줄 실행에서 자동 재시도합니다 — 데이터 손실이나 수동 개입이 없습니다.
+> 아래 내용은 [구버전] burst 방식(`--step sync`)을 직접 사용할 때 참고하세요.
+>
+> 또한 **쿠키는 IP 레벨 차단에는 영향을 주지 않습니다** — `youtube_transcript_api`
+> 라이브러리 자체에 "Cookie auth has been temporarily disabled, as it is not working
+> properly with YouTube's most recent changes"라는 코멘트가 있어, 쿠키 인증 경로가
+> 비활성화된 상태입니다. 차단 해결책은 요청 빈도를 낮추는 것뿐입니다(분산 백필이 채택한 방식).
 
 ### 쿠키 파일로 우회
 

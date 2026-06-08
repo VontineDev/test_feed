@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.1.3] - 2026-06-09
+
+### Added
+- **YouTube 내러티브 백필 — 분산 실행 재설계** (`data/youtube_narrative_sync.py`, `scripts/youtube_backfill_monthly.py`): 2026-06-03 burst 백필(월별 순차, 영상당 2초 간격)이 1~5월 810개 영상 전부 "IP blocked by YouTube" 오류로 실패한 것(`logs/backfill_monthly.log`)을 분석한 결과, IP 자체가 영구 차단된 게 아니라 **burst 요청량이 YouTube 안티스크래핑 임계값을 넘겨 일시 차단을 유발**한다는 것을 확인 — 같은 IP로 도는 일일 운영 잡(영상 6개/일)은 정상 동작 중이었음. 쿠키 인증(`docs/youtube.com_cookies.txt`)은 IP 레벨 차단에 영향이 없음도 라이브러리 소스에서 확인(`youtube_transcript_api`의 cookie auth 비활성화 코멘트).
+  - `youtube_backfill_queue` 테이블 추가 — `video_id` PK, `status`(pending/done/no_transcript/blocked/error)로 진행률 추적
+  - `enqueue_backfill_videos()` — 검색 API만으로 영상 목록을 큐에 적재(자막 요청 없음, 차단 위험 없음). 월 단위로 호출해야 함(넓은 날짜 범위를 한 번에 조회하면 YouTube 검색 API가 결과를 누락하는 현상 확인 — 5개월 전체 조회 시 3개, 1개월 단독 조회 시 100개 반환)
+  - `_fetch_transcript_classified()` / `process_backfill_queue()` — 큐에서 `--batch-size`(기본 8)개씩 자막 수집 + LLM 추출, `RequestBlocked` 감지 시 해당 영상을 `pending`으로 유지하고 배치를 즉시 중단해 다음 실행에서 자동 재시도
+  - `youtube_backfill_monthly.py`에 `enqueue`/`process`/`--batch-size` 단계 추가, 구 `--step sync`(burst 방식)는 비권장으로 표시
+  - Windows 작업 스케줄러 `YTBackfillBatch` 등록 — 매일 11/14/17시(`/RI 180 /DU 0006:00`)에 `process --batch-size 8` 실행, 일일 운영 잡과 동일한 요청 수준으로 IP 차단 임계값 회피. 큐 적재 완료(972건, 2026-01-01~05-31), 1차 실행 2026-06-09 11:00 예정
+  - 문서: `docs/plan-youtube-backfill.md`(분산 백필 설계·진행 상태), `docs/howto-youtube-backfill.md`, `docs/reference-youtube-backfill-monthly.md`, `docs/reference-youtube-narrative.md` 갱신
+
 ## [0.10.1.2] - 2026-06-08
 
 ### Fixed

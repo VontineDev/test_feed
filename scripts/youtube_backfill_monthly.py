@@ -2,24 +2,37 @@
 youtube_backfill_monthly.py — 삼프로TV 내러티브 월별 순차 백필
 
 단계:
-  sync          각 월 영상 수집 + LLM 추출 → youtube_mention_raw
+  sync          [구버전 — burst 방식, IP 차단 위험] 각 월 영상 수집 + LLM 추출 → youtube_mention_raw
+  enqueue       영상 목록만 수집해 분산 처리 큐(youtube_backfill_queue)에 적재 (자막 요청 없음, 차단 위험 없음)
+  process       큐에서 --batch-size개씩 자막 수집 + LLM 추출 → youtube_mention_raw (1회 호출 = 1배치)
   fill-returns  yfinance로 forward return 채우기 → youtube_mention_forward_returns
   scores        날짜별 attention_score 집계 → youtube_attention_scores
-  all           세 단계 순서대로 실행 (기본값)
+  all           sync→fill-returns→scores 순서대로 실행 (기본값, burst 방식 — 비권장)
+
+권장 실행 흐름 (분산 백필 — IP 차단 회피):
+  1) enqueue 1회 실행 → 전체 기간 영상 목록을 큐에 적재
+  2) Windows 작업 스케줄러로 process를 하루 2~3회 등록 (예: 11:00, 14:00, 17:00)
+       schtasks /Create /TN "YTBackfillBatch" ^
+         /TR "<venv>\Scripts\python.exe <repo>\scripts\youtube_backfill_monthly.py --step process --batch-size 8" ^
+         /SC DAILY /ST 11:00,14:00,17:00
+     큐가 비면(pending 0건) process는 즉시 종료 — 작업을 삭제(schtasks /Delete /TN "YTBackfillBatch")해도 안전.
+  3) 큐 소진 후 fill-returns → scores 순서로 실행
 
 사용법:
-  python scripts/youtube_backfill_monthly.py
-  python scripts/youtube_backfill_monthly.py --from 2026-02 --to 2026-05
-  python scripts/youtube_backfill_monthly.py --step sync
+  python scripts/youtube_backfill_monthly.py --step enqueue
+  python scripts/youtube_backfill_monthly.py --step process --batch-size 8
   python scripts/youtube_backfill_monthly.py --step fill-returns
   python scripts/youtube_backfill_monthly.py --step scores --from 2026-01 --to 2026-05
 
 순서 의존성:
-  sync는 반드시 1월 → 2월 → ... 순서로 실행.
+  sync/enqueue는 반드시 1월 → 2월 → ... 순서로 큐에 쌓이고 처리되어야 함.
   2월 attention_score rolling window가 1월 데이터를 참조하기 때문.
+  (enqueue는 영상 목록을 video_date 오름차순으로 적재하고, process도 video_date 오름차순으로 꺼내므로 자동 보장됨)
 
 재실행 안전:
-  sync: UNIQUE(video_id, stock_name_raw, source_quote) → 중복 스킵
+  sync/process: UNIQUE(video_id, stock_name_raw, source_quote) → 중복 스킵
+  enqueue: video_id PRIMARY KEY → 이미 큐에 있는 영상 스킵
+  process: IP 차단 감지 시 해당 영상을 pending으로 유지하고 배치 중단 → 다음 실행에서 자동 재시도
   fill-returns: ON CONFLICT DO UPDATE SET ... COALESCE → 부분 채움 보존
   scores: ON CONFLICT DO UPDATE → 덮어쓰기 무해
 """
@@ -115,6 +128,50 @@ def step_sync(dsn: str, from_ym: str, to_ym: str) -> int:
     return total
 
 
+def step_enqueue(dsn: str, from_ym: str, to_ym: str) -> int:
+    """월별로 영상 목록을 수집해 분산 처리 큐에 적재 (검색 API만 사용 — 차단 위험 없음).
+
+    YouTube 검색 API는 넓은 날짜 범위를 한 번에 조회하면 결과가 누락되는
+    현상이 있어(예: 1~5월 전체 조회 시 3개만 반환, 2월 단독 조회 시 100개
+    반환), step_sync와 동일하게 월 단위로 나눠서 호출한다.
+    """
+    from data.youtube_narrative_sync import enqueue_backfill_videos, ensure_tables
+    api_key, _ = _get_api_keys()
+    ensure_tables(dsn)
+
+    months = list(_iter_months(from_ym, to_ym))
+    total  = 0
+    for i, (start, end) in enumerate(months, 1):
+        label = start.strftime("%Y-%m")
+        logger.info("━" * 55)
+        logger.info("[enqueue] %d/%d  %s  영상 목록 수집 → 큐 적재 (%s ~ %s)", i, len(months), label, start, end)
+        n = enqueue_backfill_videos(dsn, api_key, start, end)
+        total += n
+        logger.info("[enqueue] %s 완료: 신규 %d개 적재", label, n)
+
+    logger.info("━" * 55)
+    logger.info("[enqueue] 전체 완료: 신규 %d개 적재 (기존 큐 항목은 스킵)", total)
+    return total
+
+
+def step_process(dsn: str, batch_size: int) -> int:
+    """큐에서 batch_size개씩 자막 수집 + LLM 추출 → youtube_mention_raw (1회 호출 = 1배치).
+
+    외부 스케줄러(Windows 작업 스케줄러 등)가 하루 2~3회 호출하는 것을 전제로
+    설계됨 — 일일 운영 잡과 동일한 소량 처리로 IP 차단 임계값을 피한다.
+    """
+    from data.youtube_narrative_sync import process_backfill_queue, ensure_tables
+    _, gemini_key = _get_api_keys()
+    ensure_tables(dsn)
+
+    logger.info("━" * 55)
+    logger.info("[process] 배치 처리 시작 (배치 크기: %d)", batch_size)
+    result = process_backfill_queue(dsn, gemini_key, limit=batch_size)
+    suffix = " — IP 차단 감지로 조기 종료, 다음 실행에서 재시도" if result["blocked"] else ""
+    logger.info("[process] 완료: %d개 처리, %d건 저장%s", result["processed"], result["saved"], suffix)
+    return result["processed"]
+
+
 def step_fill_returns(dsn: str) -> int:
     """미채움 레코드에 yfinance forward return 채우기."""
     from data.youtube_narrative_sync import fill_forward_returns
@@ -169,12 +226,15 @@ if __name__ == "__main__":
         description="YouTube 내러티브 월별 순차 백필",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-예시:
-  python scripts/youtube_backfill_monthly.py                      # 1~5월 전체
-  python scripts/youtube_backfill_monthly.py --from 2026-02       # 2~5월
-  python scripts/youtube_backfill_monthly.py --step sync          # sync만
-  python scripts/youtube_backfill_monthly.py --step fill-returns  # return만
-  python scripts/youtube_backfill_monthly.py --step scores        # 집계만
+예시 (분산 백필 - 권장):
+  python scripts/youtube_backfill_monthly.py --step enqueue            # 큐 적재 (1회)
+  python scripts/youtube_backfill_monthly.py --step process            # 큐에서 1배치(8개) 처리
+  python scripts/youtube_backfill_monthly.py --step process --batch-size 12
+
+기타:
+  python scripts/youtube_backfill_monthly.py --step fill-returns       # return만
+  python scripts/youtube_backfill_monthly.py --step scores             # 집계만
+  python scripts/youtube_backfill_monthly.py --step sync               # [구버전, 비권장] burst 방식
         """,
     )
     parser.add_argument("--from", dest="from_ym", default=_DEFAULT_FROM,
@@ -182,8 +242,10 @@ if __name__ == "__main__":
     parser.add_argument("--to",   dest="to_ym",   default=_DEFAULT_TO,
                         metavar="YYYY-MM", help=f"종료 월 (기본: {_DEFAULT_TO})")
     parser.add_argument("--step", default="all",
-                        choices=["sync", "fill-returns", "scores", "all"],
-                        help="실행 단계 (기본: all = sync → fill-returns → scores)")
+                        choices=["sync", "enqueue", "process", "fill-returns", "scores", "all"],
+                        help="실행 단계 (기본: all = sync → fill-returns → scores, [구버전] burst 방식)")
+    parser.add_argument("--batch-size", dest="batch_size", type=int, default=8,
+                        help="process 단계에서 1회 호출당 처리할 영상 수 (기본: 8, 일일 운영 잡과 동일 수준)")
     args = parser.parse_args()
 
     dsn = _get_dsn()
@@ -192,6 +254,10 @@ if __name__ == "__main__":
 
     if args.step == "sync":
         step_sync(dsn, args.from_ym, args.to_ym)
+    elif args.step == "enqueue":
+        step_enqueue(dsn, args.from_ym, args.to_ym)
+    elif args.step == "process":
+        step_process(dsn, args.batch_size)
     elif args.step == "fill-returns":
         step_fill_returns(dsn)
     elif args.step == "scores":

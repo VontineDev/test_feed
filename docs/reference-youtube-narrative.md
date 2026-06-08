@@ -122,6 +122,37 @@ LLM이 배열 대신 객체를 반환하면 빈 배열로 처리 (버그 방어)
 
 미채움 레코드가 500건 초과면 반복 실행이 필요합니다. `ticker_names` 테이블에 없는 종목은 `<코드>.KS`로 fallback 처리됩니다 (KOSDAQ 종목은 수동으로 `ticker_names`에 `.KQ` 심볼을 추가해야 정확합니다).
 
+### `enqueue_backfill_videos(dsn, api_key, from_date, to_date) -> int`
+
+분산 백필 1단계. `fetch_video_list`로 기간 내 영상 목록만 수집해 `youtube_backfill_queue`에
+`status='pending'`으로 적재합니다 (검색 API만 사용 — 자막 요청 없음, IP 차단 위험 없음).
+`ON CONFLICT (video_id) DO NOTHING`으로 이미 큐에 있는 영상은 스킵합니다. 반환값: 신규 적재 건수.
+
+> 넓은 날짜 범위를 한 번에 넘기면 YouTube 검색 API가 결과를 누락할 수 있으므로(확인된 사례:
+> 5개월 전체 조회 시 3개만 반환, 1개월 단독 조회 시 100개 반환), 호출자(`step_enqueue`)가
+> 월 단위로 나눠서 호출해야 합니다.
+
+### `_fetch_transcript_classified(video_id) -> tuple[str | None, str]`
+
+자막 텍스트와 실패 사유를 함께 반환합니다. 반환되는 status는 `"ok"` / `"blocked"` /
+`"no_transcript"` 중 하나입니다. `RequestBlocked`(IP 차단)와 일반적인 자막 없음을
+구분해 `process_backfill_queue`가 차단 시에는 큐 항목을 `pending`으로 유지하고,
+자막이 없을 때는 `no_transcript`로 표시할 수 있게 합니다.
+
+### `process_backfill_queue(dsn, gemini_key, limit=8) -> dict`
+
+분산 백필 2단계. `youtube_backfill_queue`에서 `status='pending'`인 영상을 `video_date`
+오름차순으로 최대 `limit`개 꺼내 자막 수집 → `extract_mentions` → `youtube_mention_raw`
+저장까지 처리하고, 처리 결과에 따라 큐 항목의 `status`를 갱신합니다
+(`done` / `no_transcript` / `error`). `RequestBlocked` 감지 시 해당 영상을 `pending`으로
+유지하고 **즉시 배치를 중단**합니다 — 데이터 손실 없이 다음 스케줄 실행에서 자동 재시도됩니다.
+
+반환값: `{"processed": int, "saved": int, "blocked": bool}`.
+
+외부 스케줄러(Windows 작업 스케줄러 등)가 일일 운영 잡과 동일한 소량(`limit=8`)으로
+하루 2~3회 호출하는 것을 전제로 설계되었습니다 — burst 요청량이 IP 차단 임계값을 넘기지
+않도록 하기 위함입니다. 자세한 설계 배경은 [백필 계획](plan-youtube-backfill.md) 참고.
+
 ### `compute_attention_scores(dsn, window_end, rolling_days=5)`
 
 `youtube_mention_raw`에서 `window_end` 기준 `rolling_days` 영업일 rolling attention_score 계산.
@@ -188,6 +219,29 @@ UNIQUE 제약: `(video_id, stock_name_raw, source_quote)` — 동일 영상 내 
 | `ret_5d` | NUMERIC(9,4) | 5영업일 수익률 |
 | `ret_20d` | NUMERIC(9,4) | 20영업일 수익률 |
 | `filled_at` | DATE | 채우기 날짜 |
+
+### `youtube_backfill_queue`
+
+분산 백필 진행 상태 추적용 큐. `enqueue_backfill_videos`가 적재하고
+`process_backfill_queue`가 소비합니다.
+
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| `video_id` | TEXT PK | YouTube 영상 ID |
+| `video_date` | DATE NOT NULL | 영상 업로드 날짜 |
+| `title` | TEXT | 영상 제목 (최대 300자) |
+| `status` | TEXT NOT NULL DEFAULT 'pending' | `pending` / `done` / `no_transcript` / `blocked` / `error` |
+| `attempts` | INT NOT NULL DEFAULT 0 | 처리 시도 횟수 |
+| `last_attempt_at` | TIMESTAMPTZ | 마지막 처리 시도 시각 |
+| `created_at` | TIMESTAMPTZ DEFAULT NOW() | 큐 적재 시각 |
+
+인덱스: `(status, video_date)` — `process_backfill_queue`가 `pending` 항목을
+`video_date` 오름차순으로 조회할 때 사용.
+
+진행 상황 확인:
+```sql
+SELECT status, COUNT(*) FROM youtube_backfill_queue GROUP BY status;
+```
 
 ---
 
