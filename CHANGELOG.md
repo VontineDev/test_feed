@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [0.10.1.1] - 2026-06-08
 
 ### Fixed
-- **TradingDashboard 중복 자동 시작 경로 제거**: 레지스트리 `HKCU\...\Run`의 `TradingDashboard`(→ `start_dashboard_hidden.vbs`) 항목과 Task Scheduler `TradingDashboard` 태스크(AtStartup/AtLogOn)가 동시에 등록되어, 로그온 시 두 경로가 각각 uvicorn을 기동해 포트 8000 충돌을 일으킬 수 있던 문제 수정. `register_tasks.ps1`의 HKCU Run 정리 코드가 실제로는 실행되지 않아 항목이 남아있었음. HKCU Run 항목을 수동 제거하고, 더 이상 참조되지 않는 `scripts/start_dashboard_hidden.vbs` 파일도 삭제 — Task Scheduler(AtLogOn) 단독 관리로 통일, `start_dashboard.ps1`이 수동 시작/재시작의 단일 진입점이라는 원래 의도(0.9.9.x "시작 스크립트 단일화")를 복원.
+- **TradingDashboard 중복 자동 시작 경로 제거**: 레지스트리 `HKCU\...\Run`의 `TradingDashboard`(→ `start_dashboard_hidden.vbs`) 항목과 Task Scheduler `TradingDashboard` 태스크(AtStartup/AtLogOn)가 동시에 등록되어, 로그온 시 두 경로가 각각 uvicorn을 기동해 포트 8000 충돌을 일으킬 수 있던 문제 수정. `register_tasks.ps1`의 HKCU Run 정리 코드가 실제로는 실행되지 않아 항목이 남아있었음. HKCU Run 항목을 수동 제거하고, 더 이상 참조되지 않는 `scripts/start_dashboard_hidden.vbs` 파일도 삭제 — Task Scheduler(AtLogOn) 단독 관리로 통일, `start_dashboard.ps1`이 수동 시작/재시작의 단일 진입점이라는 원래 의도(0.9.9.x "시작 스크립트 단일화")를 복원. 검증: 기존 uvicorn 종료 후 `schtasks /Run /TN TradingDashboard`로 AtLogOn 경로를 재현 — 단일 master/worker 프로세스만 기동되고 포트 8000 LISTEN 인스턴스 1개로 충돌 없음을 확인.
 
 ## [0.10.1.0] - 2026-06-05
 
