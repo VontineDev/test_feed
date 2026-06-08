@@ -978,7 +978,7 @@ async def main(interval: int, enable_summary: bool) -> None:
 
 
 async def _run_once_watchlist() -> None:
-    """--once watchlist: DB 연결 후 _watchlist_brief_job() 즉시 실행."""
+    """--once watchlist: DB + 티커 캐시 초기화 후 _watchlist_brief_job() 즉시 실행."""
     global _db_pool
     try:
         _db_pool = await create_pool()
@@ -987,6 +987,11 @@ async def _run_once_watchlist() -> None:
         logger.error("DB 연결 실패: %s", e)
         return
     try:
+        from core.ticker_cache import ticker_cache as _ticker_cache
+        try:
+            await asyncio.wait_for(_ticker_cache.load(_db_pool), timeout=60.0)
+        except Exception as _e:
+            logger.warning("[워치리스트] ticker_cache 로드 실패: %s — 정적 코드로 진행", _e)
         await _watchlist_brief_job()
     finally:
         if _db_pool:

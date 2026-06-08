@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.1.2] - 2026-06-08
+
+### Fixed
+- **텔레그램 메시지 "티커만 표시" 버그 — 3중 원인 해결**: 랠리 소멸 경고·거래대금 워치리스트 등 `_tc.get_name()`(`core/ticker_cache.py`)을 사용하는 모든 텔레그램 메시지가 한글 종목명 없이 코드만 표시되던 문제의 근본 원인을 추적해 모두 수정.
+  1. `KRX_OPENAPI_KEY`가 약 2주간 401 Unauthorized를 반환해 `krx_listings` 테이블이 비어있었음(`[ticker_cache] 0개 이름 항목 로드`) → 사용자가 키를 재발급하면서 해결 확인(실거래 호출 200 OK, 2,770행 응답).
+  2. **`sync_krx_listings()` 휴장일 대응** (`data/krx_sync.py`): `bas_dd = 어제`로 하드코딩되어 주말·공휴일에는 KRX Open API가 빈 `OutBlock_1`을 반환해 동기화가 실패하던 문제 수정. 데이터가 나올 때까지 최근 영업일을 최대 10일 거꾸로 탐색하는 재시도 루프로 교체(최장 추석/설 연휴 커버). 검증: 일요일(2026-06-07) 기동 시 자동으로 직전 영업일(금요일 2026-06-05)까지 거슬러 올라가 2,770행 upsert 완료, `pytest tests/test_krx_sync.py` 31건 통과.
+  3. **`_run_once_watchlist()` ticker_cache 미로드** (`run_scheduler.py`): `--once watchlist` CLI 경로가 `_run_once_stage()`와 달리 `ticker_cache.load()`를 호출하지 않아, `krx_listings`가 채워진 뒤에도 수동 실행 시 여전히 코드만 전송되던 문제 수정. `_run_once_stage()`와 동일하게 DB 풀 생성 직후 `ticker_cache.load(_db_pool)` 호출 추가(60초 타임아웃, 실패 시 정적 코드로 진행하는 graceful degradation 유지). 검증: `python run_scheduler.py --once watchlist` 재실행 후 로그에 `[ticker_cache] 6736개 이름 항목, 2770개 단축코드 로드 완료` 출력 확인, 실제 텔레그램 메시지에 `삼성전자(005930)` 형식으로 한글 종목명 정상 표시.
+
 ## [0.10.1.1] - 2026-06-08
 
 ### Fixed

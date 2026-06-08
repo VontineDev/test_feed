@@ -110,14 +110,20 @@ async def sync_krx_listings(pool: asyncpg.Pool) -> int:
     from data.krx_openapi import KRXOpenAPIClient
 
     client = KRXOpenAPIClient()
-    # 오늘 또는 가장 최근 영업일 기준
-    bas_dd = (date.today() - timedelta(days=1)).strftime("%Y%m%d")
 
-    logger.info("[krx_sync] KRX Open API 종목 조회 시작 (%s) ...", bas_dd)
-
-    # KOSPI + KOSDAQ 동시 조회
-    rows_kospi  = client.get_kospi_tickers(bas_dd)
-    rows_kosdaq = client.get_kosdaq_tickers(bas_dd)
+    # 휴장일(주말·공휴일)에는 OutBlock_1이 빈 배열로 옴 — 데이터가 나올 때까지
+    # 최근 영업일을 거꾸로 탐색 (최대 10일 — 최장 추석/설 연휴 커버)
+    rows_kospi: list[dict] = []
+    rows_kosdaq: list[dict] = []
+    bas_dd = ""
+    for days_back in range(1, 11):
+        bas_dd = (date.today() - timedelta(days=days_back)).strftime("%Y%m%d")
+        logger.info("[krx_sync] KRX Open API 종목 조회 시작 (%s) ...", bas_dd)
+        rows_kospi  = client.get_kospi_tickers(bas_dd)
+        rows_kosdaq = client.get_kosdaq_tickers(bas_dd)
+        if rows_kospi or rows_kosdaq:
+            break
+        logger.info("[krx_sync] %s 휴장일로 추정 (응답 0건) — 이전 영업일 조회", bas_dd)
 
     rows_raw = [
         (row, "KOSPI",  ".KS") for row in rows_kospi
