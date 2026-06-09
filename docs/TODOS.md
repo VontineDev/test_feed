@@ -8,12 +8,16 @@ Items deferred from code review and planning sessions.
 
 **What:** `python scripts/youtube_backtest.py --ret ret_5d` 실행.
 
-**When:** ~~2026-06-05 이후~~ → **분산 백필(`youtube_backfill_queue`) 완료 후로 변경**
-(2026-06-03 burst 백필이 810/810 IP 차단으로 전량 실패 — 1~5월 과거 데이터가 아직
-거의 없어 6/5 기준으로는 샘플 수(≥100) 미달. `enqueue` 1회 실행으로 큐에 972건 적재
-완료(2026-06-08), `process` 배치(8개/회 × 하루 3회, `schtasks "YTBackfillBatch"`)가
-2026-06-09부터 가동 — 약 40일 후 소진 예상. 큐 소진 → `fill-returns` → `scores`
-재실행 후 백테스트 실행. 자세한 내용은 [백필 계획](plan-youtube-backfill.md) 참고).
+**When:** ~~2026-06-05 이후~~ → **최소 2~4월 backfill 완료 후** (IP 해제 시점부터 약 8일)
+
+현황 (2026-06-09):
+- 수집 완료: 2026-01 (175건/37종목), 2026-05 (63건), 2026-06 (109건)
+- 미수집: 2026-02~04 (0건) — backfill 큐 972건 전체 pending
+- 백테스트 가능 샘플: 175건(2026-01-26~01-31 6일치) — 수치상 ≥100 충족이나 편향 심해 의미 없음
+- 블로커: YouTube IP 차단(2026-06-09, 수 시간~1일 내 자동 해제 예상) + Gemini 크레딧 소진(충전 완료)
+- schtasks "YTBackfillBatch" 등록됨 — IP 해제 시 자동 재개, 하루 24개 처리
+
+자세한 내용은 [백필 계획](plan-youtube-backfill.md) 참고.
 forward return은 `youtube_forward_return_job` (15:40 KST)이 자동 채움.
 
 **합격 기준:**

@@ -90,7 +90,22 @@ python scripts/youtube_backfill_monthly.py --step scores --from 2026-01 --to 202
 | burst 방식 (`--step sync`) | ❌ 폐기 | 2026-06-03 시도 — 810/810 IP 차단, 저장 0건 |
 | `youtube_backfill_queue` enqueue | ✅ 완료 | 2026-06-08 — 972건 적재 (2026-01-01~05-31, 전체 pending) |
 | `schtasks "YTBackfillBatch"` 등록 | ✅ 완료 | 2026-06-08 — 매일 11/14/17시, batch-size 8 (`/RI 180 /DU 0006:00`) |
-| `process` 배치 처리 | 진행 중 | 첫 실행: 2026-06-09 11:00. 24개/일 → 약 40일 소요 예상 |
+| `process` 배치 처리 | ⏸ 대기 중 | 2026-06-09 — YouTube IP 차단으로 미진행 (972건 전체 pending). Gemini 크레딧 소진도 동시 발생(→ 충전 완료). IP 차단은 수 시간~1일 내 자동 해제 예상, schtasks가 자동 재시도 |
+
+### 현재 수집 현황 (2026-06-09 기준)
+
+| 기간 | `youtube_mention_raw` 언급 건수 | 비고 |
+|------|-------------------------------|------|
+| 2026-01 | 175건 (37종목) | 이전 테스트 run 수집분 |
+| 2026-02 | 0건 | backfill 미완료 |
+| 2026-03 | 0건 | backfill 미완료 |
+| 2026-04 | 0건 | backfill 미완료 |
+| 2026-05 | 63건 (23종목) | 일일 운영 잡 수집분 |
+| 2026-06 | 109건 (25종목) | 일일 운영 잡 수집분 |
+
+- **백테스트 가능 샘플**: 175건 / 2026-01-26~01-31 (6일치) → 샘플 수는 충족(≥100)하나
+  데이터가 1월 말에 집중되어 있어 통계적 의미 없음. **2~4월 backfill 완료 후 실행 필요.**
+- **최소 진행 기준**: 2월(108건) + 3월(76건) 완료 시점 — IP 해제 후 약 8일 소요.
 
 > `SELECT status, COUNT(*) FROM youtube_backfill_queue GROUP BY status;` 로 진행 상황 확인 후 갱신.
 
@@ -99,7 +114,8 @@ python scripts/youtube_backfill_monthly.py --step scores --from 2026-01 --to 202
 ## 백테스트 기준 (분산 백필 완료 후)
 
 - **실행 시점**: 분산 백필(`youtube_backfill_queue`)이 모두 소진되고 fill-returns/scores를
-  재실행한 이후. (기존 "2026-06-05 이후" 기준은 burst 백필이 성공했다는 전제였음 — 실제로는
+  재실행한 이후. 최소한 2~3월 데이터가 채워진 시점(IP 해제 후 약 8일)부터 의미있는 결과 기대.
+  (기존 "2026-06-05 이후" 기준은 burst 백필이 성공했다는 전제였음 — 실제로는
   1~5월 데이터가 거의 없으므로 분산 백필 완료 전에는 샘플 수(≥100) 기준을 못 채울 가능성이 큼)
 - **명령**: `python scripts/youtube_backtest.py --ret ret_5d`
 - **합격 기준**: IC(ret_5d) > 0.05 AND t-stat > 1.65 AND 샘플 ≥ 100
