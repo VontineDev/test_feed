@@ -51,6 +51,7 @@ logger = logging.getLogger(__name__)
 # ── 상수 ──────────────────────────────────────────────
 _CHANNEL_ID = "UChlv4GSd7OQl3js-jkLOnFA"  # 삼프로TV 3PROTV
 _ALIASES_PATH = Path(__file__).parent / "youtube_ticker_aliases.json"
+_TICKER_MASTER_CACHE = Path(__file__).parent / "youtube_ticker_master_cache.json"
 _COOKIES_PATH = Path(__file__).parent.parent / "docs" / "youtube.com_cookies.txt"
 _SENTIMENT_WEIGHT = {"buy": 1.0, "neutral": 0.5, "sell": 0.0}
 _MIN_TRANSCRIPT_LEN = 200   # 자막이 이보다 짧으면 유효하지 않은 것으로 간주
@@ -476,24 +477,55 @@ def _load_aliases() -> dict[str, str]:
 
 
 def _load_ticker_master() -> dict[str, str]:
-    """pykrx 종목 마스터: 종목명 → 6자리 코드."""
+    """pykrx 종목 마스터: 종목명 → 6자리 코드.
+
+    KRX API는 장 마감 이후 당일 날짜로 조회 시 빈 결과를 반환한다.
+    오늘 → 어제 순으로 최대 5 거래일까지 폴백한다.
+    모든 폴백이 실패하면 파일 캐시를 사용한다.
+    성공 시 파일 캐시를 갱신한다.
+    """
     try:
         from pykrx import stock
-        today_str = date.today().strftime("%Y%m%d")
-        master = {}
-        for mkt in ["KOSPI", "KOSDAQ"]:
-            try:
-                tickers = stock.get_market_ticker_list(today_str, market=mkt)
-                for tk in tickers:
-                    name = stock.get_market_ticker_name(tk)
-                    if name:
-                        master[name] = tk
-            except Exception:
-                pass
-        return master
+        ref = date.today()
+        for delta in range(5):
+            candidate = ref - timedelta(days=delta)
+            if candidate.weekday() >= 5:
+                continue
+            date_str = candidate.strftime("%Y%m%d")
+            master: dict[str, str] = {}
+            for mkt in ["KOSPI", "KOSDAQ"]:
+                try:
+                    tickers = stock.get_market_ticker_list(date_str, market=mkt)
+                    for tk in tickers:
+                        name = stock.get_market_ticker_name(tk)
+                        if name:
+                            master[name] = tk
+                except Exception:
+                    pass
+            if master:
+                if delta > 0:
+                    logger.info("[yt-sync] pykrx 마스터: %s 기준 %d건 (%d일 폴백)",
+                                date_str, len(master), delta)
+                try:
+                    _TICKER_MASTER_CACHE.write_text(
+                        json.dumps(master, ensure_ascii=False), encoding="utf-8"
+                    )
+                except Exception:
+                    pass
+                return master
     except Exception as e:
         logger.warning("[yt-sync] pykrx 마스터 로드 실패: %s", e)
-        return {}
+
+    # pykrx 실패 시 파일 캐시 사용
+    if _TICKER_MASTER_CACHE.exists():
+        try:
+            cached = json.loads(_TICKER_MASTER_CACHE.read_text(encoding="utf-8"))
+            logger.warning("[yt-sync] pykrx 실패 — 캐시 파일 사용 (%d건)", len(cached))
+            return cached
+        except Exception:
+            pass
+    logger.warning("[yt-sync] pykrx 마스터 및 캐시 모두 실패 — 빈 마스터 사용")
+    return {}
 
 
 def normalize_ticker(name_raw: str, master: dict[str, str], aliases: dict[str, str]) -> str | None:
