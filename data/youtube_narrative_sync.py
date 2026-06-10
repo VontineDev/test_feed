@@ -59,6 +59,11 @@ _MAX_TRANSCRIPT_CHARS = 8000    # Gemini 토큰 상한
 _GEMINI_RPM_SLEEP = 4.0         # free-tier 15 RPM 대응 (60s / 15 = 4s)
 _FILL_RETURNS_BATCH = 500       # fill_forward_returns per-call 처리 행 수
 _TRANSCRIPT_FETCH_SLEEP = 2.0   # YouTube IP 차단 방지 — 자막 요청 간격
+# Tor SOCKS5 프록시: TOR_PROXY 환경변수로 활성화 (예: socks5h://127.0.0.1:9050)
+_TOR_PROXY = os.environ.get("TOR_PROXY", "")
+# Tor 컨트롤 포트: 회로 자동 교체용 (Tor Browser=9151, Expert Bundle=9051)
+_TOR_CONTROL_PORT = int(os.environ.get("TOR_CONTROL_PORT", "9151"))
+_TOR_NEWNYM_WAIT = 15  # NEWNYM 후 새 회로 구축 대기 시간(초)
 
 # ── DDL ───────────────────────────────────────────────
 _DDL = """
@@ -266,9 +271,15 @@ def process_backfill_queue(dsn: str, gemini_key: str, limit: int = 8) -> dict:
             time.sleep(_TRANSCRIPT_FETCH_SLEEP)
 
             if status == "blocked":
-                logger.warning("[yt-backfill] IP 차단으로 배치 중단 — 다음 실행에서 재시도 (이번 배치 %d/%d개 처리)",
-                               i - 1, len(rows))
-                return {"processed": i - 1, "saved": saved_total, "blocked": True}
+                logger.warning("[yt-backfill] IP 차단 감지 — 회로 교체 후 재시도")
+                if _tor_rotate_circuit():
+                    text, status = _fetch_transcript_classified(video_id)
+                    time.sleep(_TRANSCRIPT_FETCH_SLEEP)
+                if status == "blocked":
+                    logger.warning("[yt-backfill] 회로 교체 후에도 차단 — 배치 중단 (이번 배치 %d/%d개 처리)",
+                                   i - 1, len(rows))
+                    return {"processed": i - 1, "saved": saved_total, "blocked": True}
+                logger.info("[yt-backfill] 회로 교체 성공 — 처리 재개")
 
             n_saved = 0
             if status == "ok" and text:
@@ -307,23 +318,64 @@ def process_backfill_queue(dsn: str, gemini_key: str, limit: int = 8) -> dict:
         conn.close()
 
 
+# ── Tor 회로 교체 ─────────────────────────────────────
+def _tor_rotate_circuit() -> bool:
+    """Tor 컨트롤 포트로 NEWNYM 신호를 보내 새 출구 노드로 교체.
+
+    TOR_PROXY가 설정되지 않으면 즉시 False 반환.
+    stem 미설치 또는 컨트롤 포트 인증 실패 시 경고 후 False 반환.
+    성공 시 _TOR_NEWNYM_WAIT초 대기 후 True 반환.
+    """
+    if not _TOR_PROXY:
+        return False
+    try:
+        from stem import Signal
+        from stem.control import Controller
+        with Controller.from_port(port=_TOR_CONTROL_PORT) as ctrl:
+            ctrl.authenticate()
+            ctrl.signal(Signal.NEWNYM)
+        logger.info("[yt-sync] Tor 회로 교체 완료 (NEWNYM) - %d초 대기", _TOR_NEWNYM_WAIT)
+        time.sleep(_TOR_NEWNYM_WAIT)
+        return True
+    except ImportError:
+        logger.warning("[yt-sync] stem 미설치 — 자동 회로 교체 불가 (pip install stem)")
+        return False
+    except Exception as e:
+        logger.warning("[yt-sync] Tor 회로 교체 실패: %s", e)
+        return False
+
+
 # ── Transcript ────────────────────────────────────────
 def _make_yt_api() -> "YouTubeTranscriptApi":
-    """YouTubeTranscriptApi 인스턴스 생성. docs/youtube.com_cookies.txt 있으면 쿠키 적용."""
+    """YouTubeTranscriptApi 인스턴스 생성.
+
+    우선순위:
+      1. TOR_PROXY 환경변수가 있으면 SOCKS5 프록시 적용 (IP 차단 우회)
+      2. docs/youtube.com_cookies.txt 가 있으면 인증 쿠키 적용
+      3. 기본값 (프록시/쿠키 없음)
+    """
     from youtube_transcript_api import YouTubeTranscriptApi
+    import requests
+
+    session = requests.Session()
+
+    # 쿠키 적용
     if _COOKIES_PATH.exists():
-        import http.cookiejar, requests
+        import http.cookiejar
         jar = http.cookiejar.MozillaCookieJar(str(_COOKIES_PATH))
         try:
             jar.load(ignore_discard=True, ignore_expires=True)
+            session.cookies = jar
+            logger.debug("[yt-sync] 쿠키 적용: %s", _COOKIES_PATH.name)
         except Exception as e:
             logger.warning("[yt-sync] 쿠키 파일 로드 실패: %s", e)
-            return YouTubeTranscriptApi()
-        session = requests.Session()
-        session.cookies = jar
-        logger.debug("[yt-sync] 쿠키 적용: %s", _COOKIES_PATH.name)
-        return YouTubeTranscriptApi(http_client=session)
-    return YouTubeTranscriptApi()
+
+    # Tor 프록시 적용 (TOR_PROXY=socks5h://127.0.0.1:9050)
+    if _TOR_PROXY:
+        session.proxies = {"http": _TOR_PROXY, "https": _TOR_PROXY}
+        logger.info("[yt-sync] Tor 프록시 적용: %s", _TOR_PROXY)
+
+    return YouTubeTranscriptApi(http_client=session)
 
 
 def fetch_transcript(video_id: str) -> str | None:
