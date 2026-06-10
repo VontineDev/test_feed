@@ -17,12 +17,18 @@ interface StageData {
   stage3: StageRow[]
 }
 
+interface ScreenerItem {
+  ticker: string; name: string; close: number | null; ma_20w: number | null
+  cloud_top: number | null; is_enhanced: boolean; has_gapjum: boolean; sector: string | null
+  attention_score: number | null; attention_q: number | null
+}
+
 interface ScreenerData {
   week: string
   total: number
   enhanced: number
   gapjum: number
-  items: { ticker: string; name: string; close: number | null; ma_20w: number | null; cloud_top: number | null; is_enhanced: boolean; has_gapjum: boolean; sector: string | null }[]
+  items: ScreenerItem[]
 }
 
 // ── 유틸 ────────────────────────────────────────────────────
@@ -152,20 +158,45 @@ function StageReport({ data, selectedTicker, onSelect }: { data: StageData; sele
   )
 }
 
+// ── 내러티브 분위 배지 ───────────────────────────────────────
+function AttentionBadge({ q, score }: { q: number | null; score: number | null }) {
+  if (q === null) return <span style={{ color: tokens.tx.subtle }}>—</span>
+  const meta: Record<number, { label: string; color: string; bg: string }> = {
+    1: { label: 'Q1', color: '#6b7280', bg: 'rgba(107,114,128,0.12)' },
+    2: { label: 'Q2', color: '#60a5fa', bg: 'rgba(96,165,250,0.12)' },
+    3: { label: 'Q3', color: '#34d399', bg: 'rgba(52,211,153,0.15)' },
+    4: { label: 'Q4', color: '#fbbf24', bg: 'rgba(251,191,36,0.13)' },
+    5: { label: 'Q5', color: '#f87171', bg: 'rgba(248,113,113,0.13)' },
+  }
+  const m = meta[q] ?? meta[1]
+  return (
+    <span title={score != null ? `attention_score: ${score.toFixed(3)}` : undefined}
+          style={{ display: 'inline-block', padding: '1px 6px', borderRadius: 4,
+                   fontSize: 10, fontWeight: 700, color: m.color, background: m.bg }}>
+      {m.label}
+    </span>
+  )
+}
+
 // ── 스크리너 레포트 ──────────────────────────────────────────
 function ScreenerReport({ data, selectedTicker, onSelect }: { data: ScreenerData; selectedTicker: string | null; onSelect: (ticker: string, name: string) => void }) {
-  const [filter, setFilter] = useState<'all' | 'enhanced' | 'gapjum'>('all')
-  const filtered = data.items.filter(r =>
-    filter === 'all' ? true : filter === 'enhanced' ? r.is_enhanced : r.has_gapjum
-  )
+  const [filter, setFilter] = useState<'all' | 'enhanced' | 'gapjum' | 'narrative'>('all')
+  const filtered = data.items.filter(r => {
+    if (filter === 'enhanced') return r.is_enhanced
+    if (filter === 'gapjum') return r.has_gapjum
+    if (filter === 'narrative') return r.attention_q !== null && r.attention_q >= 2 && r.attention_q <= 4
+    return true
+  })
+  const narrativeCnt = data.items.filter(r => r.attention_q !== null && r.attention_q >= 2 && r.attention_q <= 4).length
 
   return (
     <>
       <div style={s.chips}>
         {([
-          { f: 'all',      label: '통과',   val: data.total,    color: tokens.accent.blueSoft,       tooltip: '주봉 일목균형표 기준선 위 + 20주 이동평균 위 조건을 동시에 충족한 종목. 기본 강세 구조 확인.' },
-          { f: 'enhanced', label: '강화',   val: data.enhanced, color: tokens.stage[2],              tooltip: '통과 조건 + 전환선·기준선 정배열 + 구름대 위 종가 등 추가 조건 충족. 더 강한 강세 신호.' },
-          { f: 'gapjum',   label: '갭점프', val: data.gapjum,   color: tokens.chart.cat.ichimoku,    tooltip: '전주 대비 갭업(시가 > 전주 종가) 발생 종목. 수급 집중 또는 강세 돌파 신호일 수 있음.' },
+          { f: 'all',       label: '통과',    val: data.total,    color: tokens.accent.blueSoft,    tooltip: '주봉 일목균형표 기준선 위 + 20주 이동평균 위 조건을 동시에 충족한 종목. 기본 강세 구조 확인.' },
+          { f: 'enhanced',  label: '강화',    val: data.enhanced, color: tokens.stage[2],           tooltip: '통과 조건 + 전환선·기준선 정배열 + 구름대 위 종가 등 추가 조건 충족. 더 강한 강세 신호.' },
+          { f: 'gapjum',    label: '갭점프',  val: data.gapjum,   color: tokens.chart.cat.ichimoku, tooltip: '전주 대비 갭업(시가 > 전주 종가) 발생 종목. 수급 집중 또는 강세 돌파 신호일 수 있음.' },
+          { f: 'narrative', label: '내러티브', val: narrativeCnt,  color: '#34d399',                tooltip: '삼프로TV 내러티브 관심도 Q2~Q4 구간 종목. IC 분석 기준 20일 수익률 양의 신호 (ICIR +0.36, t=3.05).' },
         ] as const).map(({ f, label, val, color, tooltip }) => (
           <button
             key={f}
@@ -175,7 +206,7 @@ function ScreenerReport({ data, selectedTicker, onSelect }: { data: ScreenerData
               border: filter === f ? `1px solid ${color}` : '1px solid transparent',
               background: filter === f ? tokens.bg.active : tokens.bg.raised,
             }}
-            onClick={() => setFilter(f)}
+            onClick={() => setFilter(f as typeof filter)}
           >
             <span style={{ ...s.chipLabel, display: 'inline-flex', alignItems: 'center' }}>
               {label}
@@ -190,8 +221,14 @@ function ScreenerReport({ data, selectedTicker, onSelect }: { data: ScreenerData
         <table style={s.table}>
           <thead>
             <tr>
-              {['종목', '업종', '종가', 'MA20W', '구름상단', ''].map(h => (
-                <th key={h} style={s.th}>{h}</th>
+              {(['종목', '업종', '종가', 'MA20W', '구름상단', '내러티브', ''] as const).map(h => (
+                <th key={h} style={h === '내러티브' ? { ...s.th, textAlign: 'center' } : s.th}>
+                  {h === '내러티브'
+                    ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                        {h}<InfoTip text="삼프로TV 5일 rolling 내러티브 관심도 분위. Q2~Q4가 20일 수익률 양의 IC 신호 (IC +0.10, t=3.05). Q5는 과열 주의." />
+                      </span>
+                    : h}
+                </th>
               ))}
             </tr>
           </thead>
@@ -210,6 +247,9 @@ function ScreenerReport({ data, selectedTicker, onSelect }: { data: ScreenerData
                 <td style={{ ...s.td, textAlign: 'right' as const }}>{fmt(r.close)}</td>
                 <td style={{ ...s.td, textAlign: 'right' as const, color: tokens.tx.muted }}>{fmt(r.ma_20w)}</td>
                 <td style={{ ...s.td, textAlign: 'right' as const, color: tokens.tx.muted }}>{fmt(r.cloud_top)}</td>
+                <td style={{ ...s.td, textAlign: 'center' as const }}>
+                  <AttentionBadge q={r.attention_q} score={r.attention_score} />
+                </td>
                 <td style={{ ...s.td, textAlign: 'center' as const, fontSize: 11 }}>
                   {r.is_enhanced && <span style={{ color: tokens.stage[2] }}>강화</span>}
                   {r.has_gapjum && <span style={{ color: tokens.chart.cat.ichimoku, marginLeft: 4 }}>갭</span>}

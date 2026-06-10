@@ -1096,11 +1096,21 @@ async def get_screener_report():
 
         rows = await conn.fetch(
             """
-            SELECT ticker, name, close, ma_20w, ma_60w, ma_120w,
-                   cloud_top, is_enhanced, has_gapjum, sector, screened_at
-            FROM   chart_signals
-            WHERE  week_of = $1
-            ORDER  BY is_enhanced DESC, has_gapjum DESC, close DESC
+            WITH latest_yt AS (
+                SELECT ticker,
+                       attention_score,
+                       NTILE(5) OVER (ORDER BY attention_score) AS attention_q
+                FROM   youtube_attention_scores
+                WHERE  window_end = (SELECT MAX(window_end) FROM youtube_attention_scores)
+                  AND  attention_score > 0
+            )
+            SELECT cs.ticker, cs.name, cs.close, cs.ma_20w, cs.ma_60w, cs.ma_120w,
+                   cs.cloud_top, cs.is_enhanced, cs.has_gapjum, cs.sector, cs.screened_at,
+                   yt.attention_score, yt.attention_q
+            FROM   chart_signals cs
+            LEFT JOIN latest_yt yt ON yt.ticker = cs.ticker
+            WHERE  cs.week_of = $1
+            ORDER  BY cs.is_enhanced DESC, cs.has_gapjum DESC, cs.close DESC
             """, latest_week,
         )
 
@@ -1117,6 +1127,8 @@ async def get_screener_report():
             "is_enhanced": r["is_enhanced"],
             "has_gapjum": r["has_gapjum"],
             "sector": r["sector"],
+            "attention_score": float(r["attention_score"]) if r["attention_score"] else None,
+            "attention_q": int(r["attention_q"]) if r["attention_q"] else None,
         })
 
     enhanced = sum(1 for i in items if i["is_enhanced"])
