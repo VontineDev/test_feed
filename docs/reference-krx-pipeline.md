@@ -28,34 +28,73 @@ KRX(한국거래소) 데이터를 수집하는 4개 모듈의 완전한 기술 �
 ### `KRXOpenAPIClient`
 
 ```python
-from data.krx_openapi import KRXOpenAPIClient
+from data.krx_openapi import KRXOpenAPIClient, get_client
 
-client = KRXOpenAPIClient()  # KRX_OPENAPI_KEY 환경변수 사용
-# 또는
-client = KRXOpenAPIClient(appkey="YOUR_KEY")
+client = KRXOpenAPIClient()            # KRX_OPENAPI_KEY 환경변수 사용
+client = KRXOpenAPIClient(appkey="X")  # 직접 전달
+client = get_client()                  # 모듈 수준 싱글턴 (권장)
 ```
 
 Base URL: `https://data-dbg.krx.co.kr/svc/apis`  
 인증: `AUTH_KEY` 헤더. Rate limit: 10 req/s.
 
-#### `get_stock_listing(bas_dd) -> list[dict]`
+#### 종목 기본정보
 
-KOSPI/KOSDAQ 전 종목 기본정보 조회.
+| 메서드 | 엔드포인트 | 설명 |
+|--------|-----------|------|
+| `get_kospi_tickers(bas_dd)` | `/sto/stk_isu_base_info` | KOSPI 전 종목 기본정보 |
+| `get_kosdaq_tickers(bas_dd)` | `/sto/ksq_isu_base_info` | KOSDAQ 전 종목 기본정보 |
+| `get_all_tickers(bas_dd)` | 위 두 API 조합 | KOSPI + KOSDAQ → `[(yfinance_symbol, name, market), ...]` |
 
 ```python
-items = client.get_stock_listing("20260529")
-# [{"isin": "KR7005930003", "short_code": "005930", "name_ko": "삼성전자", ...}]
+tickers = client.get_all_tickers("20260529")
+# [("005930.KS", "삼성전자", "KOSPI"), ("035720.KQ", "카카오", "KOSDAQ"), ...]
 ```
 
-#### `get_stock_ohlcv(bas_dd, market="KOSPI") -> list[dict]`
+#### 일별 OHLCV
 
-일별 OHLCV (시가/고가/저가/종가/거래량). `market`: `"KOSPI"` 또는 `"KOSDAQ"`.
+| 메서드 | 엔드포인트 | 설명 |
+|--------|-----------|------|
+| `get_kospi_ohlcv(bas_dd)` | `/sto/stk_bydd_trd` | KOSPI 전 종목 일별 시세 (raw) |
+| `get_kosdaq_ohlcv(bas_dd)` | `/sto/ksq_bydd_trd` | KOSDAQ 전 종목 일별 시세 (raw) |
+| `get_daily_ohlcv_all(bas_dd)` | 위 두 API 조합 | KOSPI + KOSDAQ 정규화 결과 |
 
-#### `get_index_ohlcv(bas_dd, index_code="1") -> list[dict]`
+`get_daily_ohlcv_all` 반환 형식:
+```python
+[{"symbol": "005930.KS", "market": "KOSPI", "date": date(...),
+  "open": 71000.0, "high": 72000.0, "low": 70500.0,
+  "close": 71500.0, "volume": 12345678}]
+```
 
-지수 시세. `index_code="1"` → KOSPI 종합지수.
+#### 지수 시세
+
+| 메서드 | 엔드포인트 | 설명 |
+|--------|-----------|------|
+| `get_kospi_index(bas_dd)` | `/idx/kospi_dd_trd` | KOSPI 지수 시리즈 전체 (raw) |
+| `get_kospi_index_ohlcv(bas_dd)` | 위 API 필터 | KOSPI 종합지수 단일 dict (`symbol="^KS11"`) |
+| `get_kosdaq_index(bas_dd)` | `/idx/ksq_dd_trd` | KOSDAQ 지수 시리즈 전체 (raw) |
+| `get_kosdaq_index_ohlcv(bas_dd)` | 위 API 필터 | KOSDAQ 종합지수 단일 dict (`symbol="^KQ11"`) |
+
+`get_kospi_index_ohlcv` 반환 형식:
+```python
+{"symbol": "^KS11", "market": "IDX", "date": date(...),
+ "open": 2750.0, "high": 2780.0, "low": 2740.0,
+ "close": 2760.0, "volume": 987654321, "prev_close": 2730.0}
+```
 
 **미제공**: 외국인·기관 투자자별 순매수. → `krx_flow_sync.py` 사용.
+
+---
+
+## krx_openapi.py 호출처
+
+| 파일 | 함수/컨텍스트 | 사용 메서드 | 목적 |
+|------|--------------|------------|------|
+| `data/krx_sync.py:110` | `sync_krx_listings()` | `get_kospi_tickers`, `get_kosdaq_tickers` | `krx_listings` 테이블 upsert |
+| `core/ohlcv_cache.py:249` | `fill_daily_ohlcv_from_krx()` | `get_daily_ohlcv_all`, `get_kospi_index_ohlcv` | `daily_ohlcv` 캐시 채우기 (백테스트용) |
+| `analysis/chart_screener.py:133` | `get_all_tickers()` | `get_all_tickers` | 스크리너 종목 목록 조회 (1순위, FDR fallback) |
+| `dashboard/backend/main.py:2057` | `_fetch_krx()` 내부 | `get_kospi_index_ohlcv`, `get_kosdaq_index_ohlcv` | 대시보드 시장 현황 패널 |
+| `telegram/telegram_bot.py:157` | `/status` 명령 처리 | `get_kospi_index_ohlcv`, `get_kosdaq_index_ohlcv` | 텔레그램 상태 메시지 코스피·코스닥 등락률 |
 
 ---
 
