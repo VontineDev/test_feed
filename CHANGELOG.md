@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.1.4] - 2026-06-11
+
+### Added
+- **유튜브 내러티브 탭 — 대시보드 Method 2 구현** (`dashboard/backend/main.py`, `dashboard/frontend/src/components/Narrative.tsx`, `dashboard/frontend/src/tabs.ts`): 유튜브 관심도 데이터와 스테이지 분류·스크리너 결과를 결합한 전용 탭 "내러티브(📡)" 추가.
+  - **`GET /api/youtube/screener`** 엔드포인트 신설: `youtube_attention_scores`(최신 window_end) ↔ `stage_classifications`(ticker별 최신, `DISTINCT ON`) ↔ `chart_signals`(최신 week_of) ↔ `ticker_names` ↔ `youtube_mention_raw` 5-way LEFT JOIN. 종목명은 `COALESCE(ticker_names.name_ko, chart_signals.name, mention_raw.stock_name_raw, ticker)` 순으로 채움. 응답에 `total` / `stage2_plus` / `in_screener` / `narrative_q` / `triple_combo` 요약 카운트 포함.
+  - **`Narrative.tsx`** 컴포넌트: 요약 칩 5개(전체·S2+·스크리너·내러티브Q·트리플콤보), 4-way 필터 버튼(전체/트리플콤보/S2+/스크리너), 테이블(티커·종목명·관심도·내러티브Q뱃지·스테이지뱃지·스크리너뱃지·섹터·현재가). 트리플콤보 = S2+ AND 스크리너 통과 AND 관심도 Q2-4.
+  - `tabs.ts`에 `'narrative'` 탭 키 추가 및 lazy import.
+  - **JOIN 버그 수정**: 이전 구현에서 `stage_classifications JOIN`이 0건을 반환하던 원인 파악 — `classified_date = MAX(classified_date)` 필터가 당일 갱신된 2개 ticker만 포함해 나머지 종목의 stage가 전부 NULL로 나왔음. `DISTINCT ON (ticker) ORDER BY ticker, classified_date DESC`로 교체해 ticker별 최신 stage를 올바르게 가져오도록 수정. 프론트엔드 빌드: `Narrative-BLbjyxkp.js` (6.19 kB, gzip 2.40 kB) 신규 생성.
+
 ## [0.10.1.3] - 2026-06-09
 
 ### Added
