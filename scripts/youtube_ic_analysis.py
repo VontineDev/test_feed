@@ -7,7 +7,8 @@ ICIR: mean(IC) / std(IC)
 t-stat: ICIR * sqrt(N_dates)
 
 Usage:
-    python scripts/youtube_ic_analysis.py [--min-tickers 5] [--output-dir docs]
+    python scripts/youtube_ic_analysis.py [--output-dir docs]
+    python scripts/youtube_ic_analysis.py --include-quintiles 2,3,4 --output-suffix _q2q4
 """
 from __future__ import annotations
 
@@ -119,24 +120,40 @@ def compute_forward_returns(prices: pd.DataFrame, horizons: dict[str, int]) -> d
 
 # ── IC 계산 ────────────────────────────────────────────────────────────────────
 
-def compute_ic_series(scores: pd.DataFrame, fwd_ret: pd.DataFrame) -> pd.Series:
-    """날짜별 Spearman IC. scores: long format (signal_date, ticker, attention_score)."""
+def compute_ic_series(scores: pd.DataFrame, fwd_ret: pd.DataFrame,
+                      include_quintiles: list[int] | None = None,
+                      n_groups: int = 5) -> pd.Series:
+    """날짜별 Spearman IC.
+
+    include_quintiles: 포함할 분위 목록 (1-based). None이면 전체.
+      예) [2,3,4] → 당일 횡단면에서 Q1·Q5 제외 후 IC 계산.
+    """
     records = []
     for dt, grp in scores.groupby("signal_date"):
         if dt not in fwd_ret.index:
             continue
         ret_row = fwd_ret.loc[dt]
-        merged = grp.set_index("ticker")["attention_score"].reindex(ret_row.index)
-        ret_aligned = ret_row.reindex(merged.index)
-        valid = merged.notna() & ret_aligned.notna()
-        if valid.sum() < 5:
+        merged = grp.set_index("ticker")[["attention_score"]].copy()
+        merged["ret"] = ret_row.reindex(merged.index).values
+        merged = merged.dropna()
+
+        if include_quintiles is not None and len(merged) >= n_groups * 2:
+            try:
+                merged["q"] = pd.qcut(merged["attention_score"], n_groups,
+                                       labels=False, duplicates="drop")
+                # q는 0-based → include_quintiles는 1-based
+                merged = merged[merged["q"].isin([q - 1 for q in include_quintiles])]
+            except Exception:
+                pass  # 분위 산출 실패 시 필터 없이 진행
+
+        if len(merged) < 5:
             continue
-        rho, _ = stats.spearmanr(merged[valid], ret_aligned[valid])
-        records.append({"date": dt, "ic": rho, "n": int(valid.sum())})
+        rho, _ = stats.spearmanr(merged["attention_score"], merged["ret"])
+        records.append({"date": dt, "ic": rho, "n": len(merged)})
+
     if not records:
         return pd.Series(dtype=float)
-    df = pd.DataFrame(records).set_index("date")["ic"]
-    return df
+    return pd.DataFrame(records).set_index("date")["ic"]
 
 
 # ── 보고 ───────────────────────────────────────────────────────────────────────
@@ -176,7 +193,8 @@ def _set_korean_font() -> None:
     logger.warning("한글 폰트 없음 — 한글이 □로 표시될 수 있음")
 
 
-def save_plots(ic_dict: dict[str, pd.Series], output_dir: Path) -> None:
+def save_plots(ic_dict: dict[str, pd.Series], output_dir: Path, suffix: str = "",
+               q_label: str = "전체") -> None:
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -225,21 +243,21 @@ def save_plots(ic_dict: dict[str, pd.Series], output_dir: Path) -> None:
         ax_cum.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
         ax_cum.xaxis.set_major_locator(mdates.MonthLocator())
 
-    fig.suptitle("YouTube Narrative IC Analysis  (삼프로TV, 2026-01 ~ 2026-06)",
+    fig.suptitle(f"YouTube Narrative IC Analysis  (삼프로TV, 2026-01 ~ 2026-06)  [분위: {q_label}]",
                  fontsize=13, y=1.01)
     plt.tight_layout()
 
-    out_path = output_dir / "youtube_ic_analysis.png"
+    out_path = output_dir / f"youtube_ic_analysis{suffix}.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     logger.info("차트 저장: %s", out_path)
     plt.close(fig)
 
 
-def save_ic_csv(ic_dict: dict[str, pd.Series], output_dir: Path) -> None:
+def save_ic_csv(ic_dict: dict[str, pd.Series], output_dir: Path, suffix: str = "") -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     merged = pd.DataFrame(ic_dict)
     merged.index.name = "date"
-    out_path = output_dir / "youtube_ic_series.csv"
+    out_path = output_dir / f"youtube_ic_series{suffix}.csv"
     merged.to_csv(out_path)
     logger.info("IC 시리즈 CSV 저장: %s", out_path)
 
@@ -282,8 +300,17 @@ def main() -> None:
                         help="IC 계산에 필요한 최소 종목 수 (default: 5)")
     parser.add_argument("--output-dir", type=str, default="docs",
                         help="차트/CSV 출력 디렉토리 (default: docs)")
+    parser.add_argument("--include-quintiles", type=str, default=None,
+                        help="포함할 분위 (1-based, 콤마 구분). 예: 2,3,4 → Q1·Q5 제외")
+    parser.add_argument("--output-suffix", type=str, default="",
+                        help="출력 파일명 접미사. 예: _q2q4")
     parser.add_argument("--no-plot", action="store_true", help="차트 생성 건너뜀")
     args = parser.parse_args()
+
+    include_quintiles: list[int] | None = None
+    if args.include_quintiles:
+        include_quintiles = [int(x.strip()) for x in args.include_quintiles.split(",")]
+        logger.info("분위 필터 적용: Q%s", args.include_quintiles)
 
     dsn = (f"host={os.environ['DB_HOST']} port={os.environ['DB_PORT']} "
            f"dbname={os.environ['DB_NAME']} user={os.environ['DB_USER']} "
@@ -310,14 +337,17 @@ def main() -> None:
     fwd_returns = compute_forward_returns(prices, HORIZONS)
 
     # 4. IC 계산
+    q_label = f"Q{args.include_quintiles}" if args.include_quintiles else "전체"
     print(f"\n{'='*60}")
     print("  YouTube Narrative IC Analysis  (삼프로TV 2026-01 ~ 2026-06)")
     print(f"  신호: attention_score  |  종목 수: {len(tickers)}  |  기간: {min_date} ~ {max_date}")
+    print(f"  분위 필터: {q_label}")
     print(f"{'='*60}")
 
     ic_dict: dict[str, pd.Series] = {}
     for label in HORIZONS:
-        ic = compute_ic_series(scores, fwd_returns[label])
+        ic = compute_ic_series(scores, fwd_returns[label],
+                               include_quintiles=include_quintiles)
         ic_dict[label] = ic
         print_ic_stats(ic, label, n_dates=len(scores["signal_date"].unique()))
 
@@ -341,11 +371,12 @@ def main() -> None:
 
     # 7. 출력
     output_dir = Path(args.output_dir)
-    save_ic_csv(ic_dict, output_dir)
+    sfx = args.output_suffix
+    save_ic_csv(ic_dict, output_dir, suffix=sfx)
     if not args.no_plot:
-        save_plots(ic_dict, output_dir)
+        save_plots(ic_dict, output_dir, suffix=sfx, q_label=q_label)
 
-    print(f"\n완료. 결과: {output_dir}/youtube_ic_analysis.png, youtube_ic_series.csv")
+    print(f"\n완료. 결과: {output_dir}/youtube_ic_analysis{sfx}.png, youtube_ic_series{sfx}.csv")
 
 
 if __name__ == "__main__":
