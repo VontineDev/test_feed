@@ -106,11 +106,12 @@ async def monthly_dart_xbrl_job(db_pool) -> None:
 
 
 async def daily_market_snap_job() -> None:
-    """평일 16:10 KST — ka10032 당일 최종 스냅샷 → daily_market_snap.
+    """ka10032 당일 누적 스냅샷 → daily_market_snap upsert.
 
-    NXT 시간외 단일가(15:40~16:00) 종료 10분 후 실행.
-    stex_tp=3 (KRX+NXT 합산) 기준 top100 저장.
-    장 마감 후 히트맵/TOP의 주요 데이터 소스.
+    1차: 평일 16:10 KST — NXT 단일가 종료 후 중간 스냅샷 (히트맵/TOP 즉시 반영용)
+    2차: 평일 20:10 KST — NXT 애프터마켓 종료 후 완전한 KRX+NXT 최종값으로 덮어씀
+
+    stex_tp=3 (KRX+NXT 합산) top100. (ticker, trade_date) upsert라 중복 없음.
     """
     from datetime import date as _date
     from core.db import get_dsn as _get_dsn

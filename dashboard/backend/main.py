@@ -48,7 +48,7 @@ from database import close_pool, get_pool
 import sys as _sys
 _sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from core.db import upsert_ticker_names as _upsert_ticker_names  # noqa: E402
-from data.kiwoom_aftermarket_sync import KiwoomClient  # noqa: E402
+from data.kiwoom_aftermarket_sync import KiwoomClient, _parse_int, _parse_float, _VALUE_UNIT  # noqa: E402
 from analysis.macro_tracker import MacroTracker, DEFAULT_TICKERS as _MACRO_TICKERS  # noqa: E402
 from data.market_data import _fetch_fundamental  # noqa: E402
 
@@ -166,9 +166,10 @@ def _is_holiday(d: date) -> bool:
 
 # ── 캐시 (히트맵/Top 5분, 포지션 현재가 5분) ─────────────────
 # market_open: 캐시 생성 시점의 _is_market_open() 값 — 케이스 전환 감지용
-_HEATMAP_CACHE: dict = {"data": None, "expires": 0.0, "market_open": None}
+_HEATMAP_CACHE: dict = {"data": None, "expires": 0.0, "market_open": None, "is_nxt": None}
 _HEATMAP_LOCK = asyncio.Lock()
 _PRICE_TTL = 300     # 5분
+_NXT_TTL   = 120     # NXT 시간외 2분
 
 # ── 포지션 현재가 캐시 — {ticker: current_price_float} (5분) ──
 _POS_PRICE_CACHE: dict = {"data": {}, "expires": 0.0}
@@ -181,7 +182,7 @@ _KIWOOM_TOKEN_TTL = 82800  # 23시간
 # ── Top 캐시 (5분) ────────────────────────────────────────────
 # 캐시는 n=20 기준 단일 슬롯. n이 다른 요청은 캐시된 데이터를 그대로 반환.
 # 프론트엔드가 n=20 고정이므로 충돌 없음. n 변경 시 단일 슬롯 가정 재검토 필요.
-_TOP_CACHE: dict = {"data": None, "expires": 0.0, "market_open": None}
+_TOP_CACHE: dict = {"data": None, "expires": 0.0, "market_open": None, "is_nxt": None}
 _TOP_TTL = 300            # 장 중 5분
 _AFTERMARKET_TTL = 1800   # 장 마감 후 30분 (aftermarket_snap은 하루 종일 불변)
 _TOP_LOCK = asyncio.Lock()
@@ -206,8 +207,8 @@ _SSE_CONNECTIONS: dict[str, int] = {"signals": 0, "scheduler": 0}
 
 
 def _cache_is_valid(cache: dict) -> bool:
-    """캐시 유효 여부: TTL + market_open 상태 일치 확인.
-    market_open 상태가 바뀌면 TTL이 남아 있어도 무효 처리.
+    """캐시 유효 여부: TTL + market_open/is_nxt 상태 일치 확인.
+    market_open 또는 is_nxt 상태가 바뀌면 TTL이 남아 있어도 무효 처리.
     """
     if not cache["data"]:
         return False
@@ -215,19 +216,24 @@ def _cache_is_valid(cache: dict) -> bool:
         return False
     if cache.get("market_open") is not None and cache["market_open"] != _is_market_open():
         return False
+    if cache.get("is_nxt") is not None and cache["is_nxt"] != _is_nxt_open():
+        return False
     return True
 
 
-async def _bg_refresh(cache: dict, lock: asyncio.Lock, fetch_fn, ttl: float, label: str) -> None:
-    """stale-while-revalidate: 백그라운드에서 캐시를 갱신한다. 실패 시 stale 유지."""
+async def _bg_refresh(cache: dict, lock: asyncio.Lock, fetch_fn, ttl, label: str) -> None:
+    """stale-while-revalidate: 백그라운드에서 캐시를 갱신한다. 실패 시 stale 유지.
+    ttl: float 또는 Callable[[data], float] — 데이터에 따라 TTL을 동적 결정할 때 callable 사용.
+    """
     async with lock:
         if _cache_is_valid(cache):
             return  # 락 대기 중 이미 다른 태스크가 갱신 완료
         try:
             data = await fetch_fn()
             cache["data"] = data
-            cache["expires"] = _time_module.time() + ttl
+            cache["expires"] = _time_module.time() + (ttl(data) if callable(ttl) else ttl)
             cache["market_open"] = _is_market_open()
+            cache["is_nxt"] = _is_nxt_open()
             logger.info("[cache] %s 갱신 완료", label)
         except Exception as e:
             logger.warning("[cache] %s 백그라운드 갱신 실패 — stale 유지: %s", label, e)
@@ -493,13 +499,42 @@ async def _fetch_current_prices(
 #   첫 요청까지는 금요일 캐시가 살아있을 수 있음.
 #   캐시 TTL이 만료되면 자동 해소 — 허용 범위로 판단.
 def _is_market_open() -> bool:
-    """평일 비공휴일 09:00~15:30 KST 이면 True."""
+    """평일 비공휴일 09:00~15:39 KST — 정규장 + 마감 동시호가 종료까지.
+
+    15:30 마감 동시호가 체결 이후 종가가 확정되므로 15:40 직전까지 ka10032를
+    사용한다. 15:31~15:39 구간은 NXT 애프터마켓 단일가가 시작되기 전이며,
+    ka10032가 당일 최종 정규장 가격을 반영한 상태이다.
+    """
     now_kst = datetime.now(_KST)
     if now_kst.weekday() >= 5:
         return False
     if _is_holiday(now_kst.date()):
         return False
-    return time(9, 0) <= now_kst.time() < time(15, 31)
+    return time(9, 0) <= now_kst.time() < time(15, 40)
+
+
+def _is_nxt_open() -> bool:
+    """평일 비공휴일 15:40~16:09 KST — NXT 애프터마켓 실시간 구간.
+
+    16:10에 daily_market_snap_job이 당일 최종 스냅샷을 수집하므로,
+    그 직전까지 ka10098 실시간 데이터를 사용해 갭을 방지한다.
+    """
+    now_kst = datetime.now(_KST)
+    if now_kst.weekday() >= 5:
+        return False
+    if _is_holiday(now_kst.date()):
+        return False
+    return time(15, 40) <= now_kst.time() < time(16, 10)
+
+
+def _compute_cache_ttl(data: dict) -> float:
+    """데이터 소스에 따라 적절한 캐시 TTL 반환."""
+    if data.get("is_nxt"):
+        return _NXT_TTL
+    fetched = str(data.get("fetched_at", ""))
+    if fetched and "-" in fetched:   # YYYY-MM-DD 형식 → aftermarket snap
+        return _AFTERMARKET_TTL
+    return _PRICE_TTL
 
 
 # ── daily_market_snap에서 거래대금 상위 N 조회 (장마감 1순위) ──────
@@ -635,14 +670,55 @@ async def _fetch_aftermarket_snap_top_async(n: int) -> dict | None:
 #   daily_market_snap 전날 데이터가 그대로 유지되므로 연속성 개선됨.
 #   단, 스냅샷 수집(16:10) 전 15:30~16:10 구간은 어제 데이터로 표시.
 async def _build_heatmap_data() -> dict:
-    """{"items": list[dict], "fetched_at": str|None} 반환.
-    fetched_at: 장마감 시 trade_date(YYYY-MM-DD), 장중 시 None.
+    """{"items": list[dict], "fetched_at": str|None, "is_nxt": bool} 반환.
+    fetched_at: 장마감 시 trade_date(YYYY-MM-DD), 장중/NXT 시 None.
 
-    데이터 소스 우선순위 (장 마감 시):
-      1순위: daily_market_snap — ka10032 top100, KRX+NXT 합산, 전 종목 커버
-      2순위: aftermarket_snap  — NXT 거래 종목만, 폴백
+    데이터 소스 우선순위:
+      NXT 시간외 (15:40~16:05): ka10098 실시간
+      장 마감 1순위: daily_market_snap — ka10032 top100, KRX+NXT 합산, 전 종목 커버
+      장 마감 2순위: aftermarket_snap  — NXT 거래 종목만, 폴백
     """
     pool = await get_pool()
+
+    # NXT 시간외 (15:40~16:05): ka10098 실시간
+    if _is_nxt_open():
+        try:
+            nxt_data = await _ext_thread(_fetch_nxt_live, 50, timeout=15.0)
+            nxt_items = nxt_data.get("items", [])
+        except Exception as e:
+            logger.warning("[heatmap] NXT 조회 실패, 스냅샷 폴백: %s", e)
+            nxt_items = []
+        if nxt_items:
+            tickers = [it["ticker"] for it in nxt_items]
+            async with pool.acquire() as conn:
+                stage_rows = await conn.fetch(
+                    """
+                    SELECT ticker, stage FROM stage_classifications
+                    WHERE classified_date = (SELECT MAX(classified_date) FROM stage_classifications)
+                      AND ticker = ANY($1::text[])
+                    """,
+                    tickers,
+                )
+                name_rows = await conn.fetch(
+                    "SELECT ticker, name_ko FROM ticker_names WHERE ticker = ANY($1::text[])",
+                    tickers,
+                )
+            stage_map = {r["ticker"]: r["stage"] for r in stage_rows}
+            name_map  = {r["ticker"]: r["name_ko"] for r in name_rows}
+            items = [
+                {
+                    "ticker":     it["ticker"],
+                    "name":       name_map.get(it["ticker"]) or it["name"],
+                    "stage":      stage_map.get(it["ticker"]),
+                    "amount":     it["amount"],
+                    "change_pct": it["change_pct"],
+                    "market":     it.get("market", ""),
+                    "is_nxt":     True,
+                }
+                for it in nxt_items
+            ]
+            return {"items": items, "fetched_at": None, "is_nxt": True}
+        # NXT 데이터 없으면 아래 스냅샷 경로로 폴백
 
     # 장 마감 시: daily_market_snap 우선, aftermarket_snap 폴백
     if not _is_market_open():
@@ -760,10 +836,10 @@ async def get_heatmap():
     if _cache_is_valid(_HEATMAP_CACHE):
         return _heatmap_response(_HEATMAP_CACHE["data"], cached=True)
     if _HEATMAP_CACHE["data"]:
-        # stale 또는 market_open 상태 전환 — 즉시 반환하고 백그라운드에서 갱신
+        # stale 또는 market_open/is_nxt 상태 전환 — 즉시 반환하고 백그라운드에서 갱신
         if not _HEATMAP_LOCK.locked():
             asyncio.create_task(_bg_refresh(
-                _HEATMAP_CACHE, _HEATMAP_LOCK, _build_heatmap_data, _PRICE_TTL, "heatmap"
+                _HEATMAP_CACHE, _HEATMAP_LOCK, _build_heatmap_data, _compute_cache_ttl, "heatmap"
             ))
         return _heatmap_response(_HEATMAP_CACHE["data"], cached=True, stale=True)
     # 최초 기동: 데이터 없음 — 한 번만 대기
@@ -773,9 +849,9 @@ async def get_heatmap():
         try:
             cache_data = await _build_heatmap_data()
             _HEATMAP_CACHE["data"] = cache_data
-            ttl = _AFTERMARKET_TTL if cache_data.get("fetched_at") else _PRICE_TTL
-            _HEATMAP_CACHE["expires"] = _time_module.time() + ttl
+            _HEATMAP_CACHE["expires"] = _time_module.time() + _compute_cache_ttl(cache_data)
             _HEATMAP_CACHE["market_open"] = _is_market_open()
+            _HEATMAP_CACHE["is_nxt"] = _is_nxt_open()
             return _heatmap_response(cache_data, cached=False)
         except Exception as e:
             logger.error("[heatmap] 빌드 실패: %s", e)
@@ -1357,6 +1433,67 @@ def _invalidate_kiwoom_token() -> None:
     _KIWOOM_TOKEN_TS = 0.0
 
 
+def _fetch_nxt_live(n: int) -> dict:
+    """ka10098으로 NXT 시간외 실시간 상위 N 종목 조회 (동기 — asyncio.to_thread에서 호출).
+
+    401 수신 시 토큰을 무효화하고 1회 재시도합니다.
+    반환 형식은 _fetch_top_kiwoom과 동일 (rank, ticker, name, price, change_pct, amount, market).
+    """
+    import requests as _requests
+    for attempt in range(2):
+        try:
+            client = KiwoomClient(use_mock=False)
+            client.inject_token(_get_kiwoom_token())
+            all_items: list[dict] = []
+            for mrkt_tp, suffix, market_label in [
+                ("001", ".KS", "KOSPI"),
+                ("101", ".KQ", "KOSDAQ"),
+            ]:
+                rows = client.fetch_aftermarket_bulk(mrkt_tp=mrkt_tp)
+                for row in rows:
+                    krx_code = str(row.get("stk_cd", "")).strip().zfill(6)
+                    if not krx_code or krx_code == "000000":
+                        continue
+                    after_volume = _parse_int(row.get("acc_trde_qty"))
+                    if not after_volume:
+                        continue
+                    raw_val    = _parse_int(row.get("acc_trde_prica"))
+                    after_value = (raw_val * _VALUE_UNIT) if raw_val else 0
+                    if not after_value:
+                        continue
+                    reg_close   = _parse_int(row.get("tdy_close_pric"))
+                    after_close = abs(_parse_int(row.get("cur_prc")) or 0)
+                    flu_raw     = _parse_float(row.get("flu_rt"))
+                    if flu_raw is not None:
+                        change_pct = round(flu_raw, 2)
+                    elif reg_close and after_close and reg_close > 0:
+                        change_pct = round((after_close / reg_close - 1.0) * 100, 2)
+                    else:
+                        change_pct = 0.0
+                    all_items.append({
+                        "ticker":     f"{krx_code}{suffix}",
+                        "name":       str(row.get("stk_nm") or krx_code).strip(),
+                        "price":      after_close,
+                        "change_pct": change_pct,
+                        "amount":     after_value,
+                        "market":     market_label,
+                    })
+            all_items.sort(key=lambda x: x["amount"], reverse=True)
+            for i, it in enumerate(all_items[:n], 1):
+                it["rank"] = i
+            return {
+                "items":      all_items[:n],
+                "fetched_at": _time_module.strftime("%H:%M:%S"),
+                "is_nxt":     True,
+            }
+        except _requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 401 and attempt == 0:
+                logger.warning("[nxt] 401 수신 — 토큰 무효화 후 재시도")
+                _invalidate_kiwoom_token()
+                continue
+            raise
+
+
 def _fetch_top_kiwoom(n: int) -> dict:
     """Kiwoom REST API로 거래대금 상위 N 조회 (동기 — asyncio.to_thread에서 호출).
 
@@ -1416,9 +1553,13 @@ async def get_top(n: int = 50, refresh: bool = False):
     if not refresh and _cache_is_valid(_TOP_CACHE):
         return _TOP_CACHE["data"]
     if not refresh and _TOP_CACHE["data"]:
-        # stale 또는 market_open 상태 전환 — 즉시 반환하고 백그라운드에서 갱신
+        # stale 또는 market_open/is_nxt 상태 전환 — 즉시 반환하고 백그라운드에서 갱신
         if not _TOP_LOCK.locked():
             async def _fetch_top_with_fundamentals() -> dict:
+                if _is_nxt_open():
+                    d = await _ext_thread(_fetch_nxt_live, 50, timeout=15.0)
+                    await _enrich_top_with_fundamentals(d.get("items", []))
+                    return d
                 if not _is_market_open():
                     snap = await _fetch_daily_snap_top_async(50)
                     if not snap:
@@ -1426,11 +1567,11 @@ async def get_top(n: int = 50, refresh: bool = False):
                     if snap:
                         await _enrich_top_with_fundamentals(snap["items"])
                         return snap
-                data = await _ext_thread(_fetch_top_kiwoom, 50, timeout=15.0)
-                await _enrich_top_with_fundamentals(data.get("items", []))
-                return data
+                d = await _ext_thread(_fetch_top_kiwoom, 50, timeout=15.0)
+                await _enrich_top_with_fundamentals(d.get("items", []))
+                return d
             asyncio.create_task(_bg_refresh(
-                _TOP_CACHE, _TOP_LOCK, _fetch_top_with_fundamentals, _TOP_TTL, "top"
+                _TOP_CACHE, _TOP_LOCK, _fetch_top_with_fundamentals, _compute_cache_ttl, "top"
             ))
         return {**_TOP_CACHE["data"], "stale": True}
     # 최초 기동 또는 강제 refresh: 한 번만 대기
@@ -1438,6 +1579,16 @@ async def get_top(n: int = 50, refresh: bool = False):
         if not refresh and _cache_is_valid(_TOP_CACHE):
             return _TOP_CACHE["data"]
         try:
+            if _is_nxt_open():
+                data = await _ext_thread(_fetch_nxt_live, n, timeout=15.0)
+                items = data.get("items", [])
+                await _enrich_top_with_fundamentals(items)
+                data["items"] = items
+                _TOP_CACHE["data"] = data
+                _TOP_CACHE["expires"] = _time_module.time() + _NXT_TTL
+                _TOP_CACHE["market_open"] = False
+                _TOP_CACHE["is_nxt"] = True
+                return data
             if not _is_market_open():
                 snap = await _fetch_daily_snap_top_async(n)
                 if not snap:
@@ -1447,6 +1598,7 @@ async def get_top(n: int = 50, refresh: bool = False):
                     _TOP_CACHE["data"] = snap
                     _TOP_CACHE["expires"] = _time_module.time() + _AFTERMARKET_TTL
                     _TOP_CACHE["market_open"] = False
+                    _TOP_CACHE["is_nxt"] = False
                     return snap
             data = await _ext_thread(_fetch_top_kiwoom, n, timeout=15.0)
             items = data.get("items", [])
@@ -1455,6 +1607,7 @@ async def get_top(n: int = 50, refresh: bool = False):
             _TOP_CACHE["data"] = data
             _TOP_CACHE["expires"] = _time_module.time() + _TOP_TTL
             _TOP_CACHE["market_open"] = True
+            _TOP_CACHE["is_nxt"] = False
             return data
         except Exception as e:
             logger.warning("[top] 조회 오류: %s", e)

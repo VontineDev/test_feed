@@ -836,13 +836,25 @@ async def main(interval: int, enable_summary: bool) -> None:
         misfire_grace_time=1800,
         replace_existing=True,
     )
-    # ── 당일 최종 스냅샷: 평일 16:10 KST (07:10 UTC) ─────────────
+    # ── 당일 스냅샷 1차: 평일 16:10 KST (07:10 UTC) ──────────────
     # ka10032 top100(KRX+NXT 합산) → daily_market_snap
-    # NXT 종료(16:00) 후 10분 여유. 히트맵/TOP 장마감 데이터 소스.
+    # NXT 단일가 종료(16:00) 후 10분 여유. 히트맵/TOP 장마감 즉시 반영용.
     scheduler.add_job(
         _daily_market_snap_job,
         CronTrigger(day_of_week="mon-fri", hour=7, minute=10, timezone="UTC"),  # = 16:10 KST
         id="daily_market_snap",
+        max_instances=1,
+        misfire_grace_time=1800,
+        replace_existing=True,
+    )
+    # ── 당일 스냅샷 2차: 평일 20:10 KST (11:10 UTC) ──────────────
+    # NXT 애프터마켓 전면 종료(20:00) 후 10분 여유.
+    # ka10032 재조회로 16:10~20:00 구간 NXT 누적 거래대금까지 포함한
+    # 완전한 당일 최종값으로 daily_market_snap upsert.
+    scheduler.add_job(
+        _daily_market_snap_job,
+        CronTrigger(day_of_week="mon-fri", hour=11, minute=10, timezone="UTC"),  # = 20:10 KST
+        id="daily_market_snap_final",
         max_instances=1,
         misfire_grace_time=1800,
         replace_existing=True,
