@@ -316,14 +316,13 @@ async def update_to_open(
     order_no: str,
 ) -> None:
     """pending → open: 실제 체결가, 수량, 주문번호 기록."""
-    slippage = (entry_actual - 0) / entry_actual if entry_actual else None  # entry_theory 참조는 caller에서
     async with pool.acquire() as conn:
         await conn.execute(
             """
             UPDATE paper_positions
             SET status='open', entry_actual=$1, qty=$2,
                 kiwoom_buy_no=$3,
-                slippage_pct=(entry_actual - entry_theory) / NULLIF(entry_theory, 0),
+                slippage_pct=($1 - entry_theory) / NULLIF(entry_theory, 0),
                 watermark=$1
             WHERE id=$4
             """,

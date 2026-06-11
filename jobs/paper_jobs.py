@@ -61,7 +61,7 @@ def _fetch_prices_yf(tickers: list[str]) -> dict[str, float]:
 
 
 async def paper_exit_checker_job(db_pool, paper_trader) -> None:
-    """장 마감 직후 — 오픈 포지션 전체에 대해 exit 조건 판정 → 매도주문."""
+    """정규장 마감 직전(15:20 KST) — 오픈 포지션 전체에 대해 exit 조건 판정 → 시장가 매도주문."""
     today = date.today()
     _loop = asyncio.get_running_loop()
 
@@ -72,10 +72,14 @@ async def paper_exit_checker_job(db_pool, paper_trader) -> None:
 
     logger.info("[paper-exit] 오픈 포지션 %d건 exit 체크 시작", len(_open_positions))
 
-    # 현재가 일괄 조회 (yfinance) — mockapi.kiwoom.com은 시장 데이터 미지원
+    # 현재가 조회 — Kiwoom mock API ka10001 (정규장 중 실시간 가격)
     _all_tickers = list({p["ticker"] for p in _open_positions})
-    _prices = await _loop.run_in_executor(None, _fetch_prices_yf, _all_tickers)
-    logger.info("[paper-exit] yfinance 가격 조회: %d/%d 종목", len(_prices), len(_all_tickers))
+    _prices: dict[str, float] = {}
+    for _tk in _all_tickers:
+        _px = await _loop.run_in_executor(None, paper_trader.get_current_price, _tk)
+        if _px:
+            _prices[_tk] = float(_px)
+    logger.info("[paper-exit] Kiwoom 현재가 조회: %d/%d 종목", len(_prices), len(_all_tickers))
 
     _closed, _tp1_fired, _watermark_updated = 0, 0, 0
 
@@ -95,7 +99,7 @@ async def paper_exit_checker_job(db_pool, paper_trader) -> None:
         if not _entry or _entry <= 0:
             continue
 
-        # 현재가 룩업 (yfinance 배치 결과)
+        # 현재가 룩업 (Kiwoom mock API 조회 결과)
         _close = _prices.get(_ticker)
         if not _close or _close <= 0:
             logger.warning("[paper-exit] %s 현재가 없음 — 스킵", _ticker)
@@ -160,7 +164,7 @@ async def paper_exit_checker_job(db_pool, paper_trader) -> None:
                 )
             except Exception as _e:
                 logger.warning("[paper-exit] %s 매도주문 실패: %s", _ticker, _e)
-                _sell_ord = f"FAILED:{_e}"
+                _sell_ord = "FAILED"
 
         # blended_return 계산 (TP1 발동 시 가중평균)
         if _tp1_done:

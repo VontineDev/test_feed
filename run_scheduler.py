@@ -887,13 +887,13 @@ async def main(interval: int, enable_summary: bool) -> None:
     if _paper_trader:
         scheduler.add_job(
             _paper_exit_checker_job,
-            CronTrigger(day_of_week="mon-fri", hour=7, minute=10, timezone="UTC"),  # 16:10 KST
+            CronTrigger(day_of_week="mon-fri", hour=6, minute=20, timezone="UTC"),  # 15:20 KST
             id="paper_exit_checker",
             max_instances=1,
-            misfire_grace_time=1800,
+            misfire_grace_time=600,
             replace_existing=True,
         )
-        logger.info("[paper] Exit Checker 등록 완료 (16:10 KST)")
+        logger.info("[paper] Exit Checker 등록 완료 (15:20 KST)")
         scheduler.add_job(
             _paper_eod_sampler_job,
             CronTrigger(day_of_week="mon-fri", hour=7, minute=40, timezone="UTC"),  # 16:40 KST
