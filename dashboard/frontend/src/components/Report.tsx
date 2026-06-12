@@ -1,352 +1,23 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { tokens } from '../tokens'
-import DateRangeBar, { DatePreset, computeRange } from './DateRangeBar'
-import HistoryStageView from './HistoryStageView'
-import HistoryScreenerView from './HistoryScreenerView'
+import DateRangeBar, { DateRange, computeRange } from './DateRangeBar'
 import StageHistoryPopup from './StageHistoryPopup'
-import InfoTip from './InfoTip'
 import Narrative from './Narrative'
 
-// ── 타입 ────────────────────────────────────────────────────
-type StageRow = { ticker: string; name: string; sector: string | null; s1_high: number | null; s1_volume: number | null; peakout_flag: boolean }
-
-interface StageData {
-  date: string
-  summary: { stage: number; count: number; peakout: number }[]
-  stage1: StageRow[]
-  stage2: StageRow[]
-  stage3: StageRow[]
-}
-
-interface ScreenerItem {
-  ticker: string; name: string; close: number | null; ma_20w: number | null
-  cloud_top: number | null; is_enhanced: boolean; has_gapjum: boolean; sector: string | null
-  attention_score: number | null; attention_q: number | null
-}
-
-interface ScreenerData {
-  week: string
-  total: number
-  enhanced: number
-  gapjum: number
-  items: ScreenerItem[]
-}
-
-// ── 유틸 ────────────────────────────────────────────────────
-const fmt = (v: number | null | undefined, digits = 0) =>
-  v == null ? '—' : v.toLocaleString('ko-KR', { maximumFractionDigits: digits })
-
-// ── 섹션 컨테이너 ────────────────────────────────────────────
-function Section({ title, badge, tooltip, children, defaultOpen = true }: {
-  title: string; badge?: string; tooltip?: string; children: React.ReactNode; defaultOpen?: boolean
-}) {
-  const [open, setOpen] = useState(defaultOpen)
-  return (
-    <div style={s.section}>
-      <button style={s.sectionHdr} onClick={() => setOpen(o => !o)}>
-        <span style={{ ...s.sectionTitle, display: 'inline-flex', alignItems: 'center' }}>
-          {title}
-          {tooltip && <InfoTip text={tooltip} />}
-        </span>
-        {badge && <span style={s.badge}>{badge}</span>}
-        <span style={s.chevron}>{open ? '▲' : '▼'}</span>
-      </button>
-      {open && <div style={s.sectionBody}>{children}</div>}
-    </div>
-  )
-}
-
-// ── Stage 레포트 ─────────────────────────────────────────────
-function StageReport({ data, selectedTicker, onSelect }: { data: StageData; selectedTicker: string | null; onSelect: (ticker: string, name: string) => void }) {
-  const [activeStage, setActiveStage] = useState<1 | 2 | 3>(1)
-
-  const summary1 = data.summary.find(x => x.stage === 1)
-  const summary2 = data.summary.find(x => x.stage === 2)
-  const summary3 = data.summary.find(x => x.stage === 3)
-  const peakout = data.summary.reduce((acc, x) => acc + (x.peakout ?? 0), 0)
-
-  const STAGE_META: { stage: 1 | 2 | 3; label: string; color: string; rows: StageRow[]; cnt: number }[] = [
-    { stage: 1, label: 'Stage 1', color: tokens.stage[1], rows: data.stage1, cnt: summary1?.count ?? 0 },
-    { stage: 2, label: 'Stage 2', color: tokens.stage[2], rows: data.stage2, cnt: summary2?.count ?? 0 },
-    { stage: 3, label: 'Stage 3', color: tokens.stage[3], rows: data.stage3, cnt: summary3?.count ?? 0 },
-  ]
-
-  const activeRows = STAGE_META.find(m => m.stage === activeStage)?.rows ?? []
-
-  return (
-    <>
-      <div style={s.chips}>
-        {STAGE_META.map(({ stage, label, color, cnt }) => (
-          <button
-            key={stage}
-            style={{
-              ...s.chip,
-              cursor: 'pointer',
-              border: activeStage === stage ? `1px solid ${color}` : '1px solid transparent',
-              background: activeStage === stage ? tokens.bg.active : tokens.bg.raised,
-            }}
-            onClick={() => setActiveStage(stage)}
-          >
-            <span style={s.chipLabel}>{label}</span>
-            <span style={{ ...s.chipVal, color }}>{cnt}</span>
-          </button>
-        ))}
-        {peakout > 0 && (
-          <div style={s.chip}>
-            <span style={s.chipLabel}>
-              고점 이탈
-              <span onClick={e => e.stopPropagation()}>
-                <InfoTip text="외국인·기관 동시 순매도 또는 윗꼬리+거래량 급증 감지. 단기 고점에서 매물 압력이 집중된 신호." />
-              </span>
-            </span>
-            <span style={{ ...s.chipVal, color: tokens.semantic.up }}>{peakout}</span>
-          </div>
-        )}
-      </div>
-
-      {activeRows.length > 0 ? (
-        <>
-          <div style={s.tableLabel}>Stage {activeStage} 종목 (거래량 순)</div>
-          <div style={s.tableWrap}>
-            <table style={s.table}>
-              <thead>
-                <tr>
-                  {([
-                    '종목', '업종',
-                    { label: 'S1 고가', tip: 'Stage 1으로 분류된 날의 당일 고가. 진입 시점 가격 압박을 가늠하는 기준점.' },
-                    '거래량',
-                  ] as const).map(h => {
-                    const label = typeof h === 'string' ? h : h.label
-                    const tip   = typeof h === 'object' ? h.tip : undefined
-                    return (
-                      <th key={label} style={s.th}>
-                        {label}{tip && <InfoTip text={tip} />}
-                      </th>
-                    )
-                  })}
-                </tr>
-              </thead>
-              <tbody>
-                {activeRows.map(r => (
-                  <tr
-                    key={r.ticker}
-                    style={{
-                      background: r.ticker === selectedTicker ? tokens.bg.active : r.peakout_flag ? '#1a0f0f' : 'transparent',
-                      cursor: 'pointer',
-                    }}
-                    onClick={() => onSelect(r.ticker, r.name)}
-                  >
-                    <td style={s.td}>
-                      <div style={s.tickerName}>{r.name}</div>
-                      <div style={s.tickerCode}>{r.ticker}{r.peakout_flag && ' ⚠️'}</div>
-                    </td>
-                    <td style={{ ...s.td, color: tokens.tx.muted, fontSize: 11 }}>{r.sector ?? '—'}</td>
-                    <td style={{ ...s.td, textAlign: 'right' as const }}>{fmt(r.s1_high)}</td>
-                    <td style={{ ...s.td, textAlign: 'right' as const, color: tokens.tx.secondary }}>
-                      {r.s1_volume ? (r.s1_volume / 1000).toFixed(0) + 'K' : '—'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      ) : (
-        <div style={s.empty}>Stage {activeStage} 종목 없음</div>
-      )}
-
-    </>
-  )
-}
-
-// ── 내러티브 분위 배지 ───────────────────────────────────────
-function AttentionBadge({ q, score }: { q: number | null; score: number | null }) {
-  if (q === null) return <span style={{ color: tokens.tx.subtle }}>—</span>
-  const meta: Record<number, { label: string; color: string; bg: string }> = {
-    1: { label: 'Q1', color: '#6b7280', bg: 'rgba(107,114,128,0.12)' },
-    2: { label: 'Q2', color: '#60a5fa', bg: 'rgba(96,165,250,0.12)' },
-    3: { label: 'Q3', color: '#34d399', bg: 'rgba(52,211,153,0.15)' },
-    4: { label: 'Q4', color: '#fbbf24', bg: 'rgba(251,191,36,0.13)' },
-    5: { label: 'Q5', color: '#f87171', bg: 'rgba(248,113,113,0.13)' },
-  }
-  const m = meta[q] ?? meta[1]
-  return (
-    <span title={score != null ? `attention_score: ${score.toFixed(3)}` : undefined}
-          style={{ display: 'inline-block', padding: '1px 6px', borderRadius: 4,
-                   fontSize: 10, fontWeight: 700, color: m.color, background: m.bg }}>
-      {m.label}
-    </span>
-  )
-}
-
-// ── 스크리너 레포트 ──────────────────────────────────────────
-function ScreenerReport({ data, selectedTicker, onSelect }: { data: ScreenerData; selectedTicker: string | null; onSelect: (ticker: string, name: string) => void }) {
-  const [filter, setFilter] = useState<'all' | 'enhanced' | 'gapjum' | 'narrative'>('all')
-  const filtered = data.items.filter(r => {
-    if (filter === 'enhanced') return r.is_enhanced
-    if (filter === 'gapjum') return r.has_gapjum
-    if (filter === 'narrative') return r.attention_q !== null && r.attention_q >= 2 && r.attention_q <= 4
-    return true
-  })
-  const narrativeCnt = data.items.filter(r => r.attention_q !== null && r.attention_q >= 2 && r.attention_q <= 4).length
-
-  return (
-    <>
-      <div style={s.chips}>
-        {([
-          { f: 'all',       label: '통과',    val: data.total,    color: tokens.accent.blueSoft,    tooltip: '주봉 일목균형표 기준선 위 + 20주 이동평균 위 조건을 동시에 충족한 종목. 기본 강세 구조 확인.' },
-          { f: 'enhanced',  label: '강화',    val: data.enhanced, color: tokens.stage[2],           tooltip: '통과 조건 + 전환선·기준선 정배열 + 구름대 위 종가 등 추가 조건 충족. 더 강한 강세 신호.' },
-          { f: 'gapjum',    label: '갭점프',  val: data.gapjum,   color: tokens.chart.cat.ichimoku, tooltip: '전주 대비 갭업(시가 > 전주 종가) 발생 종목. 수급 집중 또는 강세 돌파 신호일 수 있음.' },
-          { f: 'narrative', label: '내러티브', val: narrativeCnt,  color: '#34d399',                tooltip: '삼프로TV 내러티브 관심도 Q2~Q4 구간 종목. IC 분석 기준 20일 수익률 양의 신호 (ICIR +0.36, t=3.05).' },
-        ] as const).map(({ f, label, val, color, tooltip }) => (
-          <button
-            key={f}
-            style={{
-              ...s.chip,
-              cursor: 'pointer',
-              border: filter === f ? `1px solid ${color}` : '1px solid transparent',
-              background: filter === f ? tokens.bg.active : tokens.bg.raised,
-            }}
-            onClick={() => setFilter(f as typeof filter)}
-          >
-            <span style={{ ...s.chipLabel, display: 'inline-flex', alignItems: 'center' }}>
-              {label}
-              <span onClick={e => e.stopPropagation()}><InfoTip text={tooltip} /></span>
-            </span>
-            <span style={{ ...s.chipVal, color }}>{val}</span>
-          </button>
-        ))}
-      </div>
-
-      <div style={s.tableWrap}>
-        <table style={s.table}>
-          <thead>
-            <tr>
-              {(['종목', '업종', '종가', 'MA20W', '구름상단', '내러티브', ''] as const).map(h => (
-                <th key={h} style={h === '내러티브' ? { ...s.th, textAlign: 'center' } : s.th}>
-                  {h === '내러티브'
-                    ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
-                        {h}<InfoTip text="삼프로TV 5일 rolling 내러티브 관심도 분위. Q2~Q4가 20일 수익률 양의 IC 신호 (IC +0.10, t=3.05). Q5는 과열 주의." />
-                      </span>
-                    : h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map(r => (
-              <tr
-                key={r.ticker}
-                style={{ background: r.ticker === selectedTicker ? tokens.bg.active : 'transparent', cursor: 'pointer' }}
-                onClick={() => onSelect(r.ticker, r.name)}
-              >
-                <td style={s.td}>
-                  <div style={s.tickerName}>{r.name}</div>
-                  <div style={s.tickerCode}>{r.ticker}</div>
-                </td>
-                <td style={{ ...s.td, color: tokens.tx.muted, fontSize: 11 }}>{r.sector ?? '—'}</td>
-                <td style={{ ...s.td, textAlign: 'right' as const }}>{fmt(r.close)}</td>
-                <td style={{ ...s.td, textAlign: 'right' as const, color: tokens.tx.muted }}>{fmt(r.ma_20w)}</td>
-                <td style={{ ...s.td, textAlign: 'right' as const, color: tokens.tx.muted }}>{fmt(r.cloud_top)}</td>
-                <td style={{ ...s.td, textAlign: 'center' as const }}>
-                  <AttentionBadge q={r.attention_q} score={r.attention_score} />
-                </td>
-                <td style={{ ...s.td, textAlign: 'center' as const, fontSize: 11 }}>
-                  {r.is_enhanced && <span style={{ color: tokens.stage[2] }}>강화</span>}
-                  {r.has_gapjum && <span style={{ color: tokens.chart.cat.ichimoku, marginLeft: 4 }}>갭</span>}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </>
-  )
-}
-
-// ── 이력 뷰용 타입 ──────────────────────────────────────────
-interface HistoryStageData {
-  start: string
-  end: string
-  stage_filter: number | null
-  items: {
-    ticker: string; name: string; appearance_count: number
-    first_seen: string | null; last_seen: string | null
-    any_peakout: boolean; stage_queried: number; latest_stage: number | null
-  }[]
-}
-
-interface HistoryScreenerData {
-  start: string; end: string
-  items: {
-    ticker: string; name: string; week_count: number
-    first_week: string; last_week: string
-    any_enhanced: boolean; any_gapjum: boolean
-  }[]
-}
-
-// ── 메인 컴포넌트 ────────────────────────────────────────────
 export default function Report() {
-  const [subTab, setSubTab] = useState<'analysis' | 'narrative'>('analysis')
-  const [preset, setPreset] = useState<DatePreset>('today')
+  const [range, setRange] = useState<DateRange>(computeRange('today'))
 
-  // 오늘 뷰 상태
-  const [stage, setStage] = useState<StageData | null>(null)
-  const [screener, setScreener] = useState<ScreenerData | null>(null)
-
-  // 이력 뷰 상태
-  const [histStage, setHistStage] = useState<HistoryStageData | null>(null)
-  const [histScreener, setHistScreener] = useState<HistoryScreenerData | null>(null)
-
-  const [loading, setLoading] = useState(false)
-  const [lastFetched, setLastFetched] = useState<Date | null>(null)
+  // Narrative 로드 상태 — 헤더에서 통합 관리
+  const [fetchedAt, setFetchedAt]         = useState<Date | null>(null)
+  const [narrativeRefreshKey, setRefreshKey] = useState(0)
 
   // 우측 패널 선택 상태
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null)
-  const [selectedName, setSelectedName] = useState<string>('')
+  const [selectedName, setSelectedName]     = useState<string>('')
   const splitRightRef = useRef<HTMLDivElement>(null)
 
-  const range = useMemo(() => computeRange(preset), [preset])
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      if (preset === 'today') {
-        const [sr, scr] = await Promise.all([
-          fetch('/api/report/stage'),
-          fetch('/api/report/screener'),
-        ])
-        if (!sr.ok || !scr.ok) throw new Error('fetch failed')
-        const [s, sc] = await Promise.all([sr.json(), scr.json()])
-        setStage(s.data)
-        setScreener(sc.data)
-        setHistStage(null)
-        setHistScreener(null)
-      } else {
-        const { start, end } = range
-        const [hsr, hscr] = await Promise.all([
-          fetch(`/api/history/stage?start=${start}&end=${end}`),
-          fetch(`/api/history/screener?start=${start}&end=${end}`),
-        ])
-        if (!hsr.ok || !hscr.ok) throw new Error('fetch failed')
-        const [hs, hsc] = await Promise.all([hsr.json(), hscr.json()])
-        setHistStage(hs.data)
-        setHistScreener(hsc.data)
-        setStage(null)
-        setScreener(null)
-      }
-      setLastFetched(new Date())
-    } catch {
-      // 개별 실패는 null 유지
-    } finally {
-      setLoading(false)
-    }
-  }, [preset, range])
-
-  useEffect(() => { load() }, [load])
-
-  // 프리셋 변경 시 패널 닫기
-  useEffect(() => { setSelectedTicker(null); setSelectedName('') }, [preset])
+  // 프리셋/범위 변경 시 패널 닫기
+  useEffect(() => { setSelectedTicker(null); setSelectedName('') }, [range.preset, range.start, range.end])
 
   // 패널 열릴 때 화면에 보이도록 스크롤 (모바일 세로 스택 대응)
   useEffect(() => {
@@ -365,140 +36,72 @@ export default function Report() {
     }
   }
 
-  const stageBadge = preset === 'today' ? (stage?.date ?? undefined) : `${range.start}~${range.end}`
-  const screenerBadge = preset === 'today' ? (screener?.week ?? undefined) : `${range.start}~${range.end}`
+  // today는 파라미터 없이 최신 스냅샷, 나머지는 기간 전달
+  const dateProps = range.preset === 'today'
+    ? {}
+    : { start: range.start, end: range.end }
 
   return (
     <div style={s.wrap}>
       {/* 헤더 */}
       <div style={s.hdr}>
         <span style={s.hdrTitle}>종목 분석</span>
-        {subTab === 'analysis' && lastFetched && (
-          <span style={s.hdrTime}>{lastFetched.toLocaleTimeString('ko-KR')} 기준</span>
+        {fetchedAt && (
+          <span style={s.hdrTime}>{fetchedAt.toLocaleTimeString('ko-KR')} 기준</span>
         )}
-        {subTab === 'analysis' && (
-          <button style={s.refreshBtn} onClick={load} disabled={loading}>
-            {loading ? '로딩…' : '새로고침'}
-          </button>
-        )}
+        <button style={s.refreshBtn} onClick={() => setRefreshKey(k => k + 1)}>
+          새로고침
+        </button>
       </div>
 
-      {/* 서브탭 바 */}
-      <div style={s.subTabBar}>
-        {(['analysis', 'narrative'] as const).map(key => (
-          <button
-            key={key}
-            style={{ ...s.subTabBtn, ...(subTab === key ? s.subTabBtnActive : {}) }}
-            onClick={() => setSubTab(key)}
-          >
-            {key === 'analysis' ? '추세·스크리너' : '유튜브 내러티브'}
-          </button>
-        ))}
-      </div>
+      {/* 날짜 범위 선택 바 */}
+      <DateRangeBar range={range} onChange={setRange} />
 
-      {subTab === 'analysis' ? (
-        <>
-          {/* 날짜 범위 선택 바 */}
-          <DateRangeBar preset={preset} onChange={p => setPreset(p)} />
-
-          {/* 콘텐츠 — 좌우 분할 */}
-          <div className="report-split-container" style={s.splitWrap}>
-            {/* 왼쪽: 섹션 목록 */}
-            <div className="report-split-left" style={{
-              ...s.splitLeft,
-              flex: selectedTicker ? '0 0 55%' : 1,
-              borderRight: selectedTicker ? `1px solid ${tokens.bd.default}` : undefined,
-            }}>
-              <Section
-                title="추세 단계"
-                badge={stageBadge}
-                tooltip="전 종목을 일봉 기준 3단계 추세로 분류합니다. Stage 1(상승 초기)이 매수 적기, Stage 2(고점권)는 조심, Stage 3(하락)은 관망."
-              >
-                {preset === 'today'
-                  ? (stage ? <StageReport data={stage} selectedTicker={selectedTicker} onSelect={handleSelect} /> : <div style={s.empty}>데이터 없음</div>)
-                  : (histStage
-                      ? <HistoryStageView items={histStage.items} start={range.start} end={range.end} selectedTicker={selectedTicker} onSelect={handleSelect} />
-                      : <div style={s.empty}>{loading ? '로딩…' : '데이터 없음'}</div>)
-                }
-              </Section>
-
-              <Section
-                title="강세 후보 발굴"
-                badge={screenerBadge}
-                tooltip="주봉 일목균형표 + 20주 이동평균 조건을 통과한 종목입니다. 기술적으로 강세 신호가 켜진 후보를 매주 스캔합니다."
-              >
-                {preset === 'today'
-                  ? (screener ? <ScreenerReport data={screener} selectedTicker={selectedTicker} onSelect={handleSelect} /> : <div style={s.empty}>데이터 없음</div>)
-                  : (histScreener
-                      ? <HistoryScreenerView items={histScreener.items} start={range.start} end={range.end} selectedTicker={selectedTicker} onSelect={handleSelect} />
-                      : <div style={s.empty}>{loading ? '로딩…' : '데이터 없음'}</div>)
-                }
-              </Section>
-            </div>
-
-            {/* 오른쪽: 상세 패널 */}
-            {selectedTicker && (
-              <div ref={splitRightRef} className="report-split-right" style={s.splitRight}>
-                <StageHistoryPopup
-                  ticker={selectedTicker}
-                  name={selectedName}
-                  start={range.start}
-                  end={range.end}
-                  onClose={() => { setSelectedTicker(null); setSelectedName('') }}
-                  mode="panel"
-                />
-              </div>
-            )}
-          </div>
-        </>
-      ) : (
-        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-          <Narrative />
+      {/* 콘텐츠 — 좌우 분할 */}
+      <div className="report-split-container" style={s.splitWrap}>
+        <div className="report-split-left" style={{
+          ...s.splitLeft,
+          flex: selectedTicker ? '0 0 55%' : 1,
+          borderRight: selectedTicker ? `1px solid ${tokens.bd.default}` : undefined,
+        }}>
+          <Narrative
+            onSelect={handleSelect}
+            selectedTicker={selectedTicker}
+            onLoad={setFetchedAt}
+            refreshKey={narrativeRefreshKey}
+            {...dateProps}
+          />
         </div>
-      )}
+
+        {/* 오른쪽: 종목별 상세 패널 */}
+        {selectedTicker && (
+          <div ref={splitRightRef} className="report-split-right" style={s.splitRight}>
+            <StageHistoryPopup
+              ticker={selectedTicker}
+              name={selectedName}
+              start={range.start}
+              end={range.end}
+              onClose={() => { setSelectedTicker(null); setSelectedName('') }}
+              mode="panel"
+            />
+          </div>
+        )}
+      </div>
     </div>
   )
 }
 
-// ── 스타일 ───────────────────────────────────────────────────
+// ── 스타일 ────────────────────────────────────────────────────
 const s: Record<string, React.CSSProperties> = {
-  wrap: { height: '100%', display: 'flex', flexDirection: 'column', fontSize: 12, color: tokens.tx.secondary, boxSizing: 'border-box', overflow: 'hidden' },
+  wrap:      { height: '100%', display: 'flex', flexDirection: 'column', fontSize: 12, color: tokens.tx.secondary, boxSizing: 'border-box', overflow: 'hidden' },
   splitWrap: { flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 },
   splitLeft: { minWidth: 0, overflowY: 'auto', transition: 'flex 0.15s' },
   splitRight: { flex: '0 0 45%', minWidth: 0, overflowY: 'auto' },
 
-  hdr: { display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderBottom: `1px solid ${tokens.bd.default}`, flexShrink: 0 },
-  hdrTitle: { fontWeight: 700, fontSize: 13, flex: 1 },
-  hdrTime: { color: tokens.tx.subtle, fontSize: 11 },
+  hdr:        { display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderBottom: `1px solid ${tokens.bd.default}`, flexShrink: 0 },
+  hdrTitle:   { fontWeight: 700, fontSize: 13, flex: 1 },
+  hdrTime:    { color: tokens.tx.subtle, fontSize: 11 },
   refreshBtn: { background: tokens.bg.raised, color: tokens.tx.secondary, border: `1px solid ${tokens.bd.emphasis}`, borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: 11, minHeight: 36 },
-
-  subTabBar: { display: 'flex', borderBottom: `1px solid ${tokens.bd.default}`, background: tokens.bg.panel, flexShrink: 0 },
-  subTabBtn: { padding: '7px 18px', border: 'none', background: 'transparent', color: tokens.tx.muted, cursor: 'pointer', fontSize: 12, fontWeight: 600, borderBottom: '2px solid transparent' },
-  subTabBtnActive: { color: tokens.accent.blueLight, borderBottom: `2px solid ${tokens.accent.blue}` },
-
-  section: { borderBottom: `1px solid ${tokens.bd.default}` },
-  sectionHdr: { width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '9px 14px', background: 'none', border: 'none', color: tokens.tx.secondary, cursor: 'pointer', textAlign: 'left' as const },
-  sectionTitle: { fontWeight: 700, fontSize: 12, flex: 1 },
-  badge: { background: tokens.bg.raised, color: tokens.tx.muted, fontSize: 10, padding: '2px 7px', borderRadius: 10 },
-  chevron: { fontSize: 10, color: tokens.tx.subtle },
-  sectionBody: { padding: '0 14px 12px' },
-
-  chips: { display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' as const },
-  chip: { background: tokens.bg.raised, borderRadius: 6, padding: '6px 12px', display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 2, border: '1px solid transparent', outline: 'none' },
-  chipLabel: { fontSize: 10, color: tokens.tx.muted },
-  chipVal: { fontSize: 18, fontWeight: 700 },
-
-  filterRow: { display: 'flex', gap: 6, marginBottom: 8 },
-  filterBtn: { background: tokens.bg.raised, color: tokens.tx.muted, border: `1px solid ${tokens.bd.emphasis}`, borderRadius: 4, padding: '3px 9px', cursor: 'pointer', fontSize: 11 },
-  filterBtnActive: { background: tokens.bg.active, color: tokens.accent.blueLight, borderColor: tokens.accent.blue },
-
-  tableLabel: { fontSize: 11, color: tokens.tx.subtle, marginBottom: 5, marginTop: 8 },
-  tableWrap: { overflowX: 'auto', maxHeight: 280, overflowY: 'auto' as const },
-  table: { width: '100%', borderCollapse: 'collapse' as const, fontSize: 11 },
-  th: { position: 'sticky' as const, top: 0, background: tokens.bg.row, color: tokens.tx.subtle, padding: '5px 8px', textAlign: 'left' as const, fontWeight: 600, whiteSpace: 'nowrap' as const, borderRight: `1px solid ${tokens.bd.default}`, borderBottom: `1px solid ${tokens.bd.default}` },
-  td: { padding: '5px 8px', borderBottom: `1px solid ${tokens.bd.default}`, borderRight: `1px solid ${tokens.bd.default}`, verticalAlign: 'middle' as const },
-  tickerName: { color: tokens.tx.secondary, fontWeight: 600 },
-  tickerCode: { color: tokens.tx.subtle, fontSize: 10 },
 
   empty: { color: tokens.tx.subtle, textAlign: 'center' as const, padding: '24px 0', fontSize: 12 },
 }

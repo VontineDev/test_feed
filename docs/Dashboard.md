@@ -31,7 +31,7 @@ PostgreSQL (Supabase)
 | 탭 | 컴포넌트 | 기능 |
 |----|----------|------|
 | 히트맵 | `Heatmap.tsx` | 당일 거래대금 상위 20종목(Kiwoom ka10032). Stage 분류 결과 오버레이. 장 마감 시 `daily_market_snap`(ka10032 top100, KRX+NXT 합산) 기준으로 전환 — `aftermarket_snap` 미매칭 시 폴백. 헤더에 "MM/DD 합산" 배지 표시. 5분 갱신(장 마감 30분). 상단에 `MarketSummaryBanner` — KOSPI/KOSDAQ 지수 + 시장 심리 한마디 표시. Kiwoom 실패 시 Stage 분류 데이터로 폴백. |
-| 종목 분석 | `Report.tsx` | 추세 단계(Stage 분류) + 강세 후보 발굴(차트 스크리닝) 결과. 날짜 범위 선택(오늘/-3일/-1주/-2주/-1달)으로 이력 조회 가능. 종목 클릭 시 우측 패널 분할로 Stage·스크리너 이력 표시; 같은 종목 재클릭 또는 날짜 변경 시 패널 닫힘. 모바일에서는 세로 스택 전환. 섹션 헤더 ⓘ 호버 시 기능 설명 팝업. |
+| 종목 분석 | `Report.tsx` | 추세 단계(Stage 분류) + 강세 후보 발굴(차트 스크리닝) 결과. 날짜 범위 선택(오늘/-3일/-1주/-2주/-1달/직접입력)으로 이력 조회 가능. 직접입력 시 `yymmdd ~ yymmdd` 형식 두 필드 입력 → 확인. 종목 클릭 시 우측 패널 분할로 Stage·스크리너 이력 표시; 같은 종목 재클릭 또는 날짜 변경 시 패널 닫힘. 모바일에서는 세로 스택 전환, 숫자패드 자동 활성화. |
 | Top | `Top.tsx` | 당일 거래대금 상위 50종목(Kiwoom ka10032). EPS·PER·Forward PER(Naver Finance) 표시. 장 마감 시 `daily_market_snap`(ka10032 top100, KRX+NXT 합산) 기준으로 전환 — `aftermarket_snap` 미수집 시 폴백. "MM/DD 합산" 배지 표시. 5분 캐시(장 마감 30분). |
 | 모의투자 | `PaperPortfolio.tsx` | 모델별 요약 + 실시간 포지션(60s 갱신) + 청산 이력 + CSV 다운로드(포지션 헤더 버튼) + 스케줄러 컨트롤. 모델 카드 클릭으로 포지션 필터링 |
 | 매크로 | `Macro.tsx` | OLS 팩터 모델 — 6개 팩터(USD/KRW·미국10년금리·브렌트유·VIX·달러인덱스·아이셰어즈 대한민국 ETF(EWY)) 추적. 종목별 분석 대상은 오늘 거래대금 상위 20종목(히트맵 기준), 없으면 `daily_market_snap` 최신 영업일 TOP 20. 결과는 거래대금 순 정렬 |
@@ -199,6 +199,46 @@ data: [{"id": 123, "direction": "BUY", "strength": 4, ...}]
   }
 }
 ```
+
+---
+
+### GET /api/report/unified
+
+Stage 분류 + 차트 스크리너 + 유튜브 관심도를 단일 응답으로 통합합니다. `종목 분석` 탭의 Narrative 뷰가 사용합니다.
+
+**쿼리 파라미터:**
+
+| 파라미터 | 타입 | 설명 |
+|---------|------|------|
+| `start` | `YYYY-MM-DD` | 조회 시작일 (생략 시 오늘 스냅샷) |
+| `end`   | `YYYY-MM-DD` | 조회 종료일 (생략 시 오늘 스냅샷) |
+
+파라미터 없으면 각 소스별 최신값을 반환하고, 있으면 해당 기간 내 최신값(DISTINCT ON ticker)을 반환합니다.
+
+**응답:**
+```json
+{
+  "rows": [
+    {
+      "ticker": "005930",
+      "name": "삼성전자",
+      "stage": 1,
+      "s1_high": 89000,
+      "peakout_flag": false,
+      "is_enhanced": true,
+      "has_gapjum": false,
+      "close": 87200,
+      "ma_20w": 82000,
+      "cloud_top": 79000,
+      "sector": "반도체",
+      "attention_score": 12.4,
+      "attention_q": 4
+    }
+  ]
+}
+```
+
+**소스 우선순위 (이름 해석):** `ticker_names` → `krx_listings` → `chart_signals.name` → `youtube_mention_raw.stock_name_raw` → ticker 코드
 
 ---
 

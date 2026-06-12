@@ -170,9 +170,37 @@ python generate_html_report.py
 
 ---
 
+## 누락 주차 백필
+
+`chart_signals`에 데이터가 빠진 주차를 소급해서 채울 수 있습니다.
+
+```bash
+# 누락 주차 자동 탐지 후 백필
+python jobs/screener_backfill.py
+
+# 특정 주차만 지정
+python jobs/screener_backfill.py --weeks W19 W24
+
+# 저장 없이 탐지만 (dry-run)
+python jobs/screener_backfill.py --dry-run
+
+# 워커 수 조정 (기본 4)
+python jobs/screener_backfill.py --workers 8
+```
+
+**동작 원리:**
+- yfinance 3년치 주봉 OHLCV를 가져와 대상 주차 월요일 이전 행만 슬라이스
+- 현재 스크리너와 동일한 7조건(A-G) 적용
+- `screened_at`을 해당 주 일요일 20:30 KST로 고정해 `chart_signals`에 upsert
+
+**주의:** yfinance는 배당락 조정 가격을 반환하므로 당시 실제 주가와 미세하게 다를 수 있습니다.
+
+---
+
 ## 관련 문서
 
 - [reference-env-vars.md](reference-env-vars.md) — `SCREENER_WORKERS`, `SCREENER_G_NAN_STRICT`
 - [howto-stage-classifier.md](howto-stage-classifier.md) — 일봉 분류기 (스크리너와 교차)
 - [explanation-signal-pipeline.md](explanation-signal-pipeline.md) — 게이팅 동작 원리
 - [HowToBacktest.md](HowToBacktest.md) — 스크리너 신호 백테스트
+- [name-resolution.md](name-resolution.md) — 종목명 해석 우선순위 및 신규 엔드포인트 체크리스트

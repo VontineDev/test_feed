@@ -602,7 +602,7 @@ async def _fetch_aftermarket_snap_top_async(n: int) -> dict | None:
             rows = await conn.fetch(
                 """
                 SELECT a.ticker,
-                       COALESCE(tn.name_ko, SPLIT_PART(a.ticker, '.', 1)) AS name,
+                       COALESCE(tn.name_ko, k.name_ko, SPLIT_PART(a.ticker, '.', 1)) AS name,
                        a.reg_close,
                        a.after_close,
                        a.after_value,
@@ -615,6 +615,7 @@ async def _fetch_aftermarket_snap_top_async(n: int) -> dict | None:
                             ELSE '' END AS market
                 FROM   aftermarket_snap a
                 LEFT JOIN ticker_names tn ON tn.ticker = a.ticker
+                LEFT JOIN krx_listings k  ON k.yfinance_symbol = a.ticker
                 WHERE  a.trade_date = (SELECT MAX(trade_date) FROM aftermarket_snap)
                   AND  COALESCE(a.reg_value, a.after_value, 0) > 0
                 ORDER  BY total_value DESC
@@ -791,12 +792,13 @@ async def _build_heatmap_data() -> dict:
         rows = await conn.fetch(
             """
             SELECT sc.ticker, sc.stage, sc.s1_high, sc.s1_volume,
-                   COALESCE(tn.name_ko, SPLIT_PART(sc.ticker, '.', 1)) AS name,
+                   COALESCE(tn.name_ko, k.name_ko, SPLIT_PART(sc.ticker, '.', 1)) AS name,
                    CASE WHEN sc.ticker LIKE '%.KS' THEN 'KOSPI'
                         WHEN sc.ticker LIKE '%.KQ' THEN 'KOSDAQ'
                         ELSE '' END AS market
             FROM stage_classifications sc
             LEFT JOIN ticker_names tn ON tn.ticker = sc.ticker
+            LEFT JOIN krx_listings k  ON k.yfinance_symbol = sc.ticker
             WHERE sc.classified_date = $1
             """,
             today,
@@ -1301,6 +1303,160 @@ async def get_youtube_screener():
         "data": {
             "total":        len(items),
             "stage2_plus":  stage2_plus,
+            "in_screener":  in_screener,
+            "narrative_q":  narrative_q,
+            "triple_combo": triple_combo,
+            "items":        items,
+        }
+    }
+
+
+# ── GET /api/report/unified ───────────────────────────────────
+# stage(1-3) + screener + youtube 세 소스 UNION, attention_score 기준 정렬
+# start/end 없으면 최신 스냅샷(today), 있으면 기간 내 최신 데이터(history)
+_UNIFIED_TAIL = """
+    ,
+    tn AS (
+        SELECT SPLIT_PART(ticker, '.', 1) AS t, name_ko
+        FROM   ticker_names
+    ),
+    kl AS (
+        SELECT SPLIT_PART(yfinance_symbol, '.', 1) AS t, name_ko
+        FROM   krx_listings
+    ),
+    mr AS (
+        SELECT DISTINCT ON (ticker) ticker AS t, stock_name_raw
+        FROM   youtube_mention_raw
+        ORDER  BY ticker, created_at DESC
+    ),
+    all_tickers AS (
+        SELECT t FROM sc
+        UNION SELECT t FROM cs
+        UNION SELECT t FROM yt
+    )
+    SELECT
+        at.t                                                                AS ticker,
+        COALESCE(tn.name_ko, kl.name_ko, cs.name, mr.stock_name_raw, at.t) AS name,
+        yt.attention_score,
+        yt.attention_q,
+        sc.stage, sc.s1_high, sc.s1_volume, sc.peakout_flag,
+        cs.is_enhanced, cs.has_gapjum, cs.sector, cs.close, cs.ma_20w, cs.cloud_top
+    FROM   all_tickers at
+    LEFT JOIN sc ON sc.t = at.t
+    LEFT JOIN cs ON cs.t = at.t
+    LEFT JOIN yt ON yt.t = at.t
+    LEFT JOIN tn ON tn.t = at.t
+    LEFT JOIN kl ON kl.t = at.t
+    LEFT JOIN mr ON mr.t = at.t
+    ORDER BY
+        yt.attention_score DESC NULLS LAST,
+        sc.stage           ASC  NULLS LAST,
+        cs.is_enhanced     DESC NULLS LAST
+"""
+
+_UNIFIED_TODAY_SQL = """
+    WITH
+    sc AS (
+        SELECT DISTINCT ON (SPLIT_PART(ticker, '.', 1))
+               SPLIT_PART(ticker, '.', 1) AS t,
+               stage, s1_high, s1_volume, peakout_flag
+        FROM   stage_classifications
+        WHERE  classified_date = (SELECT MAX(classified_date) FROM stage_classifications)
+        ORDER  BY SPLIT_PART(ticker, '.', 1), classified_date DESC
+    ),
+    cs AS (
+        SELECT SPLIT_PART(ticker, '.', 1) AS t,
+               is_enhanced, has_gapjum, close, sector, name, ma_20w, cloud_top
+        FROM   chart_signals
+        WHERE  week_of = (SELECT MAX(week_of) FROM chart_signals)
+    ),
+    yt AS (
+        SELECT ticker AS t,
+               attention_score,
+               NTILE(5) OVER (ORDER BY attention_score) AS attention_q
+        FROM   youtube_attention_scores
+        WHERE  window_end = (SELECT MAX(window_end) FROM youtube_attention_scores)
+          AND  attention_score > 0
+    )
+""" + _UNIFIED_TAIL
+
+_UNIFIED_HISTORY_SQL = """
+    WITH
+    sc AS (
+        SELECT DISTINCT ON (SPLIT_PART(ticker, '.', 1))
+               SPLIT_PART(ticker, '.', 1) AS t,
+               stage, s1_high, s1_volume, peakout_flag
+        FROM   stage_classifications
+        WHERE  classified_date BETWEEN $1 AND $2
+        ORDER  BY SPLIT_PART(ticker, '.', 1), classified_date DESC
+    ),
+    cs AS (
+        SELECT DISTINCT ON (SPLIT_PART(ticker, '.', 1))
+               SPLIT_PART(ticker, '.', 1) AS t,
+               is_enhanced, has_gapjum, close, sector, name, ma_20w, cloud_top
+        FROM   chart_signals
+        WHERE  screened_at::date BETWEEN $1 AND $2
+        ORDER  BY SPLIT_PART(ticker, '.', 1), screened_at DESC
+    ),
+    yt AS (
+        SELECT ticker AS t,
+               attention_score,
+               NTILE(5) OVER (ORDER BY attention_score) AS attention_q
+        FROM   youtube_attention_scores
+        WHERE  window_end = (SELECT MAX(window_end)
+                             FROM   youtube_attention_scores
+                             WHERE  window_end <= $2)
+          AND  attention_score > 0
+    )
+""" + _UNIFIED_TAIL
+
+@app.get("/api/report/unified")
+async def get_unified_screener(
+    start: date | None = None,
+    end:   date | None = None,
+):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        if start is None or end is None:
+            rows = await conn.fetch(_UNIFIED_TODAY_SQL)
+        else:
+            rows = await conn.fetch(_UNIFIED_HISTORY_SQL, start, end)
+
+    items = []
+    for r in rows:
+        items.append({
+            "ticker":        r["ticker"],
+            "name":          r["name"] or r["ticker"],
+            "attention_score": float(r["attention_score"]) if r["attention_score"] is not None else None,
+            "attention_q":   int(r["attention_q"]) if r["attention_q"] is not None else None,
+            "stage":         int(r["stage"]) if r["stage"] is not None else None,
+            "s1_high":       float(r["s1_high"]) if r["s1_high"] is not None else None,
+            "s1_volume":     int(r["s1_volume"]) if r["s1_volume"] is not None else None,
+            "peakout_flag":  bool(r["peakout_flag"]) if r["peakout_flag"] is not None else False,
+            "is_enhanced":   bool(r["is_enhanced"]) if r["is_enhanced"] is not None else False,
+            "has_gapjum":    bool(r["has_gapjum"]) if r["has_gapjum"] is not None else False,
+            "sector":        r["sector"],
+            "close":         float(r["close"]) if r["close"] is not None else None,
+            "ma_20w":        float(r["ma_20w"]) if r["ma_20w"] is not None else None,
+            "cloud_top":     float(r["cloud_top"]) if r["cloud_top"] is not None else None,
+        })
+
+    stage1       = sum(1 for i in items if i["stage"] == 1)
+    stage2       = sum(1 for i in items if i["stage"] == 2)
+    in_screener  = sum(1 for i in items if i["is_enhanced"] or i["has_gapjum"])
+    narrative_q  = sum(1 for i in items if i["attention_q"] in (2, 3, 4))
+    triple_combo = sum(
+        1 for i in items
+        if (i["stage"] in (1, 2))
+        and (i["is_enhanced"] or i["has_gapjum"])
+        and (i["attention_q"] in (2, 3, 4))
+    )
+
+    return {
+        "data": {
+            "total":        len(items),
+            "stage1":       stage1,
+            "stage2":       stage2,
             "in_screener":  in_screener,
             "narrative_q":  narrative_q,
             "triple_combo": triple_combo,
