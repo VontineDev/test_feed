@@ -5,6 +5,7 @@ import HistoryStageView from './HistoryStageView'
 import HistoryScreenerView from './HistoryScreenerView'
 import StageHistoryPopup from './StageHistoryPopup'
 import InfoTip from './InfoTip'
+import Narrative from './Narrative'
 
 // ── 타입 ────────────────────────────────────────────────────
 type StageRow = { ticker: string; name: string; sector: string | null; s1_high: number | null; s1_volume: number | null; peakout_flag: boolean }
@@ -286,6 +287,7 @@ interface HistoryScreenerData {
 
 // ── 메인 컴포넌트 ────────────────────────────────────────────
 export default function Report() {
+  const [subTab, setSubTab] = useState<'analysis' | 'narrative'>('analysis')
   const [preset, setPreset] = useState<DatePreset>('today')
 
   // 오늘 뷰 상태
@@ -371,66 +373,89 @@ export default function Report() {
       {/* 헤더 */}
       <div style={s.hdr}>
         <span style={s.hdrTitle}>종목 분석</span>
-        {lastFetched && (
+        {subTab === 'analysis' && lastFetched && (
           <span style={s.hdrTime}>{lastFetched.toLocaleTimeString('ko-KR')} 기준</span>
         )}
-        <button style={s.refreshBtn} onClick={load} disabled={loading}>
-          {loading ? '로딩…' : '새로고침'}
-        </button>
-      </div>
-
-      {/* 날짜 범위 선택 바 */}
-      <DateRangeBar preset={preset} onChange={p => setPreset(p)} />
-
-      {/* 콘텐츠 — 좌우 분할 */}
-      <div className="report-split-container" style={s.splitWrap}>
-        {/* 왼쪽: 섹션 목록 */}
-        <div className="report-split-left" style={{
-          ...s.splitLeft,
-          flex: selectedTicker ? '0 0 55%' : 1,
-          borderRight: selectedTicker ? `1px solid ${tokens.bd.default}` : undefined,
-        }}>
-          <Section
-            title="추세 단계"
-            badge={stageBadge}
-            tooltip="전 종목을 일봉 기준 3단계 추세로 분류합니다. Stage 1(상승 초기)이 매수 적기, Stage 2(고점권)는 조심, Stage 3(하락)은 관망."
-          >
-            {preset === 'today'
-              ? (stage ? <StageReport data={stage} selectedTicker={selectedTicker} onSelect={handleSelect} /> : <div style={s.empty}>데이터 없음</div>)
-              : (histStage
-                  ? <HistoryStageView items={histStage.items} start={range.start} end={range.end} selectedTicker={selectedTicker} onSelect={handleSelect} />
-                  : <div style={s.empty}>{loading ? '로딩…' : '데이터 없음'}</div>)
-            }
-          </Section>
-
-          <Section
-            title="강세 후보 발굴"
-            badge={screenerBadge}
-            tooltip="주봉 일목균형표 + 20주 이동평균 조건을 통과한 종목입니다. 기술적으로 강세 신호가 켜진 후보를 매주 스캔합니다."
-          >
-            {preset === 'today'
-              ? (screener ? <ScreenerReport data={screener} selectedTicker={selectedTicker} onSelect={handleSelect} /> : <div style={s.empty}>데이터 없음</div>)
-              : (histScreener
-                  ? <HistoryScreenerView items={histScreener.items} start={range.start} end={range.end} selectedTicker={selectedTicker} onSelect={handleSelect} />
-                  : <div style={s.empty}>{loading ? '로딩…' : '데이터 없음'}</div>)
-            }
-          </Section>
-        </div>
-
-        {/* 오른쪽: 상세 패널 */}
-        {selectedTicker && (
-          <div ref={splitRightRef} className="report-split-right" style={s.splitRight}>
-            <StageHistoryPopup
-              ticker={selectedTicker}
-              name={selectedName}
-              start={range.start}
-              end={range.end}
-              onClose={() => { setSelectedTicker(null); setSelectedName('') }}
-              mode="panel"
-            />
-          </div>
+        {subTab === 'analysis' && (
+          <button style={s.refreshBtn} onClick={load} disabled={loading}>
+            {loading ? '로딩…' : '새로고침'}
+          </button>
         )}
       </div>
+
+      {/* 서브탭 바 */}
+      <div style={s.subTabBar}>
+        {(['analysis', 'narrative'] as const).map(key => (
+          <button
+            key={key}
+            style={{ ...s.subTabBtn, ...(subTab === key ? s.subTabBtnActive : {}) }}
+            onClick={() => setSubTab(key)}
+          >
+            {key === 'analysis' ? '추세·스크리너' : '유튜브 내러티브'}
+          </button>
+        ))}
+      </div>
+
+      {subTab === 'analysis' ? (
+        <>
+          {/* 날짜 범위 선택 바 */}
+          <DateRangeBar preset={preset} onChange={p => setPreset(p)} />
+
+          {/* 콘텐츠 — 좌우 분할 */}
+          <div className="report-split-container" style={s.splitWrap}>
+            {/* 왼쪽: 섹션 목록 */}
+            <div className="report-split-left" style={{
+              ...s.splitLeft,
+              flex: selectedTicker ? '0 0 55%' : 1,
+              borderRight: selectedTicker ? `1px solid ${tokens.bd.default}` : undefined,
+            }}>
+              <Section
+                title="추세 단계"
+                badge={stageBadge}
+                tooltip="전 종목을 일봉 기준 3단계 추세로 분류합니다. Stage 1(상승 초기)이 매수 적기, Stage 2(고점권)는 조심, Stage 3(하락)은 관망."
+              >
+                {preset === 'today'
+                  ? (stage ? <StageReport data={stage} selectedTicker={selectedTicker} onSelect={handleSelect} /> : <div style={s.empty}>데이터 없음</div>)
+                  : (histStage
+                      ? <HistoryStageView items={histStage.items} start={range.start} end={range.end} selectedTicker={selectedTicker} onSelect={handleSelect} />
+                      : <div style={s.empty}>{loading ? '로딩…' : '데이터 없음'}</div>)
+                }
+              </Section>
+
+              <Section
+                title="강세 후보 발굴"
+                badge={screenerBadge}
+                tooltip="주봉 일목균형표 + 20주 이동평균 조건을 통과한 종목입니다. 기술적으로 강세 신호가 켜진 후보를 매주 스캔합니다."
+              >
+                {preset === 'today'
+                  ? (screener ? <ScreenerReport data={screener} selectedTicker={selectedTicker} onSelect={handleSelect} /> : <div style={s.empty}>데이터 없음</div>)
+                  : (histScreener
+                      ? <HistoryScreenerView items={histScreener.items} start={range.start} end={range.end} selectedTicker={selectedTicker} onSelect={handleSelect} />
+                      : <div style={s.empty}>{loading ? '로딩…' : '데이터 없음'}</div>)
+                }
+              </Section>
+            </div>
+
+            {/* 오른쪽: 상세 패널 */}
+            {selectedTicker && (
+              <div ref={splitRightRef} className="report-split-right" style={s.splitRight}>
+                <StageHistoryPopup
+                  ticker={selectedTicker}
+                  name={selectedName}
+                  start={range.start}
+                  end={range.end}
+                  onClose={() => { setSelectedTicker(null); setSelectedName('') }}
+                  mode="panel"
+                />
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+          <Narrative />
+        </div>
+      )}
     </div>
   )
 }
@@ -446,6 +471,10 @@ const s: Record<string, React.CSSProperties> = {
   hdrTitle: { fontWeight: 700, fontSize: 13, flex: 1 },
   hdrTime: { color: tokens.tx.subtle, fontSize: 11 },
   refreshBtn: { background: tokens.bg.raised, color: tokens.tx.secondary, border: `1px solid ${tokens.bd.emphasis}`, borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: 11, minHeight: 36 },
+
+  subTabBar: { display: 'flex', borderBottom: `1px solid ${tokens.bd.default}`, background: tokens.bg.panel, flexShrink: 0 },
+  subTabBtn: { padding: '7px 18px', border: 'none', background: 'transparent', color: tokens.tx.muted, cursor: 'pointer', fontSize: 12, fontWeight: 600, borderBottom: '2px solid transparent' },
+  subTabBtnActive: { color: tokens.accent.blueLight, borderBottom: `2px solid ${tokens.accent.blue}` },
 
   section: { borderBottom: `1px solid ${tokens.bd.default}` },
   sectionHdr: { width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '9px 14px', background: 'none', border: 'none', color: tokens.tx.secondary, cursor: 'pointer', textAlign: 'left' as const },
