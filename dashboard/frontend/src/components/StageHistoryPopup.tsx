@@ -67,9 +67,12 @@ function fmtRevenue(raw: number | null | undefined, unit: string | undefined): s
   if (raw == null) return '—'
   const mult = UNIT_TO_EOKWON[unit ?? '억원'] ?? 1
   const eok = raw * mult
-  if (eok >= 10000) return `${(eok / 10000).toFixed(1)}조원`
-  if (eok >= 1)     return `${Math.round(eok).toLocaleString('ko-KR')}억원`
-  return `${(eok * 100).toFixed(0)}백만원`
+  const absEok = Math.abs(eok)
+  const sign = eok < 0 ? '-' : ''
+  if (absEok >= 10000) return `${sign}${(absEok / 10000).toFixed(1)}조원`
+  if (absEok >= 1)     return `${sign}${Math.round(absEok).toLocaleString('ko-KR')}억원`
+  if (absEok >= 0.001) return `${sign}${(absEok * 100).toFixed(0)}백만원`
+  return '—'
 }
 
 function fmtYoy(growth: number | null | undefined): { text: string; color: string } {
@@ -276,8 +279,16 @@ function DartFinancials({ data, loading }: { data: DartData | null; loading: boo
 
   const revYoy = revVals.length >= 2 && revVals[0] && revVals[1]
     ? (revVals[0]! / revVals[1]! - 1) : null
-  const opYoy = opVals.length >= 2 && opVals[0] && opVals[1]
+  // 부호전환(흑자전환/적자전환)은 YoY % 의미없음 → null
+  const opYoy = opVals.length >= 2 && opVals[0] != null && opVals[1] != null
+    && opVals[0] !== 0 && opVals[1] !== 0
+    && Math.sign(opVals[0]!) === Math.sign(opVals[1]!)
     ? (opVals[0]! / opVals[1]! - 1) : null
+  const opTurnLabel: string | null =
+    opVals.length >= 2 && opVals[0] != null && opVals[1] != null && opYoy == null
+      ? (opVals[1]! < 0 && opVals[0]! > 0 ? '흑자전환'
+        : opVals[1]! > 0 && opVals[0]! < 0 ? '적자전환' : null)
+      : null
 
   const badgeLabel = [data.period, data.report_type].filter(Boolean).join(' ')
 
@@ -317,8 +328,8 @@ function DartFinancials({ data, loading }: { data: DartData | null; loading: boo
                   {opVals.map((v, i) => (
                     <td key={i} style={{ ...ds.td, textAlign: 'right' }}>{fmtRevenue(v, unit)}</td>
                   ))}
-                  <td style={{ ...ds.td, textAlign: 'right', ...fmtYoy(opYoy) }}>
-                    {fmtYoy(opYoy).text}
+                  <td style={{ ...ds.td, textAlign: 'right', color: opTurnLabel ? (opTurnLabel === '흑자전환' ? '#4caf50' : '#f44336') : fmtYoy(opYoy).color }}>
+                    {opTurnLabel ?? fmtYoy(opYoy).text}
                   </td>
                 </tr>
               )}
