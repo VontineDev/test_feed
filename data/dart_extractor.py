@@ -62,6 +62,90 @@ DART_DIR = Path(__file__).parent.parent / "reports" / "dart"
 PROMPT_TEMPLATE_PATH = Path(__file__).parent.parent / "공시추출프롬프트.md"
 DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:9b")
 
+# ── XBRL TE태그 규칙 기반 분기 추출 ─────────────────────────────────────────
+
+_XBRL_TE_RE = re.compile(
+    r'<TE\s[^>]*ACODE="([^"]+)"[^>]*ACONTEXT="([^"]+)"[^>]*>([^<]+)</TE>',
+    re.IGNORECASE,
+)
+_XBRL_NEGATED_RE = re.compile(r'ANEGATED="Y"', re.IGNORECASE)
+
+# ACONTEXT 패턴: CFY...FQQ = 당기 분기, PFY...FQQ = 전기 분기
+_CTX_CUR_Q = re.compile(r'^CFY\d+dFQQ', re.IGNORECASE)
+_CTX_PRI_Q = re.compile(r'^PFY\d+dFQQ', re.IGNORECASE)
+
+_XBRL_REV_CODES = {
+    "ifrs-full_Revenue",
+    "ifrs-full_OperatingRevenue",
+    "ifrs-full_RevenueFromContractsWithCustomers",
+    "dart_OperatingRevenue",
+}
+_XBRL_OP_CODES = {
+    "dart_OperatingIncomeLoss",
+    "ifrs-full_OperatingProfit",
+    "ifrs-full_ProfitLossFromOperatingActivities",
+}
+
+
+def _parse_xbrl_value(raw: str, negated: bool) -> int | None:
+    """XBRL TE 태그 내 금액 문자열 → 정수 변환."""
+    s = raw.strip().replace(",", "").replace("\xa0", "").replace(" ", "")
+    negative = s.startswith("(") and s.endswith(")")
+    s = s.strip("()")
+    try:
+        v = int(s)
+        if negative or negated:
+            v = -v
+        return v
+    except ValueError:
+        return None
+
+
+def extract_xbrl_quarterly(xml_path: str | Path) -> dict | None:
+    """XBRL <TE> 태그에서 분기 손익계산서 값 직접 추출.
+
+    성공 시 {"revenue": [cur_q, pri_q], "op_profit": [cur_q, pri_q], "unit": "원"} 반환.
+    XBRL 태그가 없거나 값이 없으면 None 반환.
+    """
+    path = Path(xml_path)
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return None
+
+    cur_rev = pri_rev = cur_op = pri_op = None
+
+    for m in _XBRL_TE_RE.finditer(text):
+        acode   = m.group(1)
+        actx    = m.group(2)
+        raw_val = m.group(3)
+        negated = bool(_XBRL_NEGATED_RE.search(m.group(0)))
+
+        val = _parse_xbrl_value(raw_val, negated)
+        if val is None:
+            continue
+
+        if _CTX_CUR_Q.match(actx):
+            if acode in _XBRL_REV_CODES and cur_rev is None:
+                cur_rev = val
+            elif acode in _XBRL_OP_CODES and cur_op is None:
+                cur_op = val
+        elif _CTX_PRI_Q.match(actx):
+            if acode in _XBRL_REV_CODES and pri_rev is None:
+                pri_rev = val
+            elif acode in _XBRL_OP_CODES and pri_op is None:
+                pri_op = val
+
+    if cur_rev is None and pri_rev is None:
+        return None
+
+    return {
+        "revenue":   [cur_rev, pri_rev],
+        "op_profit": [cur_op,  pri_op],
+        "unit":      "원",
+    }
+
+
 # ── 금액 단위 감지 ────────────────────────────────────────────────────────────
 _UNIT_RE = re.compile(r"단위\s*[:：]\s*(원|천원|백만원|억원|조원)")
 
@@ -156,8 +240,10 @@ def _build_revenue_prompt(report_type: str = "사업보고서", period: str = "u
     if "분기" in report_type:
         period_rule = (
             f"분기보고서입니다 (당기: {cur_lbl}, 전기: {prior_lbl}).\n"
-            f"당기 3개월과 전기 동기간(3개월)만 추출하세요.\n"
-            f"전기 연간(사업연도 전체) 수치가 보이더라도 무시하고 전기 3개월 수치를 사용하세요.\n"
+            f"손익계산서 표는 4열 구조입니다: [당기3개월, 당기누적, 전기3개월, 전기누적].\n"
+            f"반드시 1열(당기3개월={cur_lbl})과 3열(전기3개월={prior_lbl}) 값을 추출하세요.\n"
+            f"2열(당기누적)은 1열과 동일하므로 무시하세요. 4열(전기누적)도 무시하세요.\n"
+            f"각 항목마다 4개 숫자가 연속으로 나오면 1번째와 3번째를 사용하세요.\n"
             f'periods는 반드시 ["{cur_lbl}", "{prior_lbl}"]로 고정하세요.'
         )
     elif "반기" in report_type:
@@ -470,11 +556,16 @@ async def extract_structured(
 
     # 손익계산서 시작점 탐색: 요약재무정보 섹션은 재무상태표→손익계산서 순.
     # 재무상태표(자산/부채 항목) 부분을 제거하고 손익계산서부터 사용한다.
+    # 예외: 포괄손익계산서로 시작하는 섹션은 열 헤더(기간/3개월/누적)가 필요하므로 잘라내지 않는다.
+    _IS_PLOCI = rev_text and any(
+        kw in (rev_text.splitlines()[:3] and "\n".join(rev_text.splitlines()[:3]))
+        for kw in ("포괄손익계산서", "손익계산서")
+    )
     _INCOME_START_KWS = [
         "매출액", "영업수익", "총영업이익", "순영업이익",
         "이자수익", "수수료수익", "보험료수익",
     ]
-    if rev_text:
+    if rev_text and not _IS_PLOCI:
         _rv_lines = rev_text.splitlines()
         _income_start = -1
         for _i, _l in enumerate(_rv_lines):
@@ -526,14 +617,33 @@ async def extract_structured(
     if unit == "unknown":
         unit = _detect_unit(rev_text or "")
 
+    # 분기/반기보고서: XBRL TE 태그에서 직접 추출 시도 (LLM 오류 우회)
+    _xbrl_quarterly = None
+    if "분기" in report_type or "반기" in report_type:
+        _xbrl_quarterly = extract_xbrl_quarterly(xml_path)
+
     seg_json, rev_json, comp_json = await asyncio.gather(
         _call_with_retry(http, model, SEGMENT_EXTRACTOR_PROMPT + seg_text),
         _call_with_retry(http, model, _build_revenue_prompt(report_type, period) + rev_text),
         _call_with_retry(http, model, COMPETITOR_EXTRACTOR_PROMPT + full_text[:6000]),
     )
 
-    # revenue_json에 단위 주입
-    if rev_json and isinstance(rev_json, dict):
+    # XBRL 직접 추출값으로 LLM 결과의 consolidated revenue/op_profit 교체
+    if _xbrl_quarterly:
+        cur_lbl, pri_lbl = _derive_period_labels(report_type, period)
+        if not rev_json or not isinstance(rev_json, dict):
+            rev_json = {}
+        rev_json["periods"]     = [cur_lbl, pri_lbl]
+        rev_json["unit"]        = _xbrl_quarterly["unit"]
+        xc = _xbrl_quarterly
+        if not rev_json.get("consolidated"):
+            rev_json["consolidated"] = {}
+        rev_json["consolidated"]["revenue"]   = xc["revenue"]
+        rev_json["consolidated"]["op_profit"] = xc["op_profit"]
+        logger.debug("[dart-extractor] XBRL 직접 추출 적용: %s %s", report_type, period)
+
+    # revenue_json에 단위 주입 (XBRL 미사용 경우)
+    if rev_json and isinstance(rev_json, dict) and not _xbrl_quarterly:
         rev_json["unit"] = unit
         # periods가 generic("당기"/"전기"/"unknown")이면 파라미터에서 도출한 레이블로 교체
         _generic = {"당기", "전기", "unknown", "당기분기", "전기분기"}
