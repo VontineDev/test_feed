@@ -65,10 +65,12 @@ DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:9b")
 # ── XBRL TE태그 규칙 기반 분기 추출 ─────────────────────────────────────────
 
 _XBRL_TE_RE = re.compile(
-    r'<TE\s[^>]*ACODE="([^"]+)"[^>]*ACONTEXT="([^"]+)"[^>]*>([^<]+)</TE>',
-    re.IGNORECASE,
+    r'<TE\s[^>]*ACODE="([^"]+)"[^>]*ACONTEXT="([^"]+)"[^>]*>(.+?)</TE>',
+    re.IGNORECASE | re.DOTALL,
 )
+_XBRL_INNER_TAG_RE = re.compile(r'<[^>]+>')
 _XBRL_NEGATED_RE = re.compile(r'ANEGATED="Y"', re.IGNORECASE)
+_XBRL_ADECIMAL_RE = re.compile(r'ADECIMAL="([^"]*)"', re.IGNORECASE)
 
 # ACONTEXT 패턴: CFY...FQQ = 당기 분기, PFY...FQQ = 전기 분기
 _CTX_CUR_Q = re.compile(r'^CFY\d+dFQQ', re.IGNORECASE)
@@ -87,16 +89,23 @@ _XBRL_OP_CODES = {
 }
 
 
-def _parse_xbrl_value(raw: str, negated: bool) -> int | None:
-    """XBRL TE 태그 내 금액 문자열 → 정수 변환."""
+def _parse_xbrl_value(raw: str, negated: bool, adecimal: int = 0) -> int | None:
+    """XBRL TE 태그 내 금액 문자열 → 정수 변환.
+
+    adecimal: ADECIMAL 속성값 (음수이면 해당 절댓값만큼 10의 거듭제곱 곱함)
+      ADECIMAL="-6" → actual = raw × 10^6 (백만 단위로 표기된 원화)
+      ADECIMAL="0"  → actual = raw (이미 원 단위)
+    """
     s = raw.strip().replace(",", "").replace("\xa0", "").replace(" ", "")
     negative = s.startswith("(") and s.endswith(")")
     s = s.strip("()")
     try:
-        v = int(s)
+        v = float(s)
+        if adecimal != 0:
+            v = v * (10 ** (-adecimal))
         if negative or negated:
             v = -v
-        return v
+        return int(round(v))
     except ValueError:
         return None
 
@@ -118,10 +127,17 @@ def extract_xbrl_quarterly(xml_path: str | Path) -> dict | None:
     for m in _XBRL_TE_RE.finditer(text):
         acode   = m.group(1)
         actx    = m.group(2)
-        raw_val = m.group(3)
-        negated = bool(_XBRL_NEGATED_RE.search(m.group(0)))
+        raw_val = _XBRL_INNER_TAG_RE.sub("", m.group(3))
+        tag_str = m.group(0)
+        negated = bool(_XBRL_NEGATED_RE.search(tag_str))
+        adec_m  = _XBRL_ADECIMAL_RE.search(tag_str)
+        _adec_s  = adec_m.group(1) if adec_m else ""
+        try:
+            adecimal = int(_adec_s) if _adec_s and _adec_s.upper() != "INF" else 0
+        except ValueError:
+            adecimal = 0
 
-        val = _parse_xbrl_value(raw_val, negated)
+        val = _parse_xbrl_value(raw_val, negated, adecimal)
         if val is None:
             continue
 
@@ -775,6 +791,7 @@ async def extract_all(
     model: str = DEFAULT_MODEL,
     force: bool = False,
     dart_dir: Path = DART_DIR,
+    corp_filter: str | None = None,
 ) -> int:
     """reports/dart/ 하위 모든 기업 처리 → dart_extractions 저장.
 
@@ -803,6 +820,8 @@ async def extract_all(
 
         # 회사 디렉터리: 알파벳 순
         company_dirs = sorted(d for d in dart_dir.iterdir() if d.is_dir())
+        if corp_filter:
+            company_dirs = [d for d in company_dirs if d.name == corp_filter]
 
         for company_dir in company_dirs:
             corp_name = company_dir.name

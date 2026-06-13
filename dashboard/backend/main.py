@@ -3053,7 +3053,7 @@ async def get_dart_summary(ticker: str):
                 JOIN   dart_companies dc ON dc.corp_name = de.corp_name
                 WHERE  dc.stock_code = $1
                   AND  de.revenue_json IS NOT NULL
-                ORDER  BY de.extracted_at DESC
+                ORDER  BY de.period DESC
                 LIMIT  1
                 """,
                 stock_code,

@@ -275,9 +275,9 @@ function DartFinancials({ data, loading }: { data: DartData | null; loading: boo
   })
 
   const revYoy = revVals.length >= 2 && revVals[0] && revVals[1]
-    ? (revVals[1]! / revVals[0]! - 1) : null
+    ? (revVals[0]! / revVals[1]! - 1) : null
   const opYoy = opVals.length >= 2 && opVals[0] && opVals[1]
-    ? (opVals[1]! / opVals[0]! - 1) : null
+    ? (opVals[0]! / opVals[1]! - 1) : null
 
   const badgeLabel = [data.period, data.report_type].filter(Boolean).join(' ')
 
