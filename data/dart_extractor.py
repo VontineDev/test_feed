@@ -83,6 +83,11 @@ _SEGMENT_ANCHORS = [
 ]
 
 _REVENUE_ANCHORS = [
+    # ── Priority 0: 손익계산서 (분기/연간 공통 — 올바른 비교 기간 포함) ─────
+    "연결 포괄손익계산서",          # 분기보고서 XBRL 연결손익계산서 (당기분기 vs 전기분기)
+    "포괄손익계산서",               # 변형 헤더
+    "연결손익계산서",
+    "손익계산서",
     # ── Priority 1: 영업이익 포함 부문별 요약 ──────────────────────────────
     "사업부문별 요약 재무 현황",    # 삼성전자: 라. 사업부문별 요약 재무 현황
     "사업부문별 요약 재무현황",     # 풍산: 가. 사업부문별 요약 재무현황 (공백 없는 변형)
@@ -125,33 +130,73 @@ SEGMENT_EXTRACTOR_PROMPT = _JSON_ONLY + """\
 섹션 원문:
 """
 
-REVENUE_ANALYZER_PROMPT = (
-    "반드시 순수 JSON만 출력하세요. 설명이나 마크다운 코드블록 없이.\n"
-    "매출 데이터가 없으면 {\"periods\":[],\"segments\":[],\"consolidated\":{\"revenue\":[],\"op_profit\":[]}} 를 반환하세요.\n\n"
-    """\
-아래는 DART 사업보고서의 매출실적 섹션입니다.
-연도별 부문별 매출을 추출해 JSON으로 반환하세요. 계산값은 computed:true로 표기.
+def _derive_period_labels(report_type: str, period: str) -> tuple[str, str]:
+    """period 문자열("2026.03", "2025.12")에서 당기/전기 레이블 도출."""
+    try:
+        year_str, month_str = period.split(".")
+        year = int(year_str)
+        month = int(month_str)
+    except (ValueError, AttributeError):
+        return ("당기", "전기")
 
-참고: "총부문수익", "외부고객으로부터의 수익", "영업수익", "순이자수익", "이자수익", "수수료수익", "총영업이익", "순영업이익", "매출액(영업수익)"도 매출액(revenue)으로 처리하세요.
+    if "분기" in report_type:
+        q = (month - 1) // 3 + 1
+        return (f"{year}.{q}Q", f"{year - 1}.{q}Q")
+    elif "반기" in report_type:
+        h = 1 if month <= 6 else 2
+        return (f"{year}.{h}H", f"{year - 1}.{h}H")
+    else:
+        return (str(year), str(year - 1))
 
-{
-  "periods": ["2023", "2024"],
-  "segments": [
-    {
-      "name": "부문명",
-      "revenues": [금액, 금액],
-      "yoy_growth": [null, 0.0]
-    }
-  ],
-  "consolidated": {
-    "revenue": [금액, 금액],
-    "op_profit": [금액, 금액]
-  }
-}
 
-섹션 원문:
-"""
-)
+def _build_revenue_prompt(report_type: str = "사업보고서", period: str = "unknown") -> str:
+    """보고서 유형에 맞는 매출 분석 프롬프트 생성."""
+    cur_lbl, prior_lbl = _derive_period_labels(report_type, period)
+
+    if "분기" in report_type:
+        period_rule = (
+            f"분기보고서입니다 (당기: {cur_lbl}, 전기: {prior_lbl}).\n"
+            f"당기 3개월과 전기 동기간(3개월)만 추출하세요.\n"
+            f"전기 연간(사업연도 전체) 수치가 보이더라도 무시하고 전기 3개월 수치를 사용하세요.\n"
+            f'periods는 반드시 ["{cur_lbl}", "{prior_lbl}"]로 고정하세요.'
+        )
+    elif "반기" in report_type:
+        period_rule = (
+            f"반기보고서입니다 (당기: {cur_lbl}, 전기: {prior_lbl}).\n"
+            f"당기 반기와 전기 동기간(반기)만 추출하세요.\n"
+            f'periods는 반드시 ["{cur_lbl}", "{prior_lbl}"]로 고정하세요.'
+        )
+    else:
+        period_rule = (
+            f"사업보고서입니다 (당기: {cur_lbl}, 전기: {prior_lbl}).\n"
+            f"연간(당기 vs 전기) 수치를 추출하세요.\n"
+            f'periods는 반드시 ["{cur_lbl}", "{prior_lbl}"]로 고정하세요.'
+        )
+
+    return (
+        "반드시 순수 JSON만 출력하세요. 설명이나 마크다운 코드블록 없이.\n"
+        '매출 데이터가 없으면 {"periods":[],"segments":[],"consolidated":{"revenue":[],"op_profit":[]}} 를 반환하세요.\n\n'
+        f"[보고서 유형: {report_type} | 기간: {period}]\n"
+        f"{period_rule}\n\n"
+        f"아래는 DART {report_type}의 매출실적 섹션입니다.\n"
+        "기간별 부문별 매출을 추출해 JSON으로 반환하세요. 계산값은 computed:true로 표기.\n\n"
+        '참고: "총부문수익", "외부고객으로부터의 수익", "영업수익", "순이자수익", "이자수익", "수수료수익", "총영업이익", "순영업이익", "매출액(영업수익)"도 매출액(revenue)으로 처리하세요.\n\n'
+        "{\n"
+        f'  "periods": ["{cur_lbl}", "{prior_lbl}"],\n'
+        '  "segments": [\n'
+        '    {\n'
+        '      "name": "부문명",\n'
+        '      "revenues": [금액, 금액],\n'
+        '      "yoy_growth": [null, 0.0]\n'
+        '    }\n'
+        '  ],\n'
+        '  "consolidated": {\n'
+        '    "revenue": [금액, 금액],\n'
+        '    "op_profit": [금액, 금액]\n'
+        '  }\n'
+        '}\n\n'
+        "섹션 원문:\n"
+    )
 
 COMPETITOR_EXTRACTOR_PROMPT = _JSON_ONLY + """\
 아래는 DART 사업보고서에서 경쟁 관련 내용입니다.
@@ -403,6 +448,8 @@ async def extract_structured(
     http: httpx.AsyncClient,
     xml_path: str | Path,
     model: str,
+    report_type: str = "사업보고서",
+    period: str = "unknown",
 ) -> dict:
     """3-Pass Ollama 구조화 추출 (asyncio 병렬).
 
@@ -418,6 +465,9 @@ async def extract_structured(
         max_chars=8000, lines_per_anchor=200,
         priority=True, require_keyword="영업이익",
     ) or full_text[:5000]
+    # 단위 감지는 헤더 트리밍 전에 실행 (헤더에 단위 선언이 있을 수 있음)
+    unit = _detect_unit(rev_text or "")
+
     # 손익계산서 시작점 탐색: 요약재무정보 섹션은 재무상태표→손익계산서 순.
     # 재무상태표(자산/부채 항목) 부분을 제거하고 손익계산서부터 사용한다.
     _INCOME_START_KWS = [
@@ -472,18 +522,24 @@ async def extract_structured(
                 rev_text = _fin_text
                 break
 
-    # rev_text 에서 금액 단위 감지 (Ollama 호출 전)
-    unit = _detect_unit(rev_text or "")
+    # 금융사 폴백으로 rev_text가 교체된 경우 단위 재감지
+    if unit == "unknown":
+        unit = _detect_unit(rev_text or "")
 
     seg_json, rev_json, comp_json = await asyncio.gather(
         _call_with_retry(http, model, SEGMENT_EXTRACTOR_PROMPT + seg_text),
-        _call_with_retry(http, model, REVENUE_ANALYZER_PROMPT  + rev_text),
+        _call_with_retry(http, model, _build_revenue_prompt(report_type, period) + rev_text),
         _call_with_retry(http, model, COMPETITOR_EXTRACTOR_PROMPT + full_text[:6000]),
     )
 
     # revenue_json에 단위 주입
     if rev_json and isinstance(rev_json, dict):
         rev_json["unit"] = unit
+        # periods가 generic("당기"/"전기"/"unknown")이면 파라미터에서 도출한 레이블로 교체
+        _generic = {"당기", "전기", "unknown", "당기분기", "전기분기"}
+        existing = rev_json.get("periods", [])
+        if all(str(p) in _generic for p in existing):
+            rev_json["periods"] = list(_derive_period_labels(report_type, period))
 
     # 금융사 규칙 기반 폴백: Ollama가 revenue를 비워두면 regex로 직접 추출
     def _is_empty_rev(rj) -> bool:
@@ -700,7 +756,7 @@ async def extract_all(
 
                 # 3-Pass 구조화 추출
                 try:
-                    structured = await extract_structured(http, xml_path, model)
+                    structured = await extract_structured(http, xml_path, model, report_type=report_type, period=period)
                 except Exception as e:
                     logger.warning("[dart-extractor] 구조화 추출 오류: %s", e)
                     structured = {"segments_json": None, "revenue_json": None, "competitors_json": None}
@@ -801,7 +857,7 @@ async def extract_all_for_company(
                 xml_chars = len(extract_xml(xml_path))
 
             try:
-                structured = await extract_structured(http_client, xml_path, model)
+                structured = await extract_structured(http_client, xml_path, model, report_type=report_type, period=period)
             except Exception as e:
                 logger.warning("[dart-extractor] 구조화 추출 오류: %s", e)
                 structured = {"segments_json": None, "revenue_json": None, "competitors_json": None}
@@ -917,7 +973,9 @@ def _main_cli() -> None:
                     print("[2/4] 서술 추출 스킵 (프롬프트 파일 없음)")
 
                 print("[3/4] 3-Pass 구조화 추출 (병렬)")
-                structured_result = await extract_structured(http, xml_path, args.model)
+                structured_result = await extract_structured(
+                    http, xml_path, args.model, report_type=report_type, period=period
+                )
                 return narrative_result, structured_result
 
         (narrative, structured) = asyncio.run(_run())
