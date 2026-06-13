@@ -84,6 +84,49 @@ await conn.execute("""
 
 ---
 
+## 재무 수치 추출 우선순위: API → XBRL → LLM
+
+### 문제: LLM은 정확한 숫자 추출에 부적합하다
+
+Ollama(qwen3.5:9b)는 섹션 요약, 경쟁사 파악 같은 정성적 추출에는 유용하지만, 연결/개별 구분, 컬럼 순서, 단위(억·백만원) 등에서 오류가 잦다. 동일 기업·동일 보고서에서 실행 결과가 달라지기도 한다.
+
+DART OpenAPI(`fnlttSinglAcntAll`)는 동일 데이터를 JSON으로 정확히 제공한다. 일 10,000건 한도가 있지만, 실제 운용에서는 Top 20 기업 × 분기 4회 × 보고서 수를 합해도 한도 근처에 도달하지 않는다.
+
+### 해결: 소스 우선순위 체인
+
+```
+1순위: DART OpenAPI  fnlttSinglAcntAll (fs_div=CFS)  → 연결 손익 직접 반환
+2순위: XBRL TE태그  로컬 XML에서 ACONTEXT 패턴 매칭  → 연간/분기 각각 처리
+3순위: Ollama LLM   기존 앵커+그레핑 방식             → 세그먼트·경쟁사는 항상 LLM
+```
+
+LLM은 세그먼트(`segments_json`)·경쟁사(`competitors_json`) 추출에 여전히 쓰인다. 재무 수치(`revenue_json`의 consolidated 블록)만 API → XBRL로 덮어쓴다.
+
+### 연간 XBRL ACONTEXT 패턴
+
+분기 보고서는 `CFY{year}dFQQ` / `PFY{year}dFQQ` 패턴을 쓴다. 연간 사업보고서는 다르다:
+
+```
+당기: CFY2025dFY_ifrs-full_ConsolidatedAndSeparateFinancialStatementsAxis_ifrs-full_ConsolidatedMember
+전기: PFY2024dFY_ifrs-full_ConsolidatedAndSeparateFinancialStatementsAxis_ifrs-full_ConsolidatedMember
+```
+
+`extract_xbrl_annual(xml_path, period)` 함수가 이 패턴을 정확히 매칭한다.
+
+### 분기 보고서 전기 보완: DART API 2회 호출
+
+DART API 분기 보고서(`reprt_code=11013/11014`)는 `frmtrm_amount`(전기)를 항상 빈 값으로 반환한다. 전년 동기(전기)를 얻으려면 `bsns_year - 1`로 별도 호출이 필요하다:
+
+```python
+# 예: 2026 1Q 조회 시
+cur = await _call(year="2026")   # thstrm = 2026Q1  (frmtrm = None)
+pri = await _call(year="2025")   # thstrm = 2025Q1  ← 이것을 전기로 사용
+```
+
+연간 보고서는 단일 호출로 당기·전기 모두 반환되므로 추가 호출이 없다.
+
+---
+
 ## 왜 3-Pass 구조화 추출인가
 
 ### 문제: 단일 프롬프트는 실패가 전파된다

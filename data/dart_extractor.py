@@ -62,6 +62,17 @@ DART_DIR = Path(__file__).parent.parent / "reports" / "dart"
 PROMPT_TEMPLATE_PATH = Path(__file__).parent.parent / "공시추출프롬프트.md"
 DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:9b")
 
+# ── DART OpenAPI 재무 수치 직접 조회 ─────────────────────────────────────────
+_DART_API_KEY  = os.environ.get("DART_API_KEY", "")
+_DART_API_BASE = "https://opendart.fss.or.kr/api"
+
+# 보고서 유형 키워드 → reprt_code (분기보고서는 월로 판별)
+_REPRT_CODE_MAP = {"사업보고서": "11011", "반기보고서": "11012"}
+
+# DART API account_nm → revenue / op_profit 분류
+_DART_REV_ACCTS = {"매출액", "수익(매출액)", "매출", "영업수익", "총영업이익"}
+_DART_OP_ACCTS  = {"영업이익", "영업이익(손실)"}
+
 # ── XBRL TE태그 규칙 기반 분기 추출 ─────────────────────────────────────────
 
 _XBRL_TE_RE = re.compile(
@@ -75,6 +86,18 @@ _XBRL_ADECIMAL_RE = re.compile(r'ADECIMAL="([^"]*)"', re.IGNORECASE)
 # ACONTEXT 패턴: CFY...FQQ = 당기 분기, PFY...FQQ = 전기 분기
 _CTX_CUR_Q = re.compile(r'^CFY\d+dFQQ', re.IGNORECASE)
 _CTX_PRI_Q = re.compile(r'^PFY\d+dFQQ', re.IGNORECASE)
+
+# 연간 보고서 ACONTEXT: CFY{year}dFY_..._ConsolidatedMember (연결) / SeparateMember (개별)
+_CTX_CUR_FY_CFS = re.compile(
+    r'^CFY(\d+)dFY_ifrs-full_ConsolidatedAndSeparateFinancialStatementsAxis'
+    r'_ifrs-full_ConsolidatedMember$',
+    re.IGNORECASE,
+)
+_CTX_PRI_FY_CFS = re.compile(
+    r'^PFY(\d+)dFY_ifrs-full_ConsolidatedAndSeparateFinancialStatementsAxis'
+    r'_ifrs-full_ConsolidatedMember$',
+    re.IGNORECASE,
+)
 
 _XBRL_REV_CODES = {
     "ifrs-full_Revenue",
@@ -154,6 +177,185 @@ def extract_xbrl_quarterly(xml_path: str | Path) -> dict | None:
 
     if cur_rev is None and pri_rev is None:
         return None
+
+    return {
+        "revenue":   [cur_rev, pri_rev],
+        "op_profit": [cur_op,  pri_op],
+        "unit":      "원",
+    }
+
+
+def extract_xbrl_annual(xml_path: str | Path, period: str) -> dict | None:
+    """XBRL <TE> 태그에서 연간 손익계산서 값 직접 추출 (사업보고서 전용).
+
+    period: "2025.12" 형식 → 당기 year=2025, 전기 year=2024
+    ACONTEXT 패턴: CFY{year}dFY_..._ConsolidatedMember (연결 연간)
+    성공 시 {"revenue": [cur, prior], "op_profit": [cur, prior], "unit": "원"} 반환.
+    """
+    path = Path(xml_path)
+    try:
+        cur_year = int(period.split(".")[0])
+    except (ValueError, AttributeError):
+        return None
+    pri_year = cur_year - 1
+
+    _CFS_AXIS = (
+        "_ifrs-full_ConsolidatedAndSeparateFinancialStatementsAxis"
+        "_ifrs-full_ConsolidatedMember"
+    )
+    cur_ctx = f"CFY{cur_year}dFY{_CFS_AXIS}"
+    pri_ctx = f"PFY{pri_year}dFY{_CFS_AXIS}"
+
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return None
+
+    cur_rev = pri_rev = cur_op = pri_op = None
+
+    for m in _XBRL_TE_RE.finditer(text):
+        acode   = m.group(1)
+        actx    = m.group(2)
+        raw_val = _XBRL_INNER_TAG_RE.sub("", m.group(3))
+        tag_str = m.group(0)
+        negated = bool(_XBRL_NEGATED_RE.search(tag_str))
+        adec_m  = _XBRL_ADECIMAL_RE.search(tag_str)
+        _adec_s  = adec_m.group(1) if adec_m else ""
+        try:
+            adecimal = int(_adec_s) if _adec_s and _adec_s.upper() != "INF" else 0
+        except ValueError:
+            adecimal = 0
+
+        val = _parse_xbrl_value(raw_val, negated, adecimal)
+        if val is None:
+            continue
+
+        if actx == cur_ctx:
+            if acode in _XBRL_REV_CODES and cur_rev is None:
+                cur_rev = val
+            elif acode in _XBRL_OP_CODES and cur_op is None:
+                cur_op = val
+        elif actx == pri_ctx:
+            if acode in _XBRL_REV_CODES and pri_rev is None:
+                pri_rev = val
+            elif acode in _XBRL_OP_CODES and pri_op is None:
+                pri_op = val
+
+    if cur_rev is None and pri_rev is None:
+        return None
+
+    return {
+        "revenue":   [cur_rev, pri_rev],
+        "op_profit": [cur_op,  pri_op],
+        "unit":      "원",
+    }
+
+
+# ── DART OpenAPI 재무 수치 직접 조회 ─────────────────────────────────────────
+
+def _reprt_code_for_api(report_type: str, period: str) -> str | None:
+    """보고서 유형+기간 → DART API reprt_code. 매핑 불가 시 None."""
+    for key, code in _REPRT_CODE_MAP.items():
+        if key in report_type:
+            return code
+    if "분기보고서" in report_type:
+        try:
+            month = int(period.split(".")[1])
+            return "11013" if month <= 6 else "11014"
+        except (ValueError, IndexError):
+            return None
+    return None
+
+
+async def _fetch_dart_api_financials(
+    http: httpx.AsyncClient,
+    corp_code: str,
+    report_type: str,
+    period: str,
+) -> dict | None:
+    """DART API fnlttSinglAcntAll로 연결(CFS) 손익 수치 조회.
+
+    연간 보고서: 단일 호출(thstrm=당기, frmtrm=전기).
+    분기/반기 보고서: 전기 frmtrm이 None이므로 전년 동기를 별도 호출로 보완.
+    반환: {"revenue": [cur, prior], "op_profit": [cur, prior], "unit": "원"}
+    API 키 없음 / 호출 실패 / 데이터 없음 → None (XBRL/LLM 폴백 허용).
+    """
+    if not _DART_API_KEY or not corp_code:
+        return None
+    reprt_code = _reprt_code_for_api(report_type, period)
+    if not reprt_code:
+        return None
+    try:
+        bsns_year = period.split(".")[0]
+        bsns_year_int = int(bsns_year)
+    except (AttributeError, IndexError, ValueError):
+        return None
+
+    def _to_int(s: str) -> int | None:
+        s = (s or "").replace(",", "").strip()
+        try:
+            return int(s) if s else None
+        except ValueError:
+            return None
+
+    async def _call(year: str) -> dict | None:
+        try:
+            resp = await http.get(
+                f"{_DART_API_BASE}/fnlttSinglAcntAll.json",
+                params={
+                    "crtfc_key": _DART_API_KEY,
+                    "corp_code":  corp_code,
+                    "bsns_year":  year,
+                    "reprt_code": reprt_code,
+                    "fs_div":     "CFS",
+                },
+                timeout=15.0,
+            )
+            d = resp.json()
+        except Exception as e:
+            logger.warning("[dart-extractor] DART API 호출 실패 (%s): %s", year, e)
+            return None
+        if d.get("status") != "000" or not d.get("list"):
+            logger.debug("[dart-extractor] DART API 데이터 없음: %s %s %s", corp_code, year, reprt_code)
+            return None
+        rev = op = None
+        for item in d["list"]:
+            acct = item.get("account_nm", "")
+            val  = _to_int(item.get("thstrm_amount", ""))
+            pri  = _to_int(item.get("frmtrm_amount", ""))
+            if acct in _DART_REV_ACCTS and rev is None:
+                rev = (val, pri)
+            if acct in _DART_OP_ACCTS and op is None:
+                op = (val, pri)
+            if rev and op:
+                break
+        return {"rev": rev, "op": op}
+
+    # 당기 호출
+    cur_data = await _call(bsns_year)
+    if cur_data is None:
+        return None
+
+    cur_rev_pair = cur_data.get("rev")  # (thstrm, frmtrm)
+    cur_op_pair  = cur_data.get("op")
+
+    if cur_rev_pair is None and cur_op_pair is None:
+        return None
+
+    cur_rev = cur_rev_pair[0] if cur_rev_pair else None
+    cur_op  = cur_op_pair[0]  if cur_op_pair  else None
+    pri_rev = cur_rev_pair[1] if cur_rev_pair else None  # 연간 보고서는 여기서 채워짐
+    pri_op  = cur_op_pair[1]  if cur_op_pair  else None
+
+    # 분기/반기: frmtrm이 None이면 전년 동기를 별도 호출
+    _is_intra = "분기" in report_type or "반기" in report_type
+    if _is_intra and (pri_rev is None or pri_op is None):
+        pri_data = await _call(str(bsns_year_int - 1))
+        if pri_data:
+            if pri_rev is None and pri_data.get("rev"):
+                pri_rev = pri_data["rev"][0]
+            if pri_op is None and pri_data.get("op"):
+                pri_op = pri_data["op"][0]
 
     return {
         "revenue":   [cur_rev, pri_rev],
@@ -552,11 +754,12 @@ async def extract_structured(
     model: str,
     report_type: str = "사업보고서",
     period: str = "unknown",
+    corp_code: str | None = None,
 ) -> dict:
-    """3-Pass Ollama 구조화 추출 (asyncio 병렬).
+    """3-Pass 구조화 추출. 재무 수치는 API → XBRL → LLM 순 우선순위.
 
+    corp_code 제공 시 DART API를 1순위로 사용. 실패 시 XBRL, 최종 LLM 폴백.
     반환: {"segments_json": list|None, "revenue_json": dict|None, "competitors_json": list|None}
-    각 추출기가 실패해도 None으로 저장 — 전체 중단 없음.
     """
     full_text = extract_xml(xml_path)
     seg_text  = _section_text(xml_path, _SEGMENT_ANCHORS) or full_text[:5000]
@@ -633,10 +836,17 @@ async def extract_structured(
     if unit == "unknown":
         unit = _detect_unit(rev_text or "")
 
-    # 분기/반기보고서: XBRL TE 태그에서 직접 추출 시도 (LLM 오류 우회)
-    _xbrl_quarterly = None
-    if "분기" in report_type or "반기" in report_type:
-        _xbrl_quarterly = extract_xbrl_quarterly(xml_path)
+    # ── 재무 수치 우선순위: DART API → XBRL → LLM ───────────────────────────
+    # 1순위: DART API (corp_code 있을 때)
+    _api_financials = await _fetch_dart_api_financials(http, corp_code or "", report_type, period)
+
+    # 2순위: XBRL 파싱 (API 실패/미제공 시)
+    _xbrl_quarterly = _xbrl_annual = None
+    if _api_financials is None:
+        if "분기" in report_type or "반기" in report_type:
+            _xbrl_quarterly = extract_xbrl_quarterly(xml_path)
+        else:
+            _xbrl_annual = extract_xbrl_annual(xml_path, period)
 
     seg_json, rev_json, comp_json = await asyncio.gather(
         _call_with_retry(http, model, SEGMENT_EXTRACTOR_PROMPT + seg_text),
@@ -644,28 +854,28 @@ async def extract_structured(
         _call_with_retry(http, model, COMPETITOR_EXTRACTOR_PROMPT + full_text[:6000]),
     )
 
-    # XBRL 직접 추출값으로 LLM 결과의 consolidated revenue/op_profit 교체
-    if _xbrl_quarterly:
+    # API 또는 XBRL 결과로 LLM의 consolidated revenue/op_profit 교체
+    _xbrl_used  = _xbrl_quarterly or _xbrl_annual
+    _financials = _api_financials or _xbrl_used   # API > XBRL > LLM(아래)
+    if _financials:
         cur_lbl, pri_lbl = _derive_period_labels(report_type, period)
         if not rev_json or not isinstance(rev_json, dict):
             rev_json = {}
-        rev_json["periods"]     = [cur_lbl, pri_lbl]
-        rev_json["unit"]        = _xbrl_quarterly["unit"]
-        xc = _xbrl_quarterly
+        rev_json["periods"]   = [cur_lbl, pri_lbl]
+        rev_json["unit"]      = _financials["unit"]
         if not rev_json.get("consolidated"):
             rev_json["consolidated"] = {}
-        rev_json["consolidated"]["revenue"]   = xc["revenue"]
-        rev_json["consolidated"]["op_profit"] = xc["op_profit"]
-        logger.debug("[dart-extractor] XBRL 직접 추출 적용: %s %s", report_type, period)
+        rev_json["consolidated"]["revenue"]   = _financials["revenue"]
+        rev_json["consolidated"]["op_profit"] = _financials["op_profit"]
+        _src = ("API" if _api_financials
+                else "분기/반기 XBRL" if _xbrl_quarterly
+                else "연간 XBRL")
+        logger.debug("[dart-extractor] 재무 수치 소스=%s: %s %s", _src, report_type, period)
 
-    # revenue_json에 단위 주입 (XBRL 미사용 경우)
-    if rev_json and isinstance(rev_json, dict) and not _xbrl_quarterly:
-        rev_json["unit"] = unit
-        # periods가 generic("당기"/"전기"/"unknown")이면 파라미터에서 도출한 레이블로 교체
-        _generic = {"당기", "전기", "unknown", "당기분기", "전기분기"}
-        existing = rev_json.get("periods", [])
-        if all(str(p) in _generic for p in existing):
-            rev_json["periods"] = list(_derive_period_labels(report_type, period))
+    # revenue_json 단위/periods 보정 (LLM만 사용된 경우)
+    if rev_json and isinstance(rev_json, dict) and not _financials:
+        rev_json["unit"]    = unit
+        rev_json["periods"] = list(_derive_period_labels(report_type, period))
 
     # 금융사 규칙 기반 폴백: Ollama가 revenue를 비워두면 regex로 직접 추출
     def _is_empty_rev(rj) -> bool:
@@ -826,6 +1036,13 @@ async def extract_all(
         for company_dir in company_dirs:
             corp_name = company_dir.name
 
+            # DART API 호출용 corp_code 조회 (없으면 None → XBRL 폴백)
+            async with pool.acquire() as conn:
+                corp_code = await conn.fetchval(
+                    "SELECT corp_code FROM dart_companies WHERE corp_name=$1",
+                    corp_name,
+                )
+
             # 리포트 디렉터리: 사업보고서, 분기보고서 등
             report_dirs = sorted(d for d in company_dir.iterdir() if d.is_dir())
 
@@ -883,9 +1100,13 @@ async def extract_all(
                     context = extract_xml(xml_path)
                     xml_chars = len(context)
 
-                # 3-Pass 구조화 추출
+                # 3-Pass 구조화 추출 (재무 수치: API → XBRL → LLM)
                 try:
-                    structured = await extract_structured(http, xml_path, model, report_type=report_type, period=period)
+                    structured = await extract_structured(
+                        http, xml_path, model,
+                        report_type=report_type, period=period,
+                        corp_code=corp_code,
+                    )
                 except Exception as e:
                     logger.warning("[dart-extractor] 구조화 추출 오류: %s", e)
                     structured = {"segments_json": None, "revenue_json": None, "competitors_json": None}
@@ -949,6 +1170,12 @@ async def extract_all_for_company(
 
     async def _run(http_client: httpx.AsyncClient) -> int:
         total = 0
+        # DART API 호출용 corp_code 조회
+        async with pool.acquire() as conn:
+            corp_code = await conn.fetchval(
+                "SELECT corp_code FROM dart_companies WHERE corp_name=$1",
+                corp_name,
+            )
         report_dirs = sorted(d for d in company_dir.iterdir() if d.is_dir())
         for report_dir in report_dirs:
             dir_name = report_dir.name
@@ -986,7 +1213,11 @@ async def extract_all_for_company(
                 xml_chars = len(extract_xml(xml_path))
 
             try:
-                structured = await extract_structured(http_client, xml_path, model, report_type=report_type, period=period)
+                structured = await extract_structured(
+                    http_client, xml_path, model,
+                    report_type=report_type, period=period,
+                    corp_code=corp_code,
+                )
             except Exception as e:
                 logger.warning("[dart-extractor] 구조화 추출 오류: %s", e)
                 structured = {"segments_json": None, "revenue_json": None, "competitors_json": None}
