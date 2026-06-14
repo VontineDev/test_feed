@@ -33,10 +33,12 @@ _EXCHANGE        = "KRX"   # mockapi는 KRX만 지원
 
 # 모델별 슬롯 수 / 포지션당 금액(원)
 MODEL_CONFIG: dict[str, dict] = {
-    "stage":    {"max_slots": 10, "position_krw": 10_000_000},
-    "kosdaq":   {"max_slots": 10, "position_krw": 10_000_000},
-    "cross":    {"max_slots":  5, "position_krw": 20_000_000},
-    "ichimoku": {"max_slots": 10, "position_krw": 10_000_000},
+    "stage":           {"max_slots": 10, "position_krw": 10_000_000},
+    "kosdaq":          {"max_slots": 10, "position_krw": 10_000_000},
+    "cross":           {"max_slots":  5, "position_krw": 20_000_000},
+    "ichimoku":        {"max_slots": 10, "position_krw": 10_000_000},
+    "compose-funnel1": {"max_slots": 10, "position_krw": 10_000_000},
+    "compose-and1":    {"max_slots":  5, "position_krw": 20_000_000},
 }
 
 # ── 유틸 ─────────────────────────────────────────────────────────────────────

@@ -612,6 +612,18 @@ async def _paper_open_entry_job() -> None:
     await paper_open_entry_job(_db_pool, _paper_trader)
 
 
+async def _compose_paper_entry_job() -> None:
+    if not _db_pool:
+        return
+    from core.db import get_dsn as _get_dsn
+    from jobs.compose_paper_job import compose_paper_entry_job
+    dsn = _get_dsn()
+    if not dsn:
+        logger.warning("[compose-paper] DSN 없음 — 스킵")
+        return
+    await compose_paper_entry_job(dsn, _db_pool)
+
+
 # ── 대시보드 → 스케줄러 트리거 폴러 ─────────────────────────
 # dashboard POST /api/scheduler/trigger → scheduler_triggers INSERT
 # 이 잡이 30초마다 pending 행을 1개씩 꺼내 실행하고 status='done'으로 갱신.
@@ -917,6 +929,18 @@ async def main(interval: int, enable_summary: bool) -> None:
             replace_existing=True,
         )
         logger.info("[paper] T+1 진입 잡 등록 완료 (09:05 KST)")
+
+    # Compose 전략 주간 신호 적재 (Kiwoom 계정 불필요, DB만 필요)
+    if _db_pool:
+        scheduler.add_job(
+            _compose_paper_entry_job,
+            CronTrigger(day_of_week="sun", hour=12, minute=15, timezone="UTC"),  # = 21:15 KST
+            id="compose_paper_entry",
+            max_instances=1,
+            misfire_grace_time=43200,   # 12h — 주간 잡, 서버 재시작 고려
+            replace_existing=True,
+        )
+        logger.info("[compose-paper] 주간 신호 적재 잡 등록 완료 (일요일 21:15 KST)")
 
     # ── daily_ohlcv 워밍: 평일 18:30 KST (09:30 UTC) ────────────
     # KRX OpenAPI → 전일 전 종목 OHLCV → daily_ohlcv upsert

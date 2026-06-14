@@ -12,6 +12,7 @@ interface PaperData {
 
 const MODEL_LABEL: Record<string, string> = {
   stage: 'Stage', kosdaq: 'KOSDAQ', cross: 'Cross', ichimoku: 'Ichimoku',
+  'compose-funnel1': 'Funnel-1', 'compose-and1': 'AND-1',
 }
 
 const EXIT_LABEL: Record<string, string> = {
