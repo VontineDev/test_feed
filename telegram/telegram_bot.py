@@ -7,7 +7,7 @@ Long polling 방식으로 명령어를 수신하고 DB 조회 결과를 응답.
     /status   — 크롤러 현재 상태 (수집 건수, 마지막 수집 시각 등)
     /signals  — 최근 매매 신호 10건 (BUY/SELL/WATCH)
     /today    — 오늘 수집된 기사 요약 (카테고리별 건수 + 최신 5건)
-    /backtest  — 통합 백테스트 (ichimoku / stage / cross 모드)
+    /backtest  — 통합 백테스트 (ichimoku / stage / cross / compose 모드)
     /screener  — 최신 강세 후보 발굴 결과 (DB 조회, 명령어 발신자에게만 전송)
     /scan      — 강세 후보 즉시 스캔 (전 종목 실시간 스캔, 결과 저장 후 발신자에게 전송)
     /buy       — 진입 기록 (거래 저널)
@@ -294,6 +294,150 @@ async def _handle_today(http: httpx.AsyncClient, chat_id: str, pool) -> None:
 _backtest_lock: asyncio.Lock = asyncio.Lock()
 
 
+async def _handle_backtest_compose(
+    http: httpx.AsyncClient, chat_id: str, args: list[str]
+) -> None:
+    """/backtest compose <strategy> <start> <end> [market]
+
+    예:
+      /backtest compose FUNNEL-1 2025-01-01 2026-06-14
+      /backtest compose ALL 2025-01-01 2026-06-14 KOSPI
+    """
+    VALID_STRATEGIES = ("AND-1", "AND-2", "SCORE-1", "FUNNEL-1", "ALL")
+    USAGE_COMPOSE = (
+        "사용법: /backtest compose <strategy> <start> <end> [market]\n"
+        "  strategy: AND-1 | AND-2 | SCORE-1 | FUNNEL-1 | ALL\n"
+        "  start/end: YYYY-MM-DD\n"
+        "  market: KOSPI | KOSDAQ | ALL (기본: ALL)\n\n"
+        "예) /backtest compose FUNNEL-1 2025-01-01 2026-06-14\n"
+        "    /backtest compose ALL 2025-01-01 2026-06-14"
+    )
+
+    if len(args) < 3:
+        await _send_plain(http, chat_id, USAGE_COMPOSE)
+        return
+
+    strategy = args[0].upper()
+    start_str = args[1]
+    end_str = args[2]
+
+    if strategy not in VALID_STRATEGIES:
+        await _send_plain(http, chat_id,
+            f"strategy는 {' | '.join(VALID_STRATEGIES)} 중 하나여야 합니다.\n\n{USAGE_COMPOSE}")
+        return
+
+    from datetime import date as _date
+    try:
+        start = _date.fromisoformat(start_str)
+        end = _date.fromisoformat(end_str)
+    except ValueError:
+        await _send_plain(http, chat_id,
+            f"날짜 형식 오류 (YYYY-MM-DD): {start_str}, {end_str}")
+        return
+
+    if start >= end:
+        await _send_plain(http, chat_id, "start는 end보다 이전이어야 합니다.")
+        return
+
+    market = "ALL"
+    if len(args) >= 4 and args[3].upper() in ("KOSPI", "KOSDAQ", "ALL"):
+        market = args[3].upper()
+
+    try:
+        from core.db import get_dsn as _get_dsn
+        _dsn: str | None = _get_dsn()
+    except Exception:
+        _dsn = None
+
+    if not _dsn:
+        await _send_plain(http, chat_id,
+            "compose 백테스트는 DB 연결이 필요합니다 (DSN 미설정).")
+        return
+
+    if _backtest_lock.locked():
+        await _send_plain(http, chat_id,
+            "⏳ 백테스트가 이미 실행 중입니다. 완료 후 결과가 전송됩니다.")
+        return
+
+    label = f"Tier-1 전체 비교" if strategy == "ALL" else strategy
+    await _send_plain(http, chat_id,
+        f"📊 조합전략 백테스트 시작 — {label}\n"
+        f"📅 {start} ~ {end}  {market}\n"
+        "⏳ 예상 소요: 1~3분\n"
+        "완료되면 결과를 전송합니다."
+    )
+
+    from analysis.backtest_engine import BacktestConfig, run_backtest
+    from analysis.strategy_compose import STRATEGIES as _STRATS
+
+    async with _backtest_lock:
+        try:
+            loop = asyncio.get_running_loop()
+            from datetime import datetime as _dt
+            from zoneinfo import ZoneInfo as _ZI
+            _ts = _dt.now(_ZI("Asia/Seoul")).strftime("%Y%m%d_%H%M%S")
+
+            if strategy == "ALL":
+                results = {}
+                for s in _STRATS:
+                    cfg = BacktestConfig(
+                        mode="compose", strategy=s,
+                        start=start, end=end, market=market, dsn=_dsn,
+                    )
+                    results[s] = await loop.run_in_executor(None, run_backtest, cfg)
+                    _html = f"reports/backtest/compose_{s.lower().replace('-', '')}_{_ts}.html"
+                    results[s].to_html_report(_html)
+
+                def _pct(v):
+                    return f"{v*100:.1f}%" if v is not None else "—"
+                def _val(v):
+                    return f"{v:.2f}" if v is not None else "—"
+
+                lines = [
+                    f"📊 Tier-1 조합전략 비교  {start}~{end}  {market}",
+                    "",
+                    f"{'전략':<10} {'신호':>5} {'승률28d':>7} {'수익28d':>8} {'샤프28d':>7} {'MDD':>7}",
+                    "─" * 52,
+                ]
+                for s, r in sorted(
+                    results.items(),
+                    key=lambda kv: kv[1].overall.sharpe_28d or -999,
+                    reverse=True,
+                ):
+                    m = r.overall
+                    lines.append(
+                        f"{s:<10} {m.n:>5} {_pct(m.win_rate_28d):>7} "
+                        f"{_pct(m.avg_return_28d):>8} {_val(m.sharpe_28d):>7} "
+                        f"{_pct(m.mdd):>7}"
+                    )
+
+                msg = "```\n" + "\n".join(lines) + "\n```"
+                if len(msg) > 4090:
+                    msg = msg[:4087] + "..."
+                await _send_plain(http, chat_id, msg)
+
+            else:
+                cfg = BacktestConfig(
+                    mode="compose", strategy=strategy,
+                    start=start, end=end, market=market, dsn=_dsn,
+                )
+                result = await loop.run_in_executor(None, run_backtest, cfg)
+                _html_path = (
+                    f"reports/backtest/compose_{strategy.lower().replace('-', '')}_{_ts}.html"
+                )
+                result.to_html_report(_html_path)
+
+                report = result.to_telegram_report()
+                report += f"\n\n📁 {_html_path}"
+                if len(report) > 4090:
+                    report = report[:4087] + "..."
+                await _send_plain(http, chat_id, report)
+
+        except Exception as e:
+            logger.warning("[봇/compose] 실행 실패: %s", e)
+            await _send_plain(http, chat_id, f"조합전략 백테스트 실행 중 오류: {e}")
+
+
 async def _handle_backtest(
     http: httpx.AsyncClient, chat_id: str, args: list[str]
 ) -> None:
@@ -303,6 +447,7 @@ async def _handle_backtest(
       /backtest ichimoku 2025-01-01 2026-01-01
       /backtest stage    2025-01-01 2026-01-01 KOSDAQ
       /backtest cross    2025-01-01 2026-01-01 ALL --max 50
+      /backtest compose  FUNNEL-1 2025-01-01 2026-06-14
     """
     if _backtest_lock.locked():
         await _send_plain(http, chat_id,
@@ -313,7 +458,7 @@ async def _handle_backtest(
     USAGE = (
         "사용법: /backtest <mode> <start> <end> [market] [--max N] [--tx-cost F]\n"
         "              [--tp1 F] [--tp1-ratio F] [--trail F] [--stop F]\n"
-        "  mode        : ichimoku | stage | stage2 | cross\n"
+        "  mode        : ichimoku | stage | stage2 | cross | compose\n"
         "  start/end   : YYYY-MM-DD\n"
         "  market      : KOSPI | KOSDAQ | ALL (기본: ALL)\n"
         "  --max N     : 최대 티커 수 (기본 200)\n"
@@ -322,12 +467,15 @@ async def _handle_backtest(
         "  --tp1-ratio F: 1차 익절 비율 (기본 0.5)\n"
         "  --trail F   : 트레일링 스탑 (고점 대비, 예: 0.10)\n"
         "  --stop F    : 하드 손절 (기본 0.08)\n\n"
+        "compose 모드:\n"
+        "  /backtest compose <strategy> <start> <end> [market]\n"
+        "  strategy: AND-1 | AND-2 | SCORE-1 | FUNNEL-1 | ALL\n\n"
         "권장 파라미터:\n"
         "  Stage/KOSPI : --tp1 0.25 --trail 0.10 --stop 0.10\n"
         "  Stage/KOSDAQ: --tp1 0.25 --trail 0.15 --stop 0.10\n"
         "  Cross       : --tp1 0.15 --trail 0.10 --stop 0.10\n\n"
         "예) /backtest stage 2024-01-01 2026-01-01 KOSPI --tp1 0.25 --trail 0.10 --stop 0.10\n"
-        "    /backtest cross 2024-01-01 2026-01-01 ALL --tp1 0.15 --trail 0.10 --stop 0.10"
+        "    /backtest compose FUNNEL-1 2025-01-01 2026-06-14"
     )
 
     if len(args) < 3:
@@ -338,8 +486,13 @@ async def _handle_backtest(
     start_str = args[1]
     end_str   = args[2]
 
+    if mode == "compose":
+        await _handle_backtest_compose(http, chat_id, args[1:])
+        return
+
     if mode not in ("ichimoku", "stage", "stage2", "cross"):
-        await _send_plain(http, chat_id, f"mode는 ichimoku|stage|stage2|cross 중 하나여야 합니다.\n\n{USAGE}")
+        await _send_plain(http, chat_id,
+            f"mode는 ichimoku|stage|stage2|cross|compose 중 하나여야 합니다.\n\n{USAGE}")
         return
 
     from datetime import date as _date
@@ -855,9 +1008,11 @@ async def _handle_help(http: httpx.AsyncClient, chat_id: str) -> None:
         "/signals sell — SELL 신호만 조회",
         "/signals watch — WATCH 신호만 조회",
         "/today — 오늘 수집 현황 \\+ 최신 기사",
-        "/backtest \\<mode\\> \\<start\\> \\<end\\> — 통합 백테스트 \\(이치모쿠/3단계/교차\\)",
+        "/backtest \\<mode\\> \\<start\\> \\<end\\> — 통합 백테스트 \\(이치모쿠/3단계/교차/조합\\)",
         "  예\\) /backtest ichimoku 2025\\-01\\-01 2026\\-01\\-01",
-        "  모드\\: ichimoku \\| stage \\| cross",
+        "  예\\) /backtest compose FUNNEL\\-1 2025\\-01\\-01 2026\\-06\\-14",
+        "  모드\\: ichimoku \\| stage \\| cross \\| compose",
+        "  compose 전략\\: AND\\-1 \\| AND\\-2 \\| SCORE\\-1 \\| FUNNEL\\-1 \\| ALL",
         "/top — 당일 거래금액 상위 10 \\(KOSPI\\+KOSDAQ\\)",
         "/screener — 최신 강세 후보 발굴 결과 \\(DB 조회\\)",
         "/scan — 강세 후보 즉시 스캔 \\(전 종목 실시간 스캔, 약 10\\~20분\\)",
@@ -959,7 +1114,7 @@ async def _register_commands(http: httpx.AsyncClient) -> None:
         {"command": "status",   "description": "크롤러 상태 (업타임, 수집 건수)"},
         {"command": "signals",  "description": "최근 매매 신호 10건"},
         {"command": "today",    "description": "오늘 수집 현황 + 최신 기사"},
-        {"command": "backtest", "description": "통합 백테스트 (이치모쿠/3단계/교차) — /backtest ichimoku 2025-01-01 2026-01-01"},
+        {"command": "backtest", "description": "백테스트 — /backtest ichimoku|stage|cross|compose <start> <end>  compose예) /backtest compose FUNNEL-1 2025-01-01 2026-06-14"},
         {"command": "top",       "description": "당일 거래금액 상위 10 (KOSPI+KOSDAQ)"},
         {"command": "screener", "description": "최신 강세 후보 발굴 결과 (DB 조회)"},
         {"command": "scan",     "description": "강세 후보 즉시 스캔 (전 종목 실시간 스캔)"},
