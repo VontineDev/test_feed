@@ -19,8 +19,14 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+import sys
 import time
 from datetime import date, timedelta
+
+# 프로젝트 루트를 sys.path에 추가
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 
 logger = logging.getLogger(__name__)
 
@@ -138,9 +144,11 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    dsn = os.environ.get("DATABASE_URL", "")
-    if not dsn:
-        raise SystemExit("DATABASE_URL 환경변수 미설정")
+    try:
+        from core.db import get_dsn as _get_dsn
+        dsn = _get_dsn()
+    except Exception as e:
+        raise SystemExit(f"DSN 구성 실패: {e}")
 
     start = date.fromisoformat(args.start)
     end = date.fromisoformat(args.end)

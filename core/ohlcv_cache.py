@@ -287,7 +287,10 @@ def fill_daily_from_krx(
                 """,
                 [
                     (
-                        r["symbol"], r["market"], r["date"],
+                        r["symbol"],
+                        # VARCHAR(4) 제약: KOSPI/KOSDAQ → KR, IDX 유지
+                        "IDX" if r["market"] == "IDX" else "KR",
+                        r["date"],
                         r.get("open"), r.get("high"), r.get("low"),
                         r["close"], r.get("volume"), "krx-openapi",
                     )
