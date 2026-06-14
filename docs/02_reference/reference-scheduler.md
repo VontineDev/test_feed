@@ -81,6 +81,7 @@ python run_scheduler.py --no-summary  # 요약 없이 수집만
 |-------|-----------------|------|
 | `daily_aftermarket_sync` | 평일 16:05 | 키움 시간외 단일가 스냅샷 (aftermarket_snap) |
 | `daily_flow_sync` | 평일 18:00 | KRX 외국인·기관 순매수 증분 (daily_flow) |
+| `daily_ohlcv_warm` | 평일 18:30 | KRX OpenAPI 전일 전 종목 OHLCV → daily_ohlcv (KRX_OPENAPI_KEY 필수) |
 | `daily_market_snap` | 평일 16:10 | 당일 거래금액 Top 100 스냅샷 |
 
 ### 모의투자 잡 (KIWOOM_MOCK_APPKEY 필수)
@@ -163,6 +164,7 @@ scheduler.add_job(
 | `DART_API_KEY` | daily_dart_disclosures, monthly_dart_xbrl, annual_dart_extractor |
 | `YOUTUBE_API_KEY` / `GEMINI_API_KEY` | youtube_narrative_sync, youtube_attention_score, youtube_forward_return |
 | `KIWOOM_MOCK_APPKEY` | paper_open_entry, paper_exit_checker, paper_eod_sampler |
+| `KRX_OPENAPI_KEY` | daily_ohlcv_warm (경고 후 0 반환, 스케줄러 크래시 없음) |
 
 ---
 

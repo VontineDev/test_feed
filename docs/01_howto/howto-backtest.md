@@ -27,17 +27,34 @@
 /backtest stage    2025-01-01 2026-01-01 KOSDAQ
 /backtest cross    2025-01-01 2026-01-01
 /backtest stage2   2025-01-01 2026-01-01 ALL --max 100
+
+# compose 모드 (Tier-1 조합전략)
+/backtest compose FUNNEL-1 2025-01-01 2026-06-14
+/backtest compose ALL      2025-01-01 2026-06-14
 ```
 
 형식: `/backtest <mode> <start> <end> [market] [--max N] [--tx-cost F]`
 
 | 인수 | 기본값 | 설명 |
 |------|--------|------|
-| `mode` | 필수 | `ichimoku` \| `stage` \| `stage2` \| `cross` |
+| `mode` | 필수 | `ichimoku` \| `stage` \| `stage2` \| `cross` \| `compose` |
 | `start` / `end` | 필수 | `YYYY-MM-DD` |
 | `market` | `ALL` | `KOSPI` \| `KOSDAQ` \| `ALL` |
 | `--max N` | `200` | 최대 티커 수 (0 = 전종목) |
 | `--tx-cost F` | KRX 실비 | 왕복 거래비용 소수 (예: `0.0021`) |
+
+### compose 모드 형식
+
+```
+/backtest compose <strategy> <start> <end> [market]
+```
+
+| 인수 | 기본값 | 설명 |
+|------|--------|------|
+| `strategy` | 필수 | `AND-1` \| `AND-2` \| `SCORE-1` \| `FUNNEL-1` \| `ALL` |
+| `market` | `ALL` | `KOSPI` \| `KOSDAQ` \| `ALL` |
+
+`ALL` 선택 시 4전략 순차 실행 후 샤프28d 내림차순 비교표 전송. DB 연결(DSN) 필수.
 
 결과는 백테스트 완료 후 텍스트 요약 + HTML 리포트 경로로 전송됩니다.  
 중복 실행 방지 Lock 내장 — 실행 중 재시도 시 "백테스트 실행 중" 안내.

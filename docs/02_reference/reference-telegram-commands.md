@@ -84,6 +84,24 @@
 | `stage` | 일봉 Stage 1 조건 재현 (5/5 조건) |
 | `cross` | Ichimoku + Stage 1 동일 주 교차 신호 |
 | `stage2` | Stage 1 후 14일 이내 Stage 2 재진입 조건 |
+| `compose` | Tier-1 조합전략 — 별도 형식 사용 (아래 참고) |
+
+**compose 모드:**
+
+```
+/backtest compose <strategy> <start> <end> [market]
+  strategy: AND-1 | AND-2 | SCORE-1 | FUNNEL-1 | ALL
+```
+
+| 전략 | 설명 | 샤프28d (25W01~26W24) |
+|------|------|----------------------|
+| `AND-1` | 이치모쿠 ∩ Stage2+ ∩ 수급 비동시매도 | 1.75 |
+| `AND-2` | AND-1 ∩ 거래량 주내 중앙값 이상 | — (신호 희소) |
+| `SCORE-1` | Stage·거래량·수급 z-score top-20/주 | 0.62 |
+| `FUNNEL-1` | 수급 스크린 → 4주 내 이치모쿠 트리거 | 0.74 |
+| `ALL` | 4전략 순차 실행 → 비교표 (샤프 내림차순) | — |
+
+DB 연결(DSN) 필수. HTML 리포트 `reports/backtest/compose_*.html` 자동 저장.
 
 **옵션:**
 
