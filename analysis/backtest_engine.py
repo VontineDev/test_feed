@@ -51,6 +51,7 @@ MODE_KOR: dict[str, str] = {
     "stage":    "3단계(일봉)",
     "cross":    "이치모쿠×3단계",
     "stage2":   "Stage 2(일봉)",
+    "compose":  "조합전략",
 }
 
 # ── 그리드서치로 검증된 최적 청산 파라미터 (모드별) ─────────────────
@@ -114,6 +115,7 @@ class BacktestConfig:
     rf_rate_annual: float = 0.030  # 무위험수익률 (한국국채 3% 기준)
     workers: int = 8
     dsn: Optional[str] = None     # PostgreSQL DSN. 설정 시 daily_ohlcv 캐시 사용
+    strategy: Optional[str] = None    # mode="compose" 시 strategy_compose.STRATEGIES 키
     hold_weeks: Optional[int] = None  # None = 표준 1/4/13w; N = N주 보유 수익률 추가 계산
     # ── 분할 청산 파라미터 (sweep 최적화용) ──────────────────────────
     tp1_pct:         float = 0.0    # 1차 익절 타겟 (0이면 미사용 → MA20 폴백)
@@ -123,8 +125,13 @@ class BacktestConfig:
     use_stage3_peak: bool  = False   # Stage3 peakout_flag 트리거 사용 여부
 
     def __post_init__(self) -> None:
-        if self.mode not in ("ichimoku", "stage", "cross", "stage2"):
-            raise ValueError(f"mode는 ichimoku|stage|cross|stage2 중 하나여야 합니다: {self.mode!r}")
+        if self.mode not in ("ichimoku", "stage", "cross", "stage2", "compose"):
+            raise ValueError(f"mode는 ichimoku|stage|cross|stage2|compose 중 하나여야 합니다: {self.mode!r}")
+        if self.mode == "compose":
+            if not self.strategy:
+                raise ValueError("mode='compose'는 strategy 지정이 필요합니다 (예: 'AND-1')")
+            if not self.dsn:
+                raise ValueError("mode='compose'는 dsn(PostgreSQL)이 필요합니다")
         if self.start >= self.end:
             raise ValueError("start는 end보다 이전이어야 합니다")
         if self.market not in ("KOSPI", "KOSDAQ", "ALL"):
@@ -790,6 +797,22 @@ def _nearest_price(
         p = lookup.get(target + timedelta(days=offset))
         if p is not None:
             return p
+    return None
+
+
+def _entry_on_or_after(
+    lookup: dict[date, float], target: date, max_days: int = 7
+) -> Optional[tuple[date, float]]:
+    """target(포함)부터 최대 max_days 이내 첫 거래일의 (날짜, 종가) 반환.
+
+    compose 진입가 산정용: 신호는 해당 주 금요일 기준이므로 그날(또는 다음
+    거래일, 보통 월요일)에 진입. 반환 날짜는 OHLCV 인덱스에 존재하는 실제
+    거래일이라 _compute_sell_signals_and_s2 의 idx_map 매칭이 보장된다."""
+    for offset in range(max_days + 1):
+        d = target + timedelta(days=offset)
+        p = lookup.get(d)
+        if p is not None:
+            return d, p
     return None
 
 
@@ -1758,8 +1781,162 @@ def _fill_returns(
 
 # ── 메인 실행 ─────────────────────────────────────────────────────
 
+def _run_compose(config: BacktestConfig) -> BacktestResult:
+    """compose 모드 — strategy_compose 합성 신호를 SignalRecord로 변환 후
+    기존 forward-return/청산/지표/HTML 머신을 재사용한다.
+
+    replay(_replay_*)를 우회한다: 신호는 백필된 precompute 테이블 JOIN에서 온다
+    (plan-eng-review JOIN+백필 아키텍처). 효율을 위해 신호가 있는 티커의
+    OHLCV만 수집한다(전종목 X).
+
+    데이터 흐름:
+        strategy_compose.load_signal_frame → derive_flags → STRATEGIES[s].run()
+            → [(ticker, ISO주)]
+        ISO주 금요일 이후 첫 거래일에 진입(SignalRecord, mode="compose")
+            → _fill_returns / _compute_sell_signals_and_s2 / _compute_group_metrics
+    """
+    from analysis import strategy_compose as sc
+    from analysis.chart_screener import get_all_tickers, fetch_kind_sector_map
+
+    spec = sc.STRATEGIES.get(config.strategy)
+    if spec is None:
+        raise ValueError(
+            f"알 수 없는 전략: {config.strategy!r} (가능: {sorted(sc.STRATEGIES)})"
+        )
+
+    logger.info(
+        "[compose] 전략=%s 소스=%s 기간=%s~%s 시장=%s",
+        config.strategy, spec.sources, config.start, config.end, config.market,
+    )
+
+    def _empty(note: str) -> BacktestResult:
+        return BacktestResult(
+            config=config, signals=[], overall=GroupMetrics(),
+            computed_at=datetime.now(_KST).isoformat(), note=note,
+        )
+
+    # 1. 합성 신호 (ticker, ISO주)
+    frame = sc.load_signal_frame(config.dsn, config.start, config.end, spec.sources)
+    if frame.empty:
+        return _empty(f"compose {config.strategy}: 소스 데이터 0건")
+    frame = sc.derive_flags(frame)
+    sig_df = spec.run(frame)
+    if sig_df.empty:
+        return _empty(f"compose {config.strategy}: 합성 신호 0건")
+
+    # 2. 시장·기간 필터 → (ticker, 금요일) 진입 후보
+    sector_map  = fetch_kind_sector_map()
+    all_tickers = get_all_tickers(sector_map=sector_map if sector_map else None)
+    meta: dict[str, tuple[str, str]] = {t: (n, s) for t, n, s in all_tickers}
+
+    entries: list[tuple[str, date]] = []
+    for row in sig_df.itertuples(index=False):
+        ticker = row.ticker
+        friday = sc.week_to_friday(row.week)
+        if not (config.start <= friday <= config.end):
+            continue
+        mkt = "KOSDAQ" if ticker.endswith(".KQ") else "KOSPI"
+        if config.market != "ALL" and mkt != config.market:
+            continue
+        entries.append((ticker, friday))
+    if not entries:
+        return _empty(f"compose {config.strategy}: 기간/시장 필터 후 신호 0건")
+
+    needed = sorted({t for t, _ in entries})
+    logger.info("[compose] 합성 신호 %d건 · 대상 티커 %d개", len(entries), len(needed))
+
+    # 3. OHLCV (신호 티커만) + KOSPI 벤치마크
+    fetch_start = config.start - timedelta(days=760)
+    hold_buffer = (config.hold_weeks * 7 + 14) if config.hold_weeks else 0
+    fetch_end   = config.end + timedelta(days=max(105, hold_buffer))
+
+    from core.ohlcv_cache import batch_fetch_cached, fetch_index_cached
+    ticker_pairs = [(t, "KOSDAQ" if t.endswith(".KQ") else "KOSPI") for t in needed]
+    ohlcv_map = batch_fetch_cached(
+        ticker_pairs, fetch_start, fetch_end, config.workers, config.dsn, _fetch_single_ohlcv,
+    )
+    kospi_df     = fetch_index_cached("^KS11", "IDX", fetch_start, fetch_end, config.dsn, _fetch_index)
+    kospi_lookup = _build_price_lookup(kospi_df) if kospi_df is not None else {}
+
+    # 4. 수급 (청산 로직 S3 조건 공용)
+    flow_lookup: Optional[dict] = None
+    try:
+        from core.ohlcv_cache import load_flow_data
+        flow_lookup = load_flow_data(config.dsn, needed, config.start, fetch_end)
+    except Exception as e:
+        logger.warning("[compose] 수급 데이터 로드 실패: %s", e)
+
+    # 5. SignalRecord 생성 — 금요일 이후 첫 거래일에 진입
+    price_lookup_cache: dict[str, dict[date, float]] = {}
+    seen: set[tuple[str, date]] = set()
+    signals: list[SignalRecord] = []
+    for ticker, friday in entries:
+        df = ohlcv_map.get(ticker)
+        if df is None or df.empty:
+            continue
+        plook = price_lookup_cache.get(ticker)
+        if plook is None:
+            plook = _build_price_lookup(df)
+            price_lookup_cache[ticker] = plook
+        entry = _entry_on_or_after(plook, friday)
+        if entry is None:
+            continue
+        edate, eclose = entry
+        if eclose <= 0 or (ticker, edate) in seen:
+            continue
+        seen.add((ticker, edate))
+        mkt  = "KOSDAQ" if ticker.endswith(".KQ") else "KOSPI"
+        name = meta.get(ticker, (ticker, ""))[0]
+        signals.append(SignalRecord(
+            ticker=ticker, name=name, signal_date=edate,
+            close_at_signal=eclose, mode="compose", market=mkt,
+        ))
+    if not signals:
+        return _empty(f"compose {config.strategy}: 진입가 산정 후 신호 0건")
+
+    # 6. 청산 파라미터 — 미설정 시 CROSS 최적값 적용 (조합도 교차 성격)
+    cfg = config
+    if config.tp1_pct == 0 and config.trail_pct == 0:
+        cfg = _dc_replace(config, **OPTIMAL_EXIT_PARAMS_CROSS)
+        logger.info("[compose] 기본 분할청산 파라미터 적용 (CROSS 최적값)")
+
+    # 7. 수익률
+    for sig in signals:
+        plook = price_lookup_cache.get(sig.ticker)
+        if plook is not None:
+            _fill_returns(sig, plook, kospi_lookup, cfg.tx_cost_rt, cfg.hold_weeks)
+
+    # 8. 업종 주입
+    for sig in signals:
+        sig.sector = meta.get(sig.ticker, ("", ""))[1]
+
+    # 9. 매도 신호·MDD (S2/S3는 compose 모드에 비적용 — stage 전용)
+    _compute_sell_signals_and_s2(
+        signals, ohlcv_map, cfg.tx_cost_rt,
+        stop_loss_pct=cfg.hard_stop_pct, flow_lookup=flow_lookup, cfg=cfg,
+        stage3_peakout_map=None,
+    )
+
+    # 10. 정렬 + 집계
+    signals.sort(key=lambda s: s.signal_date)
+    overall = _compute_group_metrics(signals, cfg.rf_rate_annual, cfg.hold_weeks)
+
+    note = f"compose {config.strategy} — 신호 {len(signals)}건"
+    if flow_lookup is None:
+        note += " | 수급 미적용(DSN/데이터 없음)"
+    logger.info("[compose] 완료 — 신호:%d 승률28d:%s", overall.n,
+                f"{overall.win_rate_28d*100:.1f}%" if overall.win_rate_28d is not None else "N/A")
+    return BacktestResult(
+        config=config, signals=signals, overall=overall,
+        computed_at=datetime.now(_KST).isoformat(), note=note,
+    )
+
+
 def run_backtest(config: BacktestConfig) -> BacktestResult:
     """백테스트 메인 함수. CLI 및 Telegram 봇에서 동기 호출."""
+    if config.mode == "compose":
+        return _run_compose(config)
+
     from analysis.chart_screener import get_all_tickers
 
     logger.info(

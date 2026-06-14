@@ -1,12 +1,12 @@
 # 통합 백테스트 엔진 사용 가이드
 
-`backtest_engine.py` 기준 (v0.7.3~)
+`backtest_engine.py` 기준 (v0.7.3~ / compose 모드 v1.0.0~)
 
 ---
 
 ## 개요
 
-4가지 모드로 과거 구간 백테스트를 실행합니다.
+5가지 모드로 과거 구간 백테스트를 실행합니다.
 
 | 모드 | 내용 |
 |------|------|
@@ -14,6 +14,7 @@
 | `stage` | 일봉 Stage 1 가격 조건 재현 (5/5 조건, 수급 제외 기본) |
 | `cross` | 이치모쿠 + Stage 1이 동일 ISO 주에 발동한 종목만 |
 | `stage2` | Stage 1 신호 후 14일 이내 Stage 2 재진입 조건 재현 |
+| `compose` | Tier-1 조합전략 (AND-gate / Composite Score / Funnel) — 백필 precompute 테이블 기반 |
 
 출력 지표: 승률(7d/28d/91d), 평균·중앙값 수익률, KOSPI 초과수익률, 샤프비율(연환산), MDD(equity curve), 매도 신호 통계, S2/S3 단계 진행률, 종목별 MDD(91d), 업종
 
@@ -181,6 +182,73 @@ cfg = BacktestConfig("ichimoku", date(2025, 1, 1), date(2026, 1, 1), hold_weeks=
 | 보유일 | 신호~매도일 달력일수 |
 | 매도수익 | 매도 시점 수익률 (거래비용 차감) |
 | MDD(91d) | 진입 후 91일 최대낙폭 |
+
+---
+
+---
+
+## compose 모드 (Tier-1 조합전략)
+
+### CLI
+
+```bash
+# 단일 전략
+python scripts/run_compose.py --strategy AND-1 --start 2025-01-01 --end 2026-06-14
+
+# 전체 Tier-1 비교표 (샤프28d 내림차순)
+python scripts/run_compose.py --strategy ALL --start 2025-01-01 --end 2026-06-14
+
+# HTML 리포트 저장
+python scripts/run_compose.py --strategy FUNNEL-1 --start 2025-01-01 --end 2026-06-14 \
+    --html results/funnel1.html --workers 8
+```
+
+### Tier-1 전략 목록
+
+| 전략 | kind | 조건 | 신호수(25W01~26W24) | 샤프28d | 승률28d |
+|------|------|------|---------------------|---------|---------|
+| AND-1 | AND-gate | 이치모쿠 ∩ Stage2+ ∩ 수급 비동시매도 | ~8 | 1.75 | 80% |
+| AND-2 | AND-gate | AND-1 ∩ 거래량 주내 중앙값 이상 | ~3 | — | 100% |
+| SCORE-1 | Composite Score | Stage·거래량·수급 z-score top-20/주 | ~1500 | 0.62 | 55% |
+| FUNNEL-1 | Funnel | 수급 스크린 → 4주 내 이치모쿠 트리거 | ~2009 | 0.74 | 67% |
+
+### 플래그 정의 (derive_flags)
+
+| 플래그 | 정의 |
+|--------|------|
+| `ichimoku` | chart_signals 7조건 통과 여부 |
+| `stage2plus` | stage >= 2 |
+| `stage_any` | stage >= 1 |
+| `flow_pos` | (외국인 > 0) OR (기관 > 0) — 엄격 |
+| `flow_loose` | NOT (외국인 < 0 AND 기관 < 0) — 완화 |
+| `vol_above_med` | 주내 이치모쿠 통과 종목 거래량 중앙값 이상 |
+| `vol_spike` | vol_ratio >= 2.0 (daily_ohlcv 기반) |
+
+### 데이터 제약
+
+- `chart_signals`: 2025-W01 ~ 현재 (백필 완료, `jobs/screener_backfill.py` 재실행으로 갱신)
+- `stage_classifications`: 2025-W01 ~ 현재 (백필 완료, `jobs/stage_backfill.py` 재실행으로 갱신)
+- `daily_flow`: 2025-01-02 ~ 현재 (flow 의존 전략 하한)
+
+### Python API (compose 모드)
+
+```python
+from datetime import date
+from analysis.backtest_engine import BacktestConfig, run_backtest
+
+cfg = BacktestConfig(
+    mode="compose",
+    strategy="FUNNEL-1",   # AND-1 | AND-2 | SCORE-1 | FUNNEL-1
+    start=date(2025, 1, 1),
+    end=date(2026, 6, 14),
+    market="ALL",
+    workers=8,
+    dsn="postgresql://...",
+)
+result = run_backtest(cfg)
+print(result.to_telegram_report())
+result.to_html_report("reports/backtest/funnel1.html")
+```
 
 ---
 
