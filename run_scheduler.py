@@ -554,6 +554,11 @@ async def _daily_flow_sync_job():
     await daily_flow_sync_job()
 
 
+async def _daily_ohlcv_warm_job():
+    from jobs.infra_jobs import daily_ohlcv_warm_job
+    await daily_ohlcv_warm_job()
+
+
 async def _daily_dart_disclosure_job():
     if not _db_pool:
         return
@@ -913,6 +918,18 @@ async def main(interval: int, enable_summary: bool) -> None:
         )
         logger.info("[paper] T+1 진입 잡 등록 완료 (09:05 KST)")
 
+    # ── daily_ohlcv 워밍: 평일 18:30 KST (09:30 UTC) ────────────
+    # KRX OpenAPI → 전일 전 종목 OHLCV → daily_ohlcv upsert
+    # KRX_OPENAPI_KEY 미설정 시 내부에서 경고 후 skip (스케줄러 크래시 없음).
+    # flow_sync(18:00) 완료 후 30분 여유.
+    scheduler.add_job(
+        _daily_ohlcv_warm_job,
+        CronTrigger(day_of_week="mon-fri", hour=9, minute=30, timezone="UTC"),  # = 18:30 KST
+        id="daily_ohlcv_warm",
+        max_instances=1,
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
     # ── OpenDART 공시 수집: 평일 09:00 KST (00:00 UTC) ──────────
     # 전일 Top 20 기업 공시 이벤트 (실적발표·유상증자 등) → dart_disclosures
     # DART_API_KEY 미설정 시 내부에서 경고 후 skip — 스케줄러 크래시 없음.

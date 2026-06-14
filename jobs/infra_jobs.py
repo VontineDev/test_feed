@@ -227,6 +227,27 @@ async def dart_screened_sync_job(
         logger.error("[dart-screened] 잡 실패: %s", e)
 
 
+async def daily_ohlcv_warm_job() -> None:
+    """평일 18:30 KST — 전일 전 종목 OHLCV를 daily_ohlcv에 채우기.
+
+    KRX OpenAPI(get_daily_ohlcv_all) 사용. KRX_OPENAPI_KEY 미설정 시 경고 후 skip.
+    daily_flow_sync(18:00) 완료 후 30분 뒤 실행.
+    """
+    from core.db import get_dsn as _get_dsn
+    from jobs.ohlcv_warm import daily_ohlcv_warm_job as _impl
+    try:
+        dsn = _get_dsn()
+        if not dsn:
+            logger.warning("[ohlcv-warm] DSN 미설정 — 스킵")
+            return
+        import asyncio
+        loop = asyncio.get_running_loop()
+        n = await loop.run_in_executor(None, _impl, dsn)
+        logger.info("[ohlcv-warm] 일배치 완료: %d종목", n)
+    except Exception as e:
+        logger.error("[ohlcv-warm] 일배치 실패: %s", e)
+
+
 async def daily_flow_sync_job() -> None:
     logger.info("[flow-sync] krx_flow_sync --incremental 시작")
     try:
