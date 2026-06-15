@@ -170,4 +170,4 @@ python -c "import asyncio; from db import init_db; asyncio.run(init_db(None))"
 - [howto-watchlist.md](howto-watchlist.md) — Stage 1 이후 워치리스트 추적
 - [howto-screener.md](howto-screener.md) — 주봉 Ichimoku 스크리너 (교차 시스템)
 - [explanation-signal-pipeline.md](explanation-signal-pipeline.md) — 게이팅 동작 원리
-- [HowToBacktest.md](HowToBacktest.md) — Stage 백테스트 가이드
+- [howto-backtest.md](howto-backtest.md) — Stage 백테스트 가이드

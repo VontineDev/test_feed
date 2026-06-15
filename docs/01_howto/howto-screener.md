@@ -202,5 +202,5 @@ python jobs/screener_backfill.py --workers 8
 - [reference-env-vars.md](reference-env-vars.md) — `SCREENER_WORKERS`, `SCREENER_G_NAN_STRICT`
 - [howto-stage-classifier.md](howto-stage-classifier.md) — 일봉 분류기 (스크리너와 교차)
 - [explanation-signal-pipeline.md](explanation-signal-pipeline.md) — 게이팅 동작 원리
-- [HowToBacktest.md](HowToBacktest.md) — 스크리너 신호 백테스트
+- [howto-backtest.md](howto-backtest.md) — 스크리너 신호 백테스트
 - [name-resolution.md](name-resolution.md) — 종목명 해석 우선순위 및 신규 엔드포인트 체크리스트

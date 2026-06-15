@@ -19,7 +19,7 @@
 새로운 코드를 구현하거나 기능을 확장할 때 반드시 준수해야 하는 작업 절차서입니다.
 - `dart-pipeline.md`: DART 공시 데이터 파이프라인 구축 및 확장 절차
 - `Dashboard.md`: UI/대시보드 컴포넌트 추가 및 차트 시각화 구현 가이드
-- `HowToBacktest.md`: 백테스트 엔진 구동 및 신규 전략 테스트 방법
+- `howto-backtest.md`: 백테스트 엔진 구동 및 신규 전략 테스트 방법
 - `HTTPS-Setup.md`: API 서버 보안 및 HTTPS 인증서 설정 절차
 - `howto-dart-setup.md`: DART API 연동 및 환경 설정 가이드
 - `howto-kiwoom-paper-trade.md`: 키움증권 모의투자(Paper Trading) 연동 가이드

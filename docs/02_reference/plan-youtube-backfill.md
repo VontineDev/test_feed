@@ -24,62 +24,13 @@
 
 ## 분산 백필 설계 (권장)
 
-**핵심**: 810개 영상을 한 번에 모으지 않고, 실증된 안전 수준(8개/회)으로 큐에서 조금씩 꺼내 처리.
+**핵심**: 810개 영상을 한 번에 처리하지 않고, 실증된 안전 수준(8개/회)으로 큐에서 조금씩 꺼내 처리.
 
-### 구조
-1. **`youtube_backfill_queue` 테이블** — video_id, video_date, status(pending/done/no_transcript/blocked/error), attempts
-2. **`enqueue` 단계** — `fetch_video_list`(검색 API만 사용, 자막 요청 없음 → 차단 위험 없음)로
-   1~5월 영상 목록을 미리 큐에 적재. 1회만 실행.
-3. **`process` 단계** — 큐에서 `--batch-size`(기본 8)개를 video_date 오름차순으로 꺼내
-   자막 수집 → LLM 추출 → 저장. **1회 호출 = 1배치**, 끝나면 종료.
-   - IP 차단(`RequestBlocked`) 감지 시 해당 영상을 `pending`으로 유지하고 즉시 배치 중단
-     → 다음 스케줄 실행에서 자동 재시도 (수동 개입 불필요)
-4. **외부 트리거(Windows 작업 스케줄러)** — `process`를 하루 2~3회 호출
+- `youtube_backfill_queue` 테이블에 영상 목록을 미리 적재(`enqueue`)한 뒤 외부 스케줄러가 소량씩 반복 처리(`process`)한다.
+- `RequestBlocked` 감지 시 해당 영상을 `pending`으로 유지하고 배치를 즉시 중단 → 다음 실행에서 자동 재시도.
+- 처리량: 8개/회 × 3회/일 = 24개/일 → 810개 기준 약 34일 소요.
 
-### 실행 방법
-
-```bash
-# 1) 큐 적재 (1회만 실행 — 검색 API만 사용, 안전)
-python scripts/youtube_backfill_monthly.py --step enqueue
-
-# 2) Windows 작업 스케줄러에 배치 처리 등록 (하루 3회: 11시/14시/17시)
-schtasks /Create /TN "YTBackfillBatch" ^
-  /TR "<repo>\venv\Scripts\python.exe <repo>\scripts\youtube_backfill_monthly.py --step process --batch-size 8" ^
-  /SC DAILY /ST 11:00,14:00,17:00
-
-# 큐 진행 상황 확인 (status별 카운트)
-#   SELECT status, COUNT(*) FROM youtube_backfill_queue GROUP BY status;
-
-# 3) 큐가 모두 done/no_transcript/error가 되면 작업 삭제
-schtasks /Delete /TN "YTBackfillBatch" /F
-
-# 4) 마무리 — forward return 채우기 + attention_score 재집계
-python scripts/youtube_backfill_monthly.py --step fill-returns
-python scripts/youtube_backfill_monthly.py --step scores --from 2026-01 --to 2026-05
-```
-
-### 예상 소요
-
-| 배치 크기 | 1일 실행 횟수 | 1일 처리량 | 810개 완료까지 |
-|---------|------------|----------|--------------|
-| 8개 (= 일일 운영 잡 수준, 채택) | 3회 (11/14/17시) | 24개 | 약 34일 |
-
-차단되더라도 데이터 손실 없음 — `pending` 상태로 큐에 남아 다음 실행에서 자동 재처리.
-
----
-
-## 실행 순서 (단계 의존성)
-
-```
-1단계: enqueue → process 반복 (큐가 빌 때까지, 반드시 오래된 달부터 — video_date ASC로 자동 보장)
-  이유: attention_score rolling 5영업일 window가 이전 달 데이터 참조
-
-2단계: fill-returns (전체 기간 한 번에, 큐 소진 후)
-  yfinance 배치 다운로드 → 1d/5d/20d forward return 산출
-
-3단계: scores (전체 날짜 순회, 큐 소진 후)
-  날짜별 compute_attention_scores() 호출. 이미 집계된 날짜는 upsert(덮어쓰기)로 안전.
-```
+실행 명령어 및 단계별 상세는 [소급 수집 방법](howto-youtube-backfill.md) 참고.
 
 ---
 
