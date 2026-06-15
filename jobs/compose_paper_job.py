@@ -1,7 +1,9 @@
 """Compose 전략 주간 신호 -> paper_positions insert_pending.
 
 일요일 21:15 KST 실행 (weekly_chart_screener 완료 후).
-FUNNEL-1 top-10 / AND-1 전체를 pending 적재.
+  FUNNEL-1  top-10 : 수급 스크린 후 이치모쿠 돌파 진입
+  AND-1     top-5  : 이치모쿠 ∩ Stage2+ ∩ 수급 비매도
+  SCORE-1   top-5  : Stage·거래대금·수급 z-score 가중합 (2026-06-16 추가)
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ _FUNNEL_LOOKBACK_WEEKS = 8
 _STRATEGIES_CFG = [
     ("FUNNEL-1", "compose-funnel1", 10),
     ("AND-1",    "compose-and1",     5),
+    ("SCORE-1",  "compose-score1",   5),
 ]
 
 

@@ -119,7 +119,7 @@ async def test_entry_job_inserts_pending(monkeypatch):
 
     with (
         patch("jobs.compose_paper_job._get_this_week_signals_sync",
-              side_effect=[["005930.KS"], []]),  # FUNNEL-1 신호 1개, AND-1 없음
+              side_effect=[["005930.KS"], [], []]),  # FUNNEL-1 신호 1개, AND-1/SCORE-1 없음
         patch("jobs.compose_paper_job.insert_pending", insert_mock),
         patch("jobs.compose_paper_job.get_open_slot_count", slot_mock),
     ):
@@ -144,7 +144,7 @@ async def test_entry_job_skips_duplicate(monkeypatch):
 
     with (
         patch("jobs.compose_paper_job._get_this_week_signals_sync",
-              side_effect=[["005930.KS"], []]),
+              side_effect=[["005930.KS"], [], []]),
         patch("jobs.compose_paper_job.insert_pending", insert_mock),
         patch("jobs.compose_paper_job.get_open_slot_count", slot_mock),
     ):
@@ -165,7 +165,7 @@ async def test_entry_job_respects_max_slots(monkeypatch):
 
     with (
         patch("jobs.compose_paper_job._get_this_week_signals_sync",
-              side_effect=[["005930.KS", "000660.KS"], []]),
+              side_effect=[["005930.KS", "000660.KS"], [], []]),
         patch("jobs.compose_paper_job.insert_pending", insert_mock),
         patch("jobs.compose_paper_job.get_open_slot_count", slot_mock),
     ):

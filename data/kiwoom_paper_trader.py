@@ -39,6 +39,7 @@ MODEL_CONFIG: dict[str, dict] = {
     "ichimoku":        {"max_slots": 10, "position_krw": 10_000_000},
     "compose-funnel1": {"max_slots": 10, "position_krw": 10_000_000},
     "compose-and1":    {"max_slots":  5, "position_krw": 20_000_000},
+    "compose-score1":  {"max_slots":  5, "position_krw": 20_000_000},
 }
 
 # ── 유틸 ─────────────────────────────────────────────────────────────────────

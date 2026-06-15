@@ -51,8 +51,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-ALL_STRATEGIES   = ["AND-1", "AND-2", "AND-3", "AND-4", "SCORE-1", "FUNNEL-1"]
-TXAMT_STRATEGIES = ["AND-1", "AND-2", "AND-3", "AND-4"]  # 거래대금 vs 거래량 비교셋
+ALL_STRATEGIES   = ["AND-1", "AND-2", "AND-3", "AND-4", "AND-5", "AND-6", "SCORE-1", "FUNNEL-1"]
+TXAMT_STRATEGIES = ["AND-1", "AND-2", "AND-3", "AND-4"]   # 거래대금 vs 거래량 비교셋
+RELAX_STRATEGIES = ["AND-1", "AND-3", "AND-5", "AND-6"]   # stage2+ vs stage1+ 완화 비교셋
 
 
 def _pct(v, dp=1):
@@ -173,6 +174,8 @@ def main() -> None:
         targets = ALL_STRATEGIES
     elif args.strategy.upper() == "TXAMT":
         targets = TXAMT_STRATEGIES
+    elif args.strategy.upper() == "RELAX":
+        targets = RELAX_STRATEGIES
     elif args.strategy in ALL_STRATEGIES:
         targets = [args.strategy]
     else:

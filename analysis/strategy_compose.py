@@ -336,6 +336,18 @@ STRATEGIES: dict[str, StrategySpec] = {
         sources=["ichimoku", "stage", "flow"],
         flags=["ichimoku", "stage2plus", "flow_loose", "txamt_top30_cs"],
     ),
+    # AND-1 완화: stage_any(≥1) 포함 — 이른 진입, 신호 3.75x 증가 (8→30)
+    "AND-5": StrategySpec(
+        name="AND-5", kind="and",
+        sources=["ichimoku", "stage", "flow"],
+        flags=["ichimoku", "stage_any", "flow_loose"],
+    ),
+    # AND-3 완화: stage_any(≥1) + 거래대금 중앙값 이상 — 신호 4.4x 증가 (5→22)
+    "AND-6": StrategySpec(
+        name="AND-6", kind="and",
+        sources=["ichimoku", "stage", "flow"],
+        flags=["ichimoku", "stage_any", "flow_loose", "txamt_above_med_cs"],
+    ),
     # Stage·거래대금·수급 z-score 가중합 → 주간 top-20 [권장, 2026-06-16 승격]
     # 구 SCORE-1(vol_ratio 기반) 대비: 승률28d +12%p, 수익28d +9%p, 샤프28d +0.6
     "SCORE-1": StrategySpec(
