@@ -11,8 +11,8 @@
 - `DESIGN.md`: 핵심 디자인 패턴 및 컴포넌트 설계 방식
 - `TODOS.md`: 현재 개발 진행 상황 및 백로그 관리
 - `USER_MANUAL.md`: 프로그램 실행 및 조작법
-- `name-resolution.md`: 코드 내 네이밍 규칙 및 도메인 용어 사전
-- `차트분석가이드.md`: 기술적 지표 및 차트 분석 로직 기준
+- `name-resolution.md`: 종목명 DB 조회 우선순위 및 SQL COALESCE 패턴 표준 (ticker_names → krx_listings → chart_signals → youtube_mention_raw 폴백 체인)
+- `차트분석가이드.md`: 차트 분석 개념 교육 자료 — 캔들·이평선·구름대 직관 가이드 (코드 스크리닝 조건이 아닌 배경 지식용)
 - `stage-screening-framework.md`: 퀀트+기술+수급 3단계(랠리초입/재매집/과열) 스크리닝 조건식 및 매수매도 타이밍 전략
 
 ## 01_howto (Development Guides)

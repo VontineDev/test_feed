@@ -1,4 +1,4 @@
-> 최종 검증 버전: **v0.9.9.2** | 운영 환경: Windows 11 + Python 3.11
+> 최종 검증 버전: **v1.0.1.0** | 운영 환경: Windows 11 + Python 3.11
 
 # 한국 주식 퀀트 신호 시스템 — 사용 설명서
 
@@ -193,9 +193,10 @@ PC와 모바일 공통으로 동일한 탭 이름·순서를 사용합니다.
 | 탭 | 설명 |
 |------|------|
 | **히트맵** | 오늘 Stage 1/2/3 분류 결과를 거래대금 기준 타일 히트맵으로 표시 (5분 캐시) |
-| **종목 분석** | 추세 단계(Stage 분류 결과)·강세 후보 발굴(차트 스크리닝) 2개 섹션 (접기/펼치기 + ⓘ 설명 팝업 지원) |
+| **종목 분석** | 추세 단계(Stage 분류)·강세 후보 발굴(차트 스크리닝)·유튜브 내러티브 통합 탭. Report 서브탭(개요/내러티브/DART) 포함 |
 | **Top** | 당일 거래대금 상위 20종목 실시간 조회 (5분 자동 갱신) |
 | **모의투자** | 모의투자 오픈·대기 포지션 + 스케줄러 잡 수동 트리거 |
+| **포트폴리오** | 실거래 포트폴리오 현황 — admin 계정 전용 |
 | **시그널** | 뉴스 매매 신호 실시간 스트림 (모바일 전용 탭) |
 
 > **모바일**: 768px 이하에서 화면 하단에 탭바가 표시됩니다. 탭 전환 시 해당 컴포넌트만 마운트되어 데이터를 절약합니다.
@@ -411,11 +412,15 @@ reuters: 23건 / yfinance_news: 15건 / yonhap: 8건
 
 ```
 /backtest <mode> <start> <end> [market] [--max N] [--tx-cost F] [--tp1 F] [--tp1-ratio F] [--trail F] [--stop F]
+
+# compose 모드 (Tier-1 조합전략 — precompute DB 필요)
+/backtest compose FUNNEL-1 2025-01-01 2026-06-14
+/backtest compose ALL      2025-01-01 2026-06-14
 ```
 
 | 파라미터 | 설명 | 기본값 |
 |---------|------|--------|
-| `mode` | `ichimoku` \| `stage` \| `stage2` \| `cross` | 필수 |
+| `mode` | `ichimoku` \| `stage` \| `stage2` \| `cross` \| `compose` | 필수 |
 | `start` | 시작일 (YYYY-MM-DD) | 필수 |
 | `end` | 종료일 (YYYY-MM-DD) | 필수 |
 | `market` | `KOSPI` \| `KOSDAQ` \| `ALL` | ALL |
@@ -453,6 +458,19 @@ reuters: 23건 / yfinance_news: 15건 / yonhap: 8건
 | `cross` | Ichimoku × Stage 동시 통과 — 신호 적지만 승률 최고 | 15% | 10% | 10% | 54.3% | 46.6% |
 | `stage2` | Stage 2 재매집 구간 진입 전략 | — | — | — | 미검증 | — |
 | `ichimoku` | 주봉 Ichimoku 7조건 단독 | 25% | 10% | 10% | **55.8%** | — |
+| `compose` | Tier-1 조합전략 (AND-1/FUNNEL-1 등) — DSN 필요 | 전략별 | — | — | 전략별 상이 | — |
+
+**compose 전략 (`/backtest compose <strategy> <start> <end>`):**
+
+| strategy | 설명 |
+|----------|------|
+| `AND-1` | Stage1 + Ichimoku + 수급 AND 게이트 |
+| `AND-2` | AND-1 + DART 지표 추가 조건 |
+| `SCORE-1` | Composite Score 상위 종목 |
+| `FUNNEL-1` | AND 게이트 → Score 정렬 (주력 전략) |
+| `ALL` | 4전략 순차 실행 후 샤프 비교표 전송 |
+
+자세한 내용은 [howto-backtest.md](../../01_howto/howto-backtest.md) 참고.
 
 > 파라미터는 `backtest_engine.OPTIMAL_EXIT_PARAMS` / `OPTIMAL_EXIT_PARAMS_KOSDAQ` / `OPTIMAL_EXIT_PARAMS_CROSS` / `OPTIMAL_EXIT_PARAMS_ICHIMOKU`로 코드에서 import 가능합니다.
 
