@@ -18,6 +18,12 @@ interface NarrativeItem {
   cloud_top:       number | null
 }
 
+interface AsOf {
+  stage:     string | null
+  screener:  string | null
+  narrative: string | null
+}
+
 interface NarrativeData {
   total:        number
   stage1:       number
@@ -26,6 +32,7 @@ interface NarrativeData {
   narrative_q:  number
   triple_combo: number
   items:        NarrativeItem[]
+  as_of:        AsOf | null
 }
 
 const ATTENTION_META: Record<number, { label: string; color: string; bg: string }> = {
@@ -119,7 +126,7 @@ type FilterKey = 'all' | 'triple' | 'stage12' | 'screener' | 'narrative'
 interface Props {
   onSelect?:       (ticker: string, name: string) => void
   selectedTicker?: string | null
-  onLoad?:         (at: Date) => void
+  onLoad?:         (at: Date, asOf: AsOf | null) => void
   refreshKey?:     number
   start?:          string   // YYYY-MM-DD, 없으면 최신 스냅샷
   end?:            string
@@ -140,7 +147,7 @@ export default function Narrative({ onSelect, selectedTicker, onLoad, refreshKey
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       setData(d.data ?? null)
-      onLoad?.(new Date())
+      onLoad?.(new Date(), d.data?.as_of ?? null)
     } catch (e) {
       setError(String(e))
     } finally {

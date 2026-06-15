@@ -1321,13 +1321,26 @@ _UNIFIED_TAIL = """
         FROM   ticker_names
     ),
     kl AS (
-        SELECT SPLIT_PART(yfinance_symbol, '.', 1) AS t, name_ko
+        SELECT SPLIT_PART(yfinance_symbol, '.', 1) AS t, name_ko, sector
         FROM   krx_listings
     ),
     mr AS (
         SELECT DISTINCT ON (ticker) ticker AS t, stock_name_raw
         FROM   youtube_mention_raw
         ORDER  BY ticker, created_at DESC
+    ),
+    kind AS (
+        SELECT DISTINCT ON (SPLIT_PART(ticker, '.', 1))
+               SPLIT_PART(ticker, '.', 1) AS t, sector
+        FROM   chart_signals
+        WHERE  sector IS NOT NULL AND sector != ''
+        ORDER  BY SPLIT_PART(ticker, '.', 1), screened_at DESC
+    ),
+    ohlcv AS (
+        SELECT SPLIT_PART(symbol, '.', 1) AS t, close AS ohlcv_close
+        FROM   daily_ohlcv
+        WHERE  market = 'KR'
+          AND  date = (SELECT MAX(date) FROM daily_ohlcv WHERE market = 'KR')
     ),
     all_tickers AS (
         SELECT t FROM sc
@@ -1340,14 +1353,18 @@ _UNIFIED_TAIL = """
         yt.attention_score,
         yt.attention_q,
         sc.stage, sc.s1_high, sc.s1_volume, sc.peakout_flag,
-        cs.is_enhanced, cs.has_gapjum, cs.sector, cs.close, cs.ma_20w, cs.cloud_top
+        cs.is_enhanced, cs.has_gapjum, COALESCE(cs.sector, kind.sector, kl.sector) AS sector,
+        COALESCE(cs.close, ohlcv.ohlcv_close) AS close,
+        cs.ma_20w, cs.cloud_top
     FROM   all_tickers at
-    LEFT JOIN sc ON sc.t = at.t
-    LEFT JOIN cs ON cs.t = at.t
-    LEFT JOIN yt ON yt.t = at.t
-    LEFT JOIN tn ON tn.t = at.t
-    LEFT JOIN kl ON kl.t = at.t
-    LEFT JOIN mr ON mr.t = at.t
+    LEFT JOIN sc    ON sc.t    = at.t
+    LEFT JOIN cs    ON cs.t    = at.t
+    LEFT JOIN yt    ON yt.t    = at.t
+    LEFT JOIN tn    ON tn.t    = at.t
+    LEFT JOIN kl    ON kl.t    = at.t
+    LEFT JOIN mr    ON mr.t    = at.t
+    LEFT JOIN kind  ON kind.t  = at.t
+    LEFT JOIN ohlcv ON ohlcv.t = at.t
     ORDER BY
         yt.attention_score DESC NULLS LAST,
         sc.stage           ASC  NULLS LAST,
@@ -1410,6 +1427,23 @@ _UNIFIED_HISTORY_SQL = """
     )
 """ + _UNIFIED_TAIL
 
+_AS_OF_SQL = """
+    SELECT
+        (SELECT MAX(classified_date) FROM stage_classifications)   AS stage_date,
+        (SELECT MAX(screened_at)::date FROM chart_signals)         AS screener_date,
+        (SELECT MAX(window_end)      FROM youtube_attention_scores) AS narrative_date
+"""
+
+_AS_OF_HISTORY_SQL = """
+    SELECT
+        (SELECT MAX(classified_date) FROM stage_classifications
+         WHERE  classified_date BETWEEN $1 AND $2)                 AS stage_date,
+        (SELECT MAX(screened_at)::date FROM chart_signals
+         WHERE  screened_at::date BETWEEN $1 AND $2)               AS screener_date,
+        (SELECT MAX(window_end) FROM youtube_attention_scores
+         WHERE  window_end <= $2)                                   AS narrative_date
+"""
+
 @app.get("/api/report/unified")
 async def get_unified_screener(
     start: date | None = None,
@@ -1419,8 +1453,16 @@ async def get_unified_screener(
     async with pool.acquire() as conn:
         if start is None or end is None:
             rows = await conn.fetch(_UNIFIED_TODAY_SQL)
+            as_of_row = await conn.fetchrow(_AS_OF_SQL)
         else:
             rows = await conn.fetch(_UNIFIED_HISTORY_SQL, start, end)
+            as_of_row = await conn.fetchrow(_AS_OF_HISTORY_SQL, start, end)
+
+    as_of = {
+        "stage":     str(as_of_row["stage_date"])[:10]     if as_of_row["stage_date"]     else None,
+        "screener":  str(as_of_row["screener_date"])[:10]  if as_of_row["screener_date"]  else None,
+        "narrative": str(as_of_row["narrative_date"])[:10] if as_of_row["narrative_date"] else None,
+    }
 
     items = []
     for r in rows:
@@ -1461,6 +1503,7 @@ async def get_unified_screener(
             "narrative_q":  narrative_q,
             "triple_combo": triple_combo,
             "items":        items,
+            "as_of":        as_of,
         }
     }
 

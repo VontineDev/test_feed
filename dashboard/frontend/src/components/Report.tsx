@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { tokens } from '../tokens'
 import DateRangeBar, { DateRange, computeRange } from './DateRangeBar'
 import StageHistoryPopup from './StageHistoryPopup'
@@ -9,12 +9,18 @@ export default function Report() {
 
   // Narrative 로드 상태 — 헤더에서 통합 관리
   const [fetchedAt, setFetchedAt]         = useState<Date | null>(null)
+  const [asOf, setAsOf]                   = useState<{ stage: string | null; screener: string | null; narrative: string | null } | null>(null)
   const [narrativeRefreshKey, setRefreshKey] = useState(0)
 
   // 우측 패널 선택 상태
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null)
   const [selectedName, setSelectedName]     = useState<string>('')
   const splitRightRef = useRef<HTMLDivElement>(null)
+
+  const handleLoad = useCallback((at: Date, ao: typeof asOf) => {
+    setFetchedAt(at)
+    setAsOf(ao)
+  }, [])
 
   // 프리셋/범위 변경 시 패널 닫기
   useEffect(() => { setSelectedTicker(null); setSelectedName('') }, [range.preset, range.start, range.end])
@@ -47,7 +53,15 @@ export default function Report() {
       <div style={s.hdr}>
         <span style={s.hdrTitle}>종목 분석</span>
         {fetchedAt && (
-          <span style={s.hdrTime}>{fetchedAt.toLocaleTimeString('ko-KR')} 기준</span>
+          <span style={s.hdrTime} title={fetchedAt ? `조회: ${fetchedAt.toLocaleTimeString('ko-KR')}` : undefined}>
+            데이터 기준: {asOf?.stage ?? asOf?.screener ?? asOf?.narrative ?? '—'}
+            {asOf && (
+              <span style={{ marginLeft: 4, color: 'inherit', opacity: 0.6 }}
+                title={`스테이지: ${asOf.stage ?? '—'} / 스크리너: ${asOf.screener ?? '—'} / 내러티브: ${asOf.narrative ?? '—'}`}>
+                (?)
+              </span>
+            )}
+          </span>
         )}
         <button style={s.refreshBtn} onClick={() => setRefreshKey(k => k + 1)}>
           새로고침
@@ -67,7 +81,7 @@ export default function Report() {
           <Narrative
             onSelect={handleSelect}
             selectedTicker={selectedTicker}
-            onLoad={setFetchedAt}
+            onLoad={handleLoad}
             refreshKey={narrativeRefreshKey}
             {...dateProps}
           />
