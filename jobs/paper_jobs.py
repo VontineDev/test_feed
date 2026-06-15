@@ -76,6 +76,7 @@ async def paper_exit_checker_job(db_pool, paper_trader) -> None:
     _all_tickers = list({p["ticker"] for p in _open_positions})
     _prices: dict[str, float] = {}
     for _tk in _all_tickers:
+        await asyncio.sleep(0.5)
         _px = await _loop.run_in_executor(None, paper_trader.get_current_price, _tk)
         if _px:
             _prices[_tk] = float(_px)
@@ -318,7 +319,8 @@ async def paper_open_entry_job(db_pool, paper_trader) -> None:
         _model  = _pos["model"]
         _pos_id = _pos["id"]
 
-        # 시가 조회 (ka10001 open_pric)
+        # 시가 조회 (ka10001 open_pric) — 종목 간 0.5초 딜레이로 mock API rate limit 방지
+        await asyncio.sleep(0.5)
         _open_px = await _loop.run_in_executor(None, paper_trader.get_open_price, _ticker)
         if not _open_px:
             _open_px = await _loop.run_in_executor(None, paper_trader.get_current_price, _ticker)

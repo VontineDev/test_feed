@@ -27,16 +27,22 @@ paper_exit_checker → _fetch_prices_yf(tickers)        ← 가격 (yfinance)
 
 ---
 
-## 3-잡 파이프라인
+## 4-잡 파이프라인
 
-모의투자는 세 개의 독립된 APScheduler 잡으로 구성된다. 잡 간에 공유 상태는 없고, DB(`paper_positions` 테이블)가 유일한 상태 저장소다.
+모의투자는 네 개의 독립된 APScheduler 잡으로 구성된다. 잡 간에 공유 상태는 없고, DB(`paper_positions` 테이블)가 유일한 상태 저장소다.
 
 ```
+매주 일요일
+
+21:15 KST  compose_paper_entry_job
+           (FUNNEL-1/AND-1 주간 신호 추출
+            → pending 삽입, Kiwoom 불필요)
+
 매일 평일
 
 16:30 KST  daily_stage_classifier ─────────┐
                                             │ stage_classifications 테이블
-16:10 KST  paper_exit_checker_job  ←── DB  │
+15:20 KST  paper_exit_checker_job  ←── DB  │
            (exit 조건 판정 → 청산 주문)         │
                                             │
 16:40 KST  paper_eod_sampler_job   ────────┘
@@ -67,10 +73,22 @@ paper_exit_checker → _fetch_prices_yf(tickers)        ← 가격 (yfinance)
 4. 모델별 남은 슬롯만큼 랜덤 샘플링 → `pending` 삽입
 5. 랜덤 시드는 `YYYYMMDDxxx(model hash)`로 고정 → 같은 날 재실행 시 동일 결과
 
+### compose_paper_entry_job (일요일 21:15 KST)
+
+1. `strategy_compose.load_signal_frame()` + `STRATEGIES["FUNNEL-1"].run()` / `STRATEGIES["AND-1"].run()`으로 이번 주(ISO) 신호 추출 (8주 lookback)
+2. FUNNEL-1 상위 10개, AND-1 전체를 `compose-funnel1` / `compose-and1` 모델로 `pending` 삽입
+3. `entry_theory=0.0` (이론 진입가 없음 — `paper_open_entry_job`이 실제 시가로 채움)
+4. 같은 주에 이미 `pending/open`인 종목은 중복 스킵
+5. Kiwoom 계정 불필요 — DB 접근만으로 동작
+
+> **ISO 주 경계**: 일요일은 ISO 8601상 직전 주의 마지막 날. `cur_week`로 조회 시 신호가 없으면 `prev_week`로 자동 fallback.
+
+> **slippage_pct**: compose 포지션은 `entry_theory=0.0`이므로 `NULLIF(0,0) = NULL` → slippage_pct는 항상 NULL. 설계상 한계.
+
 ### paper_open_entry_job (09:05 KST)
 
 1. 당일 또는 최근 4일 이내 `pending` 포지션 조회 (주말 대응)
-2. 종목별 당일 시가 조회 (`get_open_price` → ka10001, 단 **실 API** 아닌 mock API)
+2. 종목별 당일 시가 조회 (`get_open_price` → ka10001, 단 **실 API** 아닌 mock API) — **종목 간 0.5초 딜레이로 rate limit 방지**
 3. 시가로 Kiwoom mock API 매수주문 → DB `open` 업데이트, 슬리피지 기록
 
 > **주의**: `get_open_price`는 mockapi.kiwoom.com의 ka10001을 호출한다. 시가는 장 시작 직후에는 조회 가능할 수 있지만, 장 마감 후에는 응답이 없다. 이 때문에 `get_current_price` 폴백이 있으나, 두 함수 모두 mock 서버에서 지원이 불안정하다. 현재는 장 시작 직후(09:05) 시가 조회는 작동하는 것으로 확인되어 있다.
@@ -153,6 +171,10 @@ exit 파라미터(`tp1_pct`, `trail_pct`, `hard_stop_pct` 등)는 `analysis/back
 | kosdaq | 25% | 50% | 15% | 10% | val_sharpe=5.48, win=46.7% |
 | cross | 15% | 50% | 10% | 10% | val_sharpe=5.11, win=54.3% |
 | ichimoku | 25% | 70% | 10% | 10% | val_sharpe=7.50, win=55.8% |
+| compose-funnel1 | 15% | 50% | 10% | 10% | backtest sharpe=0.74, win=67% |
+| compose-and1 | 15% | 50% | 10% | 10% | backtest sharpe=1.75, win=67% |
+
+compose 모델의 exit 파라미터는 backtest 기본값을 사용한다. `OPTIMAL_EXIT_PARAMS`에서 오지 않고 `compose_paper_entry_job`에서 `insert_pending()` 호출 시 직접 전달된다. 4주 실전 결과 후 최적화 예정.
 
 KOSDAQ의 trail이 15%인 이유는 KOSPI(10%)보다 변동성이 크기 때문이다. Ichimoku의 tp1_ratio가 70%인 이유는 주봉 전략 특성상 조기 익절 비중을 높이는 것이 더 유리했기 때문이다. Cross의 tp1_pct가 15%인 이유는 과적합 없는 승률 극대화를 위해서다 (0.25 대비 overfit_gap 안전).
 
@@ -166,10 +188,12 @@ KOSDAQ의 trail이 15%인 이유는 KOSPI(10%)보다 변동성이 크기 때문�
 
 ```python
 MODEL_CONFIG = {
-    "stage":    {"max_slots": 10, "position_krw": 10_000_000},
-    "kosdaq":   {"max_slots": 10, "position_krw": 10_000_000},
-    "cross":    {"max_slots":  5, "position_krw": 20_000_000},
-    "ichimoku": {"max_slots": 10, "position_krw": 10_000_000},
+    "stage":           {"max_slots": 10, "position_krw": 10_000_000},
+    "kosdaq":          {"max_slots": 10, "position_krw": 10_000_000},
+    "cross":           {"max_slots":  5, "position_krw": 20_000_000},
+    "ichimoku":        {"max_slots": 10, "position_krw": 10_000_000},
+    "compose-funnel1": {"max_slots": 10, "position_krw": 10_000_000},
+    "compose-and1":    {"max_slots":  5, "position_krw": 20_000_000},
 }
 ```
 

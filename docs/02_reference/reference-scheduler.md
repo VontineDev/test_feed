@@ -84,13 +84,16 @@ python run_scheduler.py --no-summary  # 요약 없이 수집만
 | `daily_ohlcv_warm` | 평일 18:30 | KRX OpenAPI 전일 전 종목 OHLCV → daily_ohlcv (KRX_OPENAPI_KEY 필수) |
 | `daily_market_snap` | 평일 16:10 | 당일 거래금액 Top 100 스냅샷 |
 
-### 모의투자 잡 (KIWOOM_MOCK_APPKEY 필수)
+### 모의투자 잡
 
-| 잡 ID | 실행 시각 (KST) | 내용 |
-|-------|-----------------|------|
-| `paper_open_entry` | 평일 09:05 | T+1 진입 주문 실행 |
-| `paper_exit_checker` | 평일 16:10 | 익절/손절 조건 확인 |
-| `paper_eod_sampler` | 평일 16:40 | 일별 포지션 스냅샷 저장 |
+| 잡 ID | 실행 시각 (KST) | 필요 환경변수 | 내용 |
+|-------|-----------------|--------------|------|
+| `compose_paper_entry` | 일요일 21:15 | DB만 필요 | FUNNEL-1/AND-1 주간 신호 → pending 적재 |
+| `paper_open_entry` | 평일 09:05 | `KIWOOM_MOCK_APPKEY` | T+1 진입 주문 실행 |
+| `paper_exit_checker` | 평일 15:20 | `KIWOOM_MOCK_APPKEY` | 익절/손절 조건 확인 |
+| `paper_eod_sampler` | 평일 16:40 | `KIWOOM_MOCK_APPKEY` | 일별 포지션 스냅샷 저장 |
+
+`compose_paper_entry`는 Kiwoom 계정 없이 DB만으로 동작한다. `paper_open_entry`가 다음 영업일 09:05에 실제 매수주문을 실행한다.
 
 ---
 
@@ -165,6 +168,7 @@ scheduler.add_job(
 | `YOUTUBE_API_KEY` / `GEMINI_API_KEY` | youtube_narrative_sync, youtube_attention_score, youtube_forward_return |
 | `KIWOOM_MOCK_APPKEY` | paper_open_entry, paper_exit_checker, paper_eod_sampler |
 | `KRX_OPENAPI_KEY` | daily_ohlcv_warm (경고 후 0 반환, 스케줄러 크래시 없음) |
+| (DB 연결만 필요) | compose_paper_entry — Kiwoom 계정 없이도 동작 |
 
 ---
 

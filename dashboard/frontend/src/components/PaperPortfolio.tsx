@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { tokens, pctTextColor } from '../tokens'
 import Positions from './Positions'
-import Scheduler from './Scheduler'
 import TickerHistory from './TickerHistory'
 
 interface PaperData {
@@ -210,10 +209,6 @@ export default function PaperPortfolio() {
         </>
       )}
 
-      {/* 스케줄러 */}
-      <div style={{ flexShrink: 0 }}>
-        <Scheduler />
-      </div>
     </div>
   )
 }
