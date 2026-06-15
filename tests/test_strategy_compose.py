@@ -94,6 +94,60 @@ class TestDeriveFlags:
         out = derive_flags(df)
         assert out["ichimoku"].tolist() == [True, False]
 
+    def test_txamt_above_med_cs_cross_sectional(self):
+        # 주 내 4종목: txamt = volume_w × close_chart
+        # A: 100주 × 1000원 = 10만, B: 200주 × 2000원 = 40만 (최고)
+        # C: 50주 × 500원 = 2.5만 (최저), D: 100주 × 1500원 = 15만
+        # 중앙값 = (10만 + 15만)/2 = 12.5만 → A,D 이상
+        df = pd.DataFrame({
+            "ticker":      ["A",    "B",    "C",   "D"],
+            "week":        ["2026-W01"] * 4,
+            "volume_w":    [100,    200,    50,    100],
+            "close_chart": [1000.0, 2000.0, 500.0, 1500.0],
+        })
+        out = derive_flags(df)
+        assert "txamt_above_med_cs" in out.columns
+        result = dict(zip(out["ticker"], out["txamt_above_med_cs"]))
+        # txamt: A=10만, B=40만, C=2.5만, D=15만 → 중앙값=12.5만
+        assert bool(result["B"]) is True   # 40만 >= 12.5만
+        assert bool(result["D"]) is True   # 15만 >= 12.5만
+        assert bool(result["A"]) is False  # 10만 < 12.5만
+        assert bool(result["C"]) is False  # 2.5만 < 12.5만
+
+    def test_txamt_top30_cs_is_stricter(self):
+        # 10종목, 상위 30% = 상위 3개
+        tickers = [f"T{i}" for i in range(10)]
+        # txamt = i×1000 (i가 클수록 큰 거래대금)
+        df = pd.DataFrame({
+            "ticker":      tickers,
+            "week":        ["2026-W01"] * 10,
+            "volume_w":    list(range(1, 11)),
+            "close_chart": [1000.0] * 10,
+        })
+        out = derive_flags(df)
+        assert "txamt_top30_cs" in out.columns
+        # 70th percentile = 10 × 0.7 = 7 → txamt >= 7000 인 종목 (T6,T7,T8,T9)
+        top30 = [t for t, v in zip(out["ticker"], out["txamt_top30_cs"]) if bool(v)]
+        assert len(top30) >= 3
+        assert "T9" in top30  # 최고 거래대금은 반드시 포함
+
+    def test_txamt_flags_per_week_independent(self):
+        # 두 주의 중앙값이 독립적으로 계산되어야 함
+        df = pd.DataFrame({
+            "ticker":      ["A", "B", "A", "B"],
+            "week":        ["2026-W01", "2026-W01", "2026-W02", "2026-W02"],
+            "volume_w":    [10,  100,   100,  10],
+            "close_chart": [1000.0] * 4,
+        })
+        out = derive_flags(df)
+        r = dict(zip(zip(out["ticker"], out["week"]), out["txamt_above_med_cs"]))
+        # W01: A=1만(낮), B=10만(높) → B만 True
+        assert bool(r[("A", "2026-W01")]) is False
+        assert bool(r[("B", "2026-W01")]) is True
+        # W02: A=10만(높), B=1만(낮) → A만 True
+        assert bool(r[("A", "2026-W02")]) is True
+        assert bool(r[("B", "2026-W02")]) is False
+
 
 # ── and_gate ─────────────────────────────────────────────────
 class TestAndGate:
@@ -278,12 +332,16 @@ class TestFunnel:
 # ── 전략 로스터 ───────────────────────────────────────────────
 class TestStrategyRoster:
     def test_tier1_strategies_present(self):
-        assert set(STRATEGIES) == {"AND-1", "AND-2", "SCORE-1", "FUNNEL-1"}
+        assert {"AND-1", "AND-2", "SCORE-1", "FUNNEL-1"}.issubset(set(STRATEGIES))
+
+    def test_txamt_strategies_present(self):
+        assert {"AND-3", "AND-4"}.issubset(set(STRATEGIES))
+        assert "SCORE-2" not in STRATEGIES, "SCORE-2는 SCORE-1에 흡수됨"
 
     def test_and1_runs_via_spec(self):
         df = pd.DataFrame({
             "ticker": ["A", "B"], "week": ["2026-W01"] * 2,
-            "ichimoku": [True, True], "stage2plus": [True, False], "flow_pos": [True, True],
+            "ichimoku": [True, True], "stage2plus": [True, False], "flow_loose": [True, True],
         })
         out = STRATEGIES["AND-1"].run(df)
         assert out["ticker"].tolist() == ["A"]

@@ -53,8 +53,9 @@ logger = logging.getLogger(__name__)
 KEY_COLS = ["ticker", "week"]
 
 # 기본 임계값
-VOL_SPIKE_X = 2.0       # 거래량 급증: 주간 거래량 / 20주 평균 ≥ 2배
-NARRATIVE_Q = 0.90      # 내러티브 상위분위 컷 (주간 attention_score 상위 10%)
+VOL_SPIKE_X   = 2.0     # 거래량 급증: 주간 거래량 / 20주 평균 ≥ 2배
+TXAMT_SPIKE_X = 2.0     # 거래대금 급증: 주간 거래대금 / 20주 평균 ≥ 2배
+NARRATIVE_Q   = 0.90    # 내러티브 상위분위 컷 (주간 attention_score 상위 10%)
 
 
 # ── ISO 주차 유틸 ─────────────────────────────────────────────
@@ -125,6 +126,17 @@ def derive_flags(
     if "vol_ratio" in df.columns:
         df["vol_spike"] = pd.to_numeric(df["vol_ratio"], errors="coerce").fillna(0) >= vol_spike_x
 
+    if "txamt_ratio" in df.columns:
+        df["txamt_spike"] = (
+            pd.to_numeric(df["txamt_ratio"], errors="coerce").fillna(0) >= TXAMT_SPIKE_X
+        )
+        txamt_weekly_med = df.groupby("week")["txamt_ratio"].transform(
+            lambda x: pd.to_numeric(x, errors="coerce").median()
+        )
+        df["txamt_above_med"] = (
+            pd.to_numeric(df["txamt_ratio"], errors="coerce").fillna(0) >= txamt_weekly_med
+        )
+
     if "volume_w" in df.columns:
         vw = pd.to_numeric(df["volume_w"], errors="coerce")
         # 주별 이치모쿠 통과 종목 중 거래량 중앙값 이상 (cross-sectional, 항상 계산 가능)
@@ -132,6 +144,21 @@ def derive_flags(
             lambda x: pd.to_numeric(x, errors="coerce").median()
         )
         df["vol_above_med"] = vw >= weekly_med
+
+    # 거래대금 기반 플래그 (chart_signals.close × volume_w — daily_ohlcv 불필요)
+    if "volume_w" in df.columns and "close_chart" in df.columns:
+        vw2 = pd.to_numeric(df["volume_w"], errors="coerce")
+        cl  = pd.to_numeric(df["close_chart"], errors="coerce")
+        txamt_cs = vw2 * cl                    # 주봉 거래대금 (원)
+        txamt_cs_med = txamt_cs.groupby(df["week"]).transform(
+            lambda x: pd.to_numeric(x, errors="coerce").median()
+        )
+        df["txamt_above_med_cs"] = txamt_cs.fillna(0) >= txamt_cs_med
+        # 상위 30% (더 엄격)
+        txamt_cs_q70 = txamt_cs.groupby(df["week"]).transform(
+            lambda x: pd.to_numeric(x, errors="coerce").quantile(0.70)
+        )
+        df["txamt_top30_cs"] = txamt_cs.fillna(0) >= txamt_cs_q70
 
     if "attention_score" in df.columns:
         # 주간 분위: 각 주 내에서 attention_score의 분위수 ≥ narrative_q
@@ -274,25 +301,47 @@ class StrategySpec:
         raise ValueError(f"알 수 없는 전략 kind: {self.kind!r}")
 
 
-# Tier-1 (차트·Stage·수급) — 오늘 백필 후 바로 실행 가능한 4전략
+# ── 전략 로스터 ────────────────────────────────────────────────
+# 각 전략은 (ticker, week) 신호를 생성 → backtest_engine compose 경로로 투입.
+#
+# 이름 규칙:
+#   AND-*    AND 교집합 (조건 모두 충족 시 신호)
+#   SCORE-*  z-score 가중합 → 주간 top-N (연속 점수 기반)
+#   FUNNEL-* 순차 깔때기 (스크린 → 트리거 순서 요구)
+#
+# 거래대금 플래그 출처: chart_signals.close × volume_w (ichimoku 소스에서 파생)
+#   — daily_ohlcv 불필요, 수급(daily_flow) 시작일(2025-01-02)까지 소급 가능.
 STRATEGIES: dict[str, StrategySpec] = {
-    # 이치모쿠 돌파 ∩ Stage2+ ∩ 수급 비매도 (flow_loose = 외국인·기관 동시 순매도 아님)
+    # 이치모쿠 돌파 ∩ Stage2+ ∩ 수급 비매도 (기준선)
     "AND-1": StrategySpec(
         name="AND-1", kind="and",
         sources=["ichimoku", "stage", "flow"],
         flags=["ichimoku", "stage2plus", "flow_loose"],
     ),
-    # AND-1 ∩ 거래량 주내 중앙값 이상 (chart_signals.volume_w 기반, daily_ohlcv 불필요)
+    # AND-1 ∩ 거래량 주내 중앙값 이상 (chart_signals.volume_w 기반)
     "AND-2": StrategySpec(
         name="AND-2", kind="and",
         sources=["ichimoku", "stage", "flow"],
         flags=["ichimoku", "stage2plus", "flow_loose", "vol_above_med"],
     ),
-    # 이치모쿠·Stage·거래량·수급 z-score 가중합 → 주간 top-N
+    # AND-1 ∩ 거래대금 유니버스 중앙값 이상 (close×volume_w; 소형주 필터)
+    "AND-3": StrategySpec(
+        name="AND-3", kind="and",
+        sources=["ichimoku", "stage", "flow"],
+        flags=["ichimoku", "stage2plus", "flow_loose", "txamt_above_med_cs"],
+    ),
+    # AND-1 ∩ 거래대금 유니버스 상위 30% (AND-3보다 엄격)
+    "AND-4": StrategySpec(
+        name="AND-4", kind="and",
+        sources=["ichimoku", "stage", "flow"],
+        flags=["ichimoku", "stage2plus", "flow_loose", "txamt_top30_cs"],
+    ),
+    # Stage·거래대금·수급 z-score 가중합 → 주간 top-20 [권장, 2026-06-16 승격]
+    # 구 SCORE-1(vol_ratio 기반) 대비: 승률28d +12%p, 수익28d +9%p, 샤프28d +0.6
     "SCORE-1": StrategySpec(
         name="SCORE-1", kind="score",
-        sources=["ichimoku", "stage", "flow", "volume"],
-        weights={"stage": 1.0, "vol_ratio": 1.0, "foreign_net_w": 1.0},
+        sources=["ichimoku", "stage", "flow"],
+        weights={"stage": 1.0, "txamt_above_med_cs": 1.0, "foreign_net_w": 1.0},
         top_n=20,
     ),
     # 수급 스크린 → 이후 4주 내 이치모쿠 돌파 진입
@@ -354,10 +403,10 @@ def _fetch_df(conn, sql: str, params: tuple, columns: list[str]) -> pd.DataFrame
 def _load_ichimoku(conn, start: date, end: date) -> pd.DataFrame:
     df = _fetch_df(
         conn,
-        "SELECT ticker, week_of, is_enhanced, volume_w "
+        "SELECT ticker, week_of, is_enhanced, volume_w, close "
         "FROM chart_signals WHERE week_of BETWEEN %s AND %s",
         (iso_week(start), iso_week(end)),
-        ["ticker", "week", "is_enhanced", "volume_w"],
+        ["ticker", "week", "is_enhanced", "volume_w", "close_chart"],
     )
     if df.empty:
         return df
@@ -398,42 +447,48 @@ def _load_flow(conn, start: date, end: date) -> pd.DataFrame:
 
 
 def _load_volume(conn, start: date, end: date) -> pd.DataFrame:
-    """daily_ohlcv 주간 거래량 + 20주 이동평균 → vol_ratio.
+    """daily_ohlcv 주간 거래량/거래대금 + 20주 이동평균 → vol_ratio, txamt_ratio.
 
     20주 평균 워밍업 위해 start 이전 ~150일 포함해 로드 후 윈도우로 잘라 반환.
+    txamt = volume × close (원화 거래대금).
     """
     from datetime import timedelta
     fetch_start = start - timedelta(days=200)
     raw = _fetch_df(
         conn,
-        "SELECT symbol, date, volume FROM daily_ohlcv "
+        "SELECT symbol, date, volume, close FROM daily_ohlcv "
         "WHERE date BETWEEN %s AND %s",
         (fetch_start, end),
-        ["ticker", "date", "volume"],
+        ["ticker", "date", "volume", "close"],
     )
     if raw.empty:
-        return pd.DataFrame(columns=["ticker", "week", "vol_ratio"])
+        return pd.DataFrame(columns=["ticker", "week", "vol_ratio", "txamt_ratio"])
     raw["date"] = pd.to_datetime(raw["date"])
     raw["volume"] = pd.to_numeric(raw["volume"], errors="coerce")
+    raw["close"]  = pd.to_numeric(raw["close"],  errors="coerce")
+    raw["txamt"]  = raw["volume"] * raw["close"]
 
     out = []
     for ticker, g in raw.groupby("ticker", sort=False):
-        wk = (
-            g.set_index("date")["volume"]
-            .resample("W-FRI").sum()
-            .to_frame("vol_w")
-        )
-        wk["vol_ma20w"] = wk["vol_w"].rolling(20, min_periods=20).mean()
-        wk["vol_ratio"] = wk["vol_w"] / wk["vol_ma20w"].replace(0.0, np.nan)
+        g_idx = g.set_index("date")
+        wk = g_idx[["volume", "txamt"]].resample("W-FRI").sum()
+        wk.columns = ["vol_w", "txamt_w"]
+
+        wk["vol_ma20w"]   = wk["vol_w"].rolling(20, min_periods=20).mean()
+        wk["txamt_ma20w"] = wk["txamt_w"].rolling(20, min_periods=20).mean()
+
+        wk["vol_ratio"]   = wk["vol_w"]   / wk["vol_ma20w"].replace(0.0, np.nan)
+        wk["txamt_ratio"] = wk["txamt_w"] / wk["txamt_ma20w"].replace(0.0, np.nan)
+
         wk = wk.dropna(subset=["vol_ratio"])
         if wk.empty:
             continue
         wk = wk.reset_index()
         wk["week"] = wk["date"].dt.date.map(iso_week)
         wk["ticker"] = ticker
-        out.append(wk[["ticker", "week", "vol_ratio"]])
+        out.append(wk[["ticker", "week", "vol_ratio", "txamt_ratio"]])
     if not out:
-        return pd.DataFrame(columns=["ticker", "week", "vol_ratio"])
+        return pd.DataFrame(columns=["ticker", "week", "vol_ratio", "txamt_ratio"])
     res = pd.concat(out, ignore_index=True)
     # start 이전 워밍업 주차 제거
     res = res[res["week"] >= iso_week(start)]

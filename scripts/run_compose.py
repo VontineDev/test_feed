@@ -1,5 +1,5 @@
 """
-run_compose.py — Tier-1 조합전략 백테스트 CLI
+run_compose.py — Tier-1/2 조합전략 백테스트 CLI
 
 사용법:
     # 단일 전략
@@ -8,21 +8,26 @@ run_compose.py — Tier-1 조합전략 백테스트 CLI
     # 전체 Tier-1 비교 (AND-1/AND-2/SCORE-1/FUNNEL-1)
     python scripts/run_compose.py --strategy ALL --start 2026-04-13 --end 2026-06-14
 
+    # 거래대금 조사 전략만 비교 (AND-1/AND-2/AND-3/AND-4)
+    python scripts/run_compose.py --strategy TXAMT --start 2026-04-13 --end 2026-06-14
+
     # 옵션
     python scripts/run_compose.py --strategy SCORE-1 --start 2026-04-13 --end 2026-06-14 \\
         --market KOSPI --workers 8 --html results/score1.html
 
 전략 목록:
-    AND-1    — 이치모쿠 ∩ Stage2+ ∩ 수급 양호
-    AND-2    — AND-1 ∩ 거래량 급증
-    SCORE-1  — 이치모쿠·Stage·거래량·수급 z-score 가중합 top-20
+    AND-1    — 이치모쿠 ∩ Stage2+ ∩ 수급 비매도 (기준선)
+    AND-2    — AND-1 ∩ 거래량 주내 중앙값 이상
+    AND-3    — AND-1 ∩ 거래대금 주내 중앙값 이상 (chart_signals.close×volume_w)
+    AND-4    — AND-1 ∩ 거래대금 주내 상위 30%
+    SCORE-1  — Stage·거래대금·수급 z-score 가중합 top-20 [권장]
     FUNNEL-1 — 수급 스크린 → 4주 내 이치모쿠 돌파
 
 데이터 제약:
-    - ichimoku 의존 전략(AND-1/AND-2/FUNNEL-1): chart_signals 백필 구간 필요
-      (현재 2026-W16..W23, 즉 2026-04-13~2026-06-07)
     - flow 의존 전략: daily_flow 기준 하한 2025-01-02
-    - SCORE-1: stage/volume/flow만 사용 → 더 긴 히스토리 가능
+    - ichimoku 의존 전략: chart_signals 2025-W01 ~ 현재 (76주+, 계속 누적 중)
+    - AND-*/SCORE-1/FUNNEL-1: --start 2025-01-02 이후 전 구간 실행 가능
+    - 거래대금 플래그(AND-3/AND-4/SCORE-1): chart_signals.close 사용 — daily_ohlcv 불필요
 """
 from __future__ import annotations
 
@@ -46,7 +51,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-ALL_STRATEGIES = ["AND-1", "AND-2", "SCORE-1", "FUNNEL-1"]
+ALL_STRATEGIES   = ["AND-1", "AND-2", "AND-3", "AND-4", "SCORE-1", "FUNNEL-1"]
+TXAMT_STRATEGIES = ["AND-1", "AND-2", "AND-3", "AND-4"]  # 거래대금 vs 거래량 비교셋
 
 
 def _pct(v, dp=1):
@@ -136,7 +142,8 @@ def _print_comparison(results: list) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Tier-1 조합전략 백테스트")
     parser.add_argument("--strategy", required=True,
-                        help=f"전략 이름 또는 ALL. 가능: {', '.join(ALL_STRATEGIES)}, ALL")
+                        help=f"전략 이름 또는 ALL/TXAMT. 가능: {', '.join(ALL_STRATEGIES)}, ALL, TXAMT"
+                             f" (TXAMT = AND-1/2/3/4 거래대금 비교)")
     parser.add_argument("--start", required=True, help="백테스트 시작일 (YYYY-MM-DD)")
     parser.add_argument("--end",   required=True, help="백테스트 종료일 (YYYY-MM-DD)")
     parser.add_argument("--market",  default="ALL", choices=["KOSPI", "KOSDAQ", "ALL"])
@@ -164,10 +171,12 @@ def main() -> None:
 
     if args.strategy.upper() == "ALL":
         targets = ALL_STRATEGIES
+    elif args.strategy.upper() == "TXAMT":
+        targets = TXAMT_STRATEGIES
     elif args.strategy in ALL_STRATEGIES:
         targets = [args.strategy]
     else:
-        sys.exit(f"알 수 없는 전략: {args.strategy!r}. 가능: {', '.join(ALL_STRATEGIES)}, ALL")
+        sys.exit(f"알 수 없는 전략: {args.strategy!r}. 가능: {', '.join(ALL_STRATEGIES)}, ALL, TXAMT")
 
     results = []
     for strat in targets:
