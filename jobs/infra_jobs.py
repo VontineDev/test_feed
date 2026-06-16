@@ -168,14 +168,13 @@ async def youtube_narrative_sync_job() -> None:
     logger.info("[yt-sync] 운영 수집 시작")
     try:
         dsn        = _get_dsn()
-        api_key    = os.environ.get("YOUTUBE_API_KEY", "")
-        gemini_key = os.environ.get("GEMINI_API_KEY", "")
-        if not api_key or not gemini_key:
-            logger.warning("[yt-sync] YOUTUBE_API_KEY / GEMINI_API_KEY 미설정 — 건너뜀")
+        api_key = os.environ.get("YOUTUBE_API_KEY", "")
+        if not api_key:
+            logger.warning("[yt-sync] YOUTUBE_API_KEY 미설정 — 건너뜀")
             return
         ensure_tables(dsn)
         yesterday = _date.today() - _td(days=1)
-        n = await asyncio.to_thread(run_sync, dsn, api_key, gemini_key, yesterday, yesterday)
+        n = await asyncio.to_thread(run_sync, dsn, api_key, yesterday, yesterday)
         logger.info("[yt-sync] 완료: %d건", n)
     except Exception as e:
         logger.error("[yt-sync] 실패: %s", e)

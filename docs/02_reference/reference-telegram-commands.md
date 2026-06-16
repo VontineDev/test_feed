@@ -264,7 +264,7 @@ KRX 수급 데이터를 즉시 수집합니다 (`daily_flow_sync_job`).
 ### `/run_youtube`
 
 유튜브(삼프로TV) 자막 수집과 롤링 어텐션 점수 집계를 순차 실행합니다 (`youtube_narrative_sync_job` → `youtube_attention_score_job`).  
-소요 시간: 약 5~10분. `YOUTUBE_API_KEY` / `GEMINI_API_KEY` 필수.
+소요 시간: 약 5~10분. `YOUTUBE_API_KEY` 및 Ollama 로컬 모델 필수.
 
 ### `/run_all`
 

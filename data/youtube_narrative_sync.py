@@ -5,7 +5,7 @@ youtube_narrative_sync.py — 삼프로TV 내러티브 기반 종목 언급 수�
 설계:
   YouTube Data API v3로 삼프로TV 신규 업로드를 수집,
   youtube-transcript-api로 자막을 가져와,
-  Gemini Flash LLM으로 종목 언급을 구조화 추출한다.
+  Ollama 로컬 LLM으로 종목 언급을 구조화 추출한다.
 
   attention_score = SUM(sentiment_weight) / distinct_videos
     buy=1.0, neutral=0.5, sell=0.0 (v1 기본값)
@@ -16,7 +16,8 @@ youtube_narrative_sync.py — 삼프로TV 내러티브 기반 종목 언급 수�
 
 환경변수:
   YOUTUBE_API_KEY       YouTube Data API v3 키 (필수)
-  GEMINI_API_KEY        Google Gemini API 키 (필수)
+  OLLAMA_BASE           Ollama 서버 주소 (기본: http://localhost:11434)
+  OLLAMA_MODEL          추출에 사용할 모델 (기본: qwen3.5:9b)
   DATABASE_URL          PostgreSQL DSN
 
 사용법:
@@ -56,8 +57,7 @@ _COOKIES_PATH = Path(__file__).parent.parent / "docs" / "youtube.com_cookies.txt
 _SENTIMENT_WEIGHT = {"buy": 1.0, "neutral": 0.5, "sell": 0.0}
 _MIN_TRANSCRIPT_LEN = 200   # 자막이 이보다 짧으면 유효하지 않은 것으로 간주
 _ROLLING_DAYS = 5            # attention_score rolling window (영업일)
-_MAX_TRANSCRIPT_CHARS = 8000    # Gemini 토큰 상한
-_GEMINI_RPM_SLEEP = 4.0         # free-tier 15 RPM 대응 (60s / 15 = 4s)
+_MAX_TRANSCRIPT_CHARS = 8000    # LLM 컨텍스트 상한
 _FILL_RETURNS_BATCH = 500       # fill_forward_returns per-call 처리 행 수
 _TRANSCRIPT_FETCH_SLEEP = 2.0   # YouTube IP 차단 방지 — 자막 요청 간격
 # Tor SOCKS5 프록시: TOR_PROXY 환경변수로 활성화 (예: socks5h://127.0.0.1:9050)
@@ -237,7 +237,7 @@ def _fetch_transcript_classified(video_id: str) -> tuple[str | None, str]:
         return None, "no_transcript"
 
 
-def process_backfill_queue(dsn: str, gemini_key: str, limit: int = 8) -> dict:
+def process_backfill_queue(dsn: str, limit: int = 8) -> dict:
     """큐에서 pending 영상을 오래된 날짜순으로 최대 limit개 처리.
 
     설계 (분산 실행):
@@ -284,8 +284,7 @@ def process_backfill_queue(dsn: str, gemini_key: str, limit: int = 8) -> dict:
 
             n_saved = 0
             if status == "ok" and text:
-                mentions = extract_mentions(text, gemini_key)
-                time.sleep(_GEMINI_RPM_SLEEP)
+                mentions = extract_mentions(text)
                 if mentions:
                     records = [
                         {
@@ -429,44 +428,62 @@ _EXTRACT_PROMPT = """당신은 한국 주식시장 전문가입니다.
 """
 
 
-def extract_mentions(transcript: str, gemini_api_key: str) -> list[dict]:
-    """Gemini Flash로 종목 언급 추출. 실패 시 []."""
+def extract_mentions(transcript: str) -> list[dict]:
+    """Ollama 로컬 모델로 종목 언급 추출. 실패 시 []."""
+    import requests as _req
+    import re as _re
+    ollama_base  = os.environ.get("OLLAMA_BASE", "http://localhost:11434")
+    ollama_model = os.environ.get("OLLAMA_MODEL", "qwen3.5:9b")
+    prompt = "/no_think\n\n" + _EXTRACT_PROMPT + transcript[:_MAX_TRANSCRIPT_CHARS]
     try:
-        from google import genai
-        client = genai.Client(api_key=gemini_api_key)
-        prompt = _EXTRACT_PROMPT + transcript[:_MAX_TRANSCRIPT_CHARS]
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
+        resp = _req.post(
+            f"{ollama_base}/api/chat",
+            json={
+                "model": ollama_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+                "options": {"num_predict": 2000, "temperature": 0.1, "repeat_penalty": 1.0},
+                "think": False,
+            },
+            timeout=120,
         )
-        text = response.text.strip()
-        # JSON 파싱 — 마크다운 코드블록 제거
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        mentions = json.loads(text)
-        if not isinstance(mentions, list):
-            return []
-        _VALID_DIRECTIONS = {"buy", "sell", "neutral"}
-        _VALID_HORIZONS = {"short", "mid", "long", "unknown"}
-        result = []
-        for m in mentions:
-            if not m.get("source_quote", "").strip():
-                continue
-            d = m.get("direction", "neutral")
-            h = m.get("horizon", "unknown")
-            if d not in _VALID_DIRECTIONS:
-                logger.warning("[yt-sync] LLM 비정상 direction=%r → neutral로 대체", d)
-                m["direction"] = "neutral"
-            if h not in _VALID_HORIZONS:
-                logger.warning("[yt-sync] LLM 비정상 horizon=%r → unknown으로 대체", h)
-                m["horizon"] = "unknown"
-            result.append(m)
-        return result
+        resp.raise_for_status()
+        text = resp.json()["message"]["content"].strip()
     except Exception as e:
         logger.warning("[yt-sync] LLM 추출 실패: %s", e)
         return []
+    # <think> 블록 제거 (Qwen3 reasoning)
+    text = _re.sub(r'<think>.*?</think>', '', text, flags=_re.DOTALL)
+    text = _re.sub(r'<think>.*', '', text, flags=_re.DOTALL).strip()
+    # 마크다운 코드블록 제거
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+    text = text.strip()
+    try:
+        mentions = json.loads(text)
+    except json.JSONDecodeError:
+        logger.warning("[yt-sync] LLM JSON 파싱 실패: %r", text[:200])
+        return []
+    if not isinstance(mentions, list):
+        return []
+    _VALID_DIRECTIONS = {"buy", "sell", "neutral"}
+    _VALID_HORIZONS = {"short", "mid", "long", "unknown"}
+    result = []
+    for m in mentions:
+        if not m.get("source_quote", "").strip():
+            continue
+        d = m.get("direction", "neutral")
+        h = m.get("horizon", "unknown")
+        if d not in _VALID_DIRECTIONS:
+            logger.warning("[yt-sync] LLM 비정상 direction=%r → neutral로 대체", d)
+            m["direction"] = "neutral"
+        if h not in _VALID_HORIZONS:
+            logger.warning("[yt-sync] LLM 비정상 horizon=%r → unknown으로 대체", h)
+            m["horizon"] = "unknown"
+        result.append(m)
+    return result
 
 
 # ── 티커 정규화 ───────────────────────────────────────
@@ -801,7 +818,6 @@ def _next_business_day(ref: date, n: int) -> date:
 def run_sync(
     dsn: str,
     api_key: str,
-    gemini_key: str,
     from_date: date,
     to_date: date,
 ) -> int:
@@ -824,8 +840,7 @@ def run_sync(
             logger.debug("[yt-sync] 자막 없음: %s", vid)
             continue
 
-        mentions = extract_mentions(transcript, gemini_key)
-        time.sleep(_GEMINI_RPM_SLEEP)
+        mentions = extract_mentions(transcript)
         if not mentions:
             continue
 
@@ -895,8 +910,7 @@ if __name__ == "__main__":
         dsn = _get_dsn()
     except Exception:
         dsn = _get_env("DATABASE_URL")
-    api_key     = _get_env("YOUTUBE_API_KEY")
-    gemini_key  = _get_env("GEMINI_API_KEY")
+    api_key = _get_env("YOUTUBE_API_KEY")
 
     if args.ensure_tables:
         ensure_tables(dsn)
@@ -911,7 +925,7 @@ if __name__ == "__main__":
         from_date = date.fromisoformat(args.from_date) if args.from_date else date(2026, 1, 1)
         to_date   = date.fromisoformat(args.to_date)   if args.to_date   else date.today()
         logger.info("[yt-sync] 백필 시작: %s ~ %s", from_date, to_date)
-        n = run_sync(dsn, api_key, gemini_key, from_date, to_date)
+        n = run_sync(dsn, api_key, from_date, to_date)
         logger.info("[yt-sync] 백필 완료: 총 %d건 저장", n)
         fill_forward_returns(dsn)
         # 백테스트 SQL이 ON window_end = video_date 조인이므로
@@ -925,5 +939,5 @@ if __name__ == "__main__":
     else:
         # 운영 모드: 전일 업로드 수집
         yesterday = date.today() - timedelta(days=1)
-        n = run_sync(dsn, api_key, gemini_key, yesterday, yesterday)
+        n = run_sync(dsn, api_key, yesterday, yesterday)
         logger.info("[yt-sync] 운영 수집 완료: %d건", n)
