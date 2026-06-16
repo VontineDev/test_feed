@@ -45,6 +45,10 @@ _start_time: datetime = datetime.now(timezone.utc)
 _seen_hashes_ref: Optional[set] = None
 # /scan 중복 실행 방지 락
 _scan_lock: asyncio.Lock = asyncio.Lock()
+# 파이프라인 수동 트리거 락
+_flow_lock: asyncio.Lock = asyncio.Lock()
+_stage_lock: asyncio.Lock = asyncio.Lock()
+_youtube_lock: asyncio.Lock = asyncio.Lock()
 
 
 def init_bot(seen_hashes: set) -> None:
@@ -708,31 +712,144 @@ async def _handle_screener(http: httpx.AsyncClient, chat_id: str, pool) -> None:
     await send_weekly_screener(results, http=http, target_chat_id=chat_id)
 
 
-async def _handle_scan(http: httpx.AsyncClient, chat_id: str, pool) -> None:
-    """/scan — 강세 후보 즉시 스캔 (전 종목 실시간 스캔, 결과 저장 후 발신자에게 전송)"""
-    if not pool:
-        await _send(http, chat_id, "DB 미연결 상태입니다\\.")
-        return
-
-    if _scan_lock.locked():
-        await _send(http, chat_id, "⏳ 강세 후보 스캔이 이미 실행 중입니다\\. 완료 후 결과가 전송됩니다\\.")
-        return
-
+async def _run_screener_task(http: httpx.AsyncClient, chat_id: str, pool) -> None:
     async with _scan_lock:
-        await _send(http, chat_id,
-            "🔍 강세 후보 스캔 시작\\.\\.\\.\n전 종목 실시간 스캔 중 \\(약 10\\~20분 소요\\)\\.")
         try:
             from analysis.chart_screener import run_weekly_screen
             from core.db import save_chart_signals
             loop = asyncio.get_running_loop()
             results = await loop.run_in_executor(None, run_weekly_screen)
             saved = await save_chart_signals(pool, results)
-            logger.info("[봇/scan] 완료 — 통과:%d 저장:%d", len(results), saved)
+            logger.info("[봇/screener] 완료 — 통과:%d 저장:%d", len(results), saved)
             from telegram.telegram_notify import send_weekly_screener
             await send_weekly_screener(results, http=http, target_chat_id=chat_id)
         except Exception as e:
-            logger.warning("[봇/scan] 실행 실패: %s", e)
-            await _send(http, chat_id, f"스크리닝 실행 중 오류가 발생했습니다\\: {esc(str(e))}")
+            logger.warning("[봇/screener] 실패: %s", e)
+            await _send_plain(http, chat_id, f"스크리너 실행 중 오류: {e}")
+
+
+async def _handle_scan(http: httpx.AsyncClient, chat_id: str, pool) -> None:
+    """/scan — 강세 후보 즉시 스캔 (전 종목 실시간 스캔, 결과 저장 후 발신자에게 전송)"""
+    if not pool:
+        await _send(http, chat_id, "DB 미연결 상태입니다\\.")
+        return
+    if _scan_lock.locked():
+        await _send(http, chat_id, "⏳ 강세 후보 스캔이 이미 실행 중입니다\\. 완료 후 결과가 전송됩니다\\.")
+        return
+    await _send(http, chat_id,
+        "🔍 강세 후보 스캔 시작\\.\\.\\.\n전 종목 실시간 스캔 중 \\(약 10\\~20분 소요\\)\\.")
+    asyncio.create_task(_run_screener_task(http, chat_id, pool))
+
+
+# ── 파이프라인 수동 트리거 내부 태스크 ───────────────────────────
+
+async def _run_flow_task(http: httpx.AsyncClient, chat_id: str) -> None:
+    async with _flow_lock:
+        try:
+            from jobs.infra_jobs import daily_flow_sync_job
+            await daily_flow_sync_job()
+            await _send_plain(http, chat_id, "✅ 수급 수집 완료.")
+        except Exception as e:
+            logger.warning("[봇/run_flow] 실패: %s", e)
+            await _send_plain(http, chat_id, f"수급 수집 실패: {e}")
+
+
+async def _run_stage_task(http: httpx.AsyncClient, chat_id: str, pool) -> None:
+    async with _stage_lock:
+        try:
+            from jobs.stage_job import daily_stage_job
+            new_active = await daily_stage_job(pool)
+            await _send_plain(http, chat_id, f"✅ 스테이지 분류 완료 — 활성 {len(new_active)}종목.")
+        except Exception as e:
+            logger.warning("[봇/run_stage] 실패: %s", e)
+            await _send_plain(http, chat_id, f"스테이지 분류 실패: {e}")
+
+
+async def _run_youtube_task(http: httpx.AsyncClient, chat_id: str) -> None:
+    async with _youtube_lock:
+        try:
+            from jobs.infra_jobs import youtube_narrative_sync_job, youtube_attention_score_job
+            await youtube_narrative_sync_job()
+            await youtube_attention_score_job()
+            await _send_plain(http, chat_id, "✅ 유튜브 수집 + 어텐션 점수 완료.")
+        except Exception as e:
+            logger.warning("[봇/run_youtube] 실패: %s", e)
+            await _send_plain(http, chat_id, f"유튜브 수집 실패: {e}")
+
+
+# ── 파이프라인 수동 트리거 핸들러 ─────────────────────────────────
+
+async def _handle_run_flow(http: httpx.AsyncClient, chat_id: str) -> None:
+    """/run_flow — 수급 파이프라인 즉시 실행"""
+    if _flow_lock.locked():
+        await _send_plain(http, chat_id, "⏳ 수급 수집이 이미 실행 중입니다. 완료 후 알림 전송.")
+        return
+    await _send_plain(http, chat_id, "📥 수급 수집 시작 — 완료 시 알림 전송 (약 40~60분 소요).")
+    asyncio.create_task(_run_flow_task(http, chat_id))
+
+
+async def _handle_run_stage(http: httpx.AsyncClient, chat_id: str, pool) -> None:
+    """/run_stage — 스테이지 분류 즉시 실행"""
+    if not pool:
+        await _send_plain(http, chat_id, "DB 미연결 상태입니다.")
+        return
+    if _stage_lock.locked():
+        await _send_plain(http, chat_id, "⏳ 스테이지 분류가 이미 실행 중입니다. 완료 후 알림 전송.")
+        return
+    await _send_plain(http, chat_id, "🔵 스테이지 분류 시작 — 완료 시 알림 전송 (약 10~20분 소요).")
+    asyncio.create_task(_run_stage_task(http, chat_id, pool))
+
+
+async def _handle_run_screener(http: httpx.AsyncClient, chat_id: str, pool) -> None:
+    """/run_screener — 스크리너 즉시 실행 (/scan 동일)"""
+    if not pool:
+        await _send_plain(http, chat_id, "DB 미연결 상태입니다.")
+        return
+    if _scan_lock.locked():
+        await _send_plain(http, chat_id, "⏳ 스크리너가 이미 실행 중입니다. 완료 후 알림 전송.")
+        return
+    await _send_plain(http, chat_id, "🔍 스크리너 시작 — 완료 시 알림 전송 (약 10~20분 소요).")
+    asyncio.create_task(_run_screener_task(http, chat_id, pool))
+
+
+async def _handle_run_youtube(http: httpx.AsyncClient, chat_id: str) -> None:
+    """/run_youtube — 유튜브 수집 + 어텐션 점수 즉시 실행"""
+    if _youtube_lock.locked():
+        await _send_plain(http, chat_id, "⏳ 유튜브 수집이 이미 실행 중입니다. 완료 후 알림 전송.")
+        return
+    await _send_plain(http, chat_id, "▶️ 유튜브 수집 시작 — 완료 시 알림 전송 (약 5~10분 소요).")
+    asyncio.create_task(_run_youtube_task(http, chat_id))
+
+
+async def _handle_run_all(http: httpx.AsyncClient, chat_id: str, pool) -> None:
+    """/run_all — 4개 파이프라인 동시 실행"""
+    statuses = {
+        "수급":    _flow_lock.locked(),
+        "스테이지": _stage_lock.locked(),
+        "스크리너": _scan_lock.locked(),
+        "유튜브":  _youtube_lock.locked(),
+    }
+    already = [k for k, v in statuses.items() if v]
+    to_run  = [k for k, v in statuses.items() if not v]
+
+    if not to_run:
+        await _send_plain(http, chat_id, "모든 파이프라인이 이미 실행 중입니다.")
+        return
+
+    msg_parts = [f"🚀 파이프라인 시작: {', '.join(to_run)}"]
+    if already:
+        msg_parts.append(f"⏳ 이미 실행 중 (건너뜀): {', '.join(already)}")
+    msg_parts.append("각 파이프라인 완료 시 개별 알림 전송.")
+    await _send_plain(http, chat_id, "\n".join(msg_parts))
+
+    if "수급" in to_run:
+        asyncio.create_task(_run_flow_task(http, chat_id))
+    if "스테이지" in to_run and pool:
+        asyncio.create_task(_run_stage_task(http, chat_id, pool))
+    if "스크리너" in to_run and pool:
+        asyncio.create_task(_run_screener_task(http, chat_id, pool))
+    if "유튜브" in to_run:
+        asyncio.create_task(_run_youtube_task(http, chat_id))
 
 
 async def _handle_paper(http: httpx.AsyncClient, chat_id: str, pool) -> None:
@@ -1020,6 +1137,13 @@ async def _handle_help(http: httpx.AsyncClient, chat_id: str) -> None:
         "/paper — 모의투자 오픈 포지션 현황",
         "/paper\\_perf — 모의투자 누적 성과 \\(승률·수익·슬리피지\\)",
         "/paper\\_exit \\<종목코드\\> — 수동 강제 청산",
+        "",
+        "📡 *파이프라인 수동 실행*",
+        "/run\\_flow — 수급 수집 즉시 실행 \\(KRX, 40\\~60분\\)",
+        "/run\\_stage — 스테이지 분류 즉시 실행 \\(10\\~20분\\)",
+        "/run\\_screener — 스크리너 즉시 실행 \\(/scan 동일, 10\\~20분\\)",
+        "/run\\_youtube — 유튜브 수집\\+어텐션 점수 즉시 실행 \\(5\\~10분\\)",
+        "/run\\_all — 4개 파이프라인 동시 실행",
         "/help — 이 도움말",
     ]
     await _send(http, chat_id, "\n".join(lines))
@@ -1098,6 +1222,16 @@ async def _process_update(http: httpx.AsyncClient, update: dict, pool) -> None:
         await _handle_paper_exit(http, chat_id, pool, args)
     elif cmd == "/watchlist":
         await _handle_watchlist(http, chat_id, pool)
+    elif cmd == "/run_flow":
+        await _handle_run_flow(http, chat_id)
+    elif cmd == "/run_stage":
+        await _handle_run_stage(http, chat_id, pool)
+    elif cmd == "/run_screener":
+        await _handle_run_screener(http, chat_id, pool)
+    elif cmd == "/run_youtube":
+        await _handle_run_youtube(http, chat_id)
+    elif cmd == "/run_all":
+        await _handle_run_all(http, chat_id, pool)
     elif cmd in ("/help", "/start"):
         await _handle_help(http, chat_id)
     else:
@@ -1125,8 +1259,13 @@ async def _register_commands(http: httpx.AsyncClient) -> None:
         {"command": "paper",       "description": "모의투자 오픈 포지션 현황"},
         {"command": "paper_perf",  "description": "모의투자 누적 성과 (승률·수익·슬리피지)"},
         {"command": "paper_exit",  "description": "수동 강제 청산 — /paper_exit 005930"},
-        {"command": "watchlist",   "description": "거래대금 워치리스트 즉시 조회 (온디맨드)"},
-        {"command": "help",        "description": "명령어 목록"},
+        {"command": "watchlist",      "description": "거래대금 워치리스트 즉시 조회 (온디맨드)"},
+        {"command": "run_flow",       "description": "수급 수집 즉시 실행 (KRX, 40~60분)"},
+        {"command": "run_stage",      "description": "스테이지 분류 즉시 실행 (10~20분)"},
+        {"command": "run_screener",   "description": "스크리너 즉시 실행 (전 종목, 10~20분)"},
+        {"command": "run_youtube",    "description": "유튜브 수집+어텐션 점수 즉시 실행 (5~10분)"},
+        {"command": "run_all",        "description": "4개 파이프라인 동시 실행"},
+        {"command": "help",           "description": "명령어 목록"},
     ]
     try:
         resp = await http.post(url, json={"commands": commands}, timeout=10)
