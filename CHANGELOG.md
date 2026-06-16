@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.1.7] - 2026-06-16
+
+### Added
+- **텔레그램 — 파이프라인 수동 트리거 명령어 5종** (`telegram/telegram_bot.py`): 스케줄러 잡을 대기하지 않고 각 파이프라인을 즉시 실행할 수 있는 명령어 추가. 모두 `asyncio.create_task`로 백그라운드 실행되어 실행 중에도 다른 명령어가 응답 가능. 각 파이프라인은 독립 락으로 중복 실행 방지.
+  - `/run_flow` — KRX 수급 수집 즉시 실행 (`daily_flow_sync_job`, 40~60분)
+  - `/run_stage` — 스테이지 분류 즉시 실행 (`daily_stage_job`, 10~20분)
+  - `/run_screener` — 주봉 스크리너 즉시 실행 (전 종목 스캔 + DB 저장, 10~20분)
+  - `/run_youtube` — 유튜브 수집 + 어텐션 점수 집계 즉시 실행 (5~10분)
+  - `/run_all` — 4개 파이프라인 동시 기동, 이미 실행 중인 항목은 건너뜀
+
+### Removed
+- **`/scan` 명령어 제거** (`telegram/telegram_bot.py`): `/run_screener`와 동일 기능이므로 중복 제거. `_handle_scan` 함수·라우팅·help 텍스트·`setMyCommands` 등록 모두 삭제.
+
 ## [0.10.1.6] - 2026-06-16
 
 ### Added
