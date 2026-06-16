@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.1.5] - 2026-06-16
+
+### Fixed
+- **`daily_flow_sync_job` subprocess 절대경로 누락 — 약 1개월 수급 수집 중단 복구** (`jobs/infra_jobs.py`): `asyncio.create_subprocess_exec`에 `"krx_flow_sync.py"` 파일명만 넘겨 Python이 현재 작업 디렉토리(프로젝트 루트)에서 스크립트를 찾지 못해 exit code 2로 종료하던 버그 수정. 절대경로(`os.path.join(_root, "data", "krx_flow_sync.py")`)와 `PYTHONPATH=<프로젝트 루트>` 환경변수를 함께 주입해 `import core.db` 경로도 해결. `daily_flow` 테이블의 2026-05-15 ~ 2026-06-14 공백(19 영업일, 15,307행)을 수동 백필로 복구 완료.
+- **KRX_SESSION 쿠키 주입 후 warmup이 덮어쓰는 버그 수정** (`data/krx_flow_sync.py`): `_make_krx_direct()`가 `warmup()` → `inject_session()` 순으로 실행하면, warmup 시 서버가 새 익명 JSESSIONID를 발급해 `requests.Session` 쿠키 저장소에 `data.krx.co.kr` 범위로 저장하고, 이어서 주입한 인증 쿠키(`.krx.co.kr` 범위)보다 구체적인 도메인 쿠키가 우선 전송돼 인증이 실패하던 문제 수정. KRX_SESSION이 설정된 경우 warmup을 건너뛰고, `inject_session()`에서 `.krx.co.kr`과 `data.krx.co.kr` 두 도메인에 모두 JSESSIONID를 등록해 도메인 우선순위 충돌을 차단.
+
 ## [0.10.1.4] - 2026-06-11
 
 ### Added

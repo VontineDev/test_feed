@@ -242,10 +242,13 @@ class _KrxDirectFetcher:
     def inject_session(self, jsessionid: str, visitor_id: Optional[str] = None) -> None:
         """브라우저 쿠키 주입. login() 없이 인증 우회.
 
-        JSESSIONID는 .krx.co.kr(서브도메인 포함)으로 설정.
-        mdc.client_session은 항상 true로 설정 (서버 세션 활성 확인용).
+        JSESSIONID를 서브도메인 포함(wildcard)과 정확한 도메인 두 곳에 모두 설정.
+        requests cookiejar는 더 구체적인 도메인 쿠키를 우선 전송하므로
+        warmup 응답이 data.krx.co.kr 범위로 JSESSIONID를 덮어써도
+        data.krx.co.kr 범위로 재설정한 쿠키가 이를 이긴다.
         """
-        self._session.cookies.set("JSESSIONID", jsessionid, domain=".krx.co.kr")
+        for _domain in (".krx.co.kr", "data.krx.co.kr"):
+            self._session.cookies.set("JSESSIONID", jsessionid, domain=_domain)
         self._session.cookies.set("mdc.client_session", "true", domain="data.krx.co.kr")
         if visitor_id:
             self._session.cookies.set("__smVisitorID", visitor_id, domain="data.krx.co.kr")
@@ -398,12 +401,16 @@ def _make_krx_direct(
     krx_session: Optional[str] = None,
     krx_visitor: Optional[str] = None,
 ) -> "_KrxDirectFetcher":
-    """KrxDirectFetcher 초기화: warmup → (세션 주입 또는 login)."""
+    """KrxDirectFetcher 초기화: warmup → (세션 주입 또는 login).
+
+    krx_session 사용 시 warmup을 건너뜀: warmup 응답에서 서버가 새 익명
+    JSESSIONID를 발급하면 주입한 인증 쿠키가 덮어씌워지기 때문.
+    """
     fetcher = _KrxDirectFetcher()
-    fetcher.warmup()
     if krx_session:
         fetcher.inject_session(krx_session, krx_visitor)
     elif krx_id and krx_pw:
+        fetcher.warmup()
         fetcher.login(krx_id, krx_pw)
     else:
         logger.warning(
