@@ -8,9 +8,9 @@ Long polling 방식으로 명령어를 수신하고 DB 조회 결과를 응답.
     /signals  — 최근 매매 신호 10건 (BUY/SELL/WATCH)
     /today    — 오늘 수집된 기사 요약 (카테고리별 건수 + 최신 5건)
     /backtest  — 통합 백테스트 (ichimoku / stage / cross / compose 모드)
-    /screener  — 최신 강세 후보 발굴 결과 (DB 조회, 명령어 발신자에게만 전송)
-    /scan      — 강세 후보 즉시 스캔 (전 종목 실시간 스캔, 결과 저장 후 발신자에게 전송)
-    /buy       — 진입 기록 (거래 저널)
+    /screener     — 최신 강세 후보 발굴 결과 (DB 조회, 명령어 발신자에게만 전송)
+    /run_screener — 강세 후보 즉시 스캔 (전 종목 실시간 스캔, 결과 저장 후 발신자에게 전송)
+    /buy          — 진입 기록 (거래 저널)
     /sell      — 청산 기록 (FIFO)
     /port      — 보유 현황 + 미실현 P&L
     /pnl       — 실현 P&L 요약
@@ -43,7 +43,7 @@ _last_update_id: int = 0
 _start_time: datetime = datetime.now(timezone.utc)
 # 누적 수집 건수 참조 (run_scheduler에서 주입)
 _seen_hashes_ref: Optional[set] = None
-# /scan 중복 실행 방지 락
+# 스크리너 중복 실행 방지 락
 _scan_lock: asyncio.Lock = asyncio.Lock()
 # 파이프라인 수동 트리거 락
 _flow_lock: asyncio.Lock = asyncio.Lock()
@@ -728,17 +728,6 @@ async def _run_screener_task(http: httpx.AsyncClient, chat_id: str, pool) -> Non
             await _send_plain(http, chat_id, f"스크리너 실행 중 오류: {e}")
 
 
-async def _handle_scan(http: httpx.AsyncClient, chat_id: str, pool) -> None:
-    """/scan — 강세 후보 즉시 스캔 (전 종목 실시간 스캔, 결과 저장 후 발신자에게 전송)"""
-    if not pool:
-        await _send(http, chat_id, "DB 미연결 상태입니다\\.")
-        return
-    if _scan_lock.locked():
-        await _send(http, chat_id, "⏳ 강세 후보 스캔이 이미 실행 중입니다\\. 완료 후 결과가 전송됩니다\\.")
-        return
-    await _send(http, chat_id,
-        "🔍 강세 후보 스캔 시작\\.\\.\\.\n전 종목 실시간 스캔 중 \\(약 10\\~20분 소요\\)\\.")
-    asyncio.create_task(_run_screener_task(http, chat_id, pool))
 
 
 # ── 파이프라인 수동 트리거 내부 태스크 ───────────────────────────
@@ -801,7 +790,7 @@ async def _handle_run_stage(http: httpx.AsyncClient, chat_id: str, pool) -> None
 
 
 async def _handle_run_screener(http: httpx.AsyncClient, chat_id: str, pool) -> None:
-    """/run_screener — 스크리너 즉시 실행 (/scan 동일)"""
+    """/run_screener — 스크리너 즉시 실행"""
     if not pool:
         await _send_plain(http, chat_id, "DB 미연결 상태입니다.")
         return
@@ -1132,7 +1121,6 @@ async def _handle_help(http: httpx.AsyncClient, chat_id: str) -> None:
         "  compose 전략\\: AND\\-1 \\| AND\\-2 \\| SCORE\\-1 \\| FUNNEL\\-1 \\| ALL",
         "/top — 당일 거래금액 상위 10 \\(KOSPI\\+KOSDAQ\\)",
         "/screener — 최신 강세 후보 발굴 결과 \\(DB 조회\\)",
-        "/scan — 강세 후보 즉시 스캔 \\(전 종목 실시간 스캔, 약 10\\~20분\\)",
         "/watchlist — 거래대금 워치리스트 즉시 조회",
         "/paper — 모의투자 오픈 포지션 현황",
         "/paper\\_perf — 모의투자 누적 성과 \\(승률·수익·슬리피지\\)",
@@ -1141,7 +1129,7 @@ async def _handle_help(http: httpx.AsyncClient, chat_id: str) -> None:
         "📡 *파이프라인 수동 실행*",
         "/run\\_flow — 수급 수집 즉시 실행 \\(KRX, 40\\~60분\\)",
         "/run\\_stage — 스테이지 분류 즉시 실행 \\(10\\~20분\\)",
-        "/run\\_screener — 스크리너 즉시 실행 \\(/scan 동일, 10\\~20분\\)",
+        "/run\\_screener — 스크리너 즉시 실행 \\(전 종목 실시간 스캔, 10\\~20분\\)",
         "/run\\_youtube — 유튜브 수집\\+어텐션 점수 즉시 실행 \\(5\\~10분\\)",
         "/run\\_all — 4개 파이프라인 동시 실행",
         "/help — 이 도움말",
@@ -1200,8 +1188,6 @@ async def _process_update(http: httpx.AsyncClient, update: dict, pool) -> None:
         await _handle_top(http, chat_id, args)
     elif cmd == "/screener":
         await _handle_screener(http, chat_id, pool)
-    elif cmd == "/scan":
-        await _handle_scan(http, chat_id, pool)
     elif cmd == "/buy":
         from telegram.telegram_trade import handle_buy
         await handle_buy(http, _get_token(), chat_id, args, pool)
@@ -1251,7 +1237,6 @@ async def _register_commands(http: httpx.AsyncClient) -> None:
         {"command": "backtest", "description": "백테스트 — /backtest ichimoku|stage|cross|compose <start> <end>  compose예) /backtest compose FUNNEL-1 2025-01-01 2026-06-14"},
         {"command": "top",       "description": "당일 거래금액 상위 10 (KOSPI+KOSDAQ)"},
         {"command": "screener", "description": "최신 강세 후보 발굴 결과 (DB 조회)"},
-        {"command": "scan",     "description": "강세 후보 즉시 스캔 (전 종목 실시간 스캔)"},
         {"command": "buy",      "description": "진입 기록 — /buy 005930 70000 100 [YYYYMMDD]"},
         {"command": "sell",     "description": "청산 기록 (FIFO) — /sell 005930 73500"},
         {"command": "port",     "description": "보유 현황 + 미실현 P&L"},
