@@ -442,7 +442,7 @@ def extract_mentions(transcript: str) -> list[dict]:
                 "model": ollama_model,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
-                "options": {"num_predict": 2000, "temperature": 0.1, "repeat_penalty": 1.0},
+                "options": {"num_predict": 4096, "temperature": 0.1, "repeat_penalty": 1.0},
                 "think": False,
             },
             timeout=120,
@@ -834,8 +834,17 @@ def run_sync(
         vdate = date.fromisoformat(v["video_date"])
         logger.info("[yt-sync] [%d/%d] %s %s", i, len(videos), vdate, v["title"][:40])
 
-        transcript = fetch_transcript(vid)
+        text, status = _fetch_transcript_classified(vid)
         time.sleep(_TRANSCRIPT_FETCH_SLEEP)
+        if status == "blocked":
+            logger.warning("[yt-sync] IP 차단 감지 — 회로 교체 후 재시도")
+            if _tor_rotate_circuit():
+                text, status = _fetch_transcript_classified(vid)
+                time.sleep(_TRANSCRIPT_FETCH_SLEEP)
+            if status == "blocked":
+                logger.warning("[yt-sync] 회로 교체 후에도 차단 — 수집 중단 (%d/%d)", i, len(videos))
+                break
+        transcript = text
         if not transcript:
             logger.debug("[yt-sync] 자막 없음: %s", vid)
             continue
