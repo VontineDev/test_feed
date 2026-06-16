@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.1.6] - 2026-06-16
+
+### Added
+- **종목분석 탭 — 파이프라인 수집 상태 배너** (`dashboard/backend/main.py`, `dashboard/frontend/src/components/Report.tsx`): 종목분석 탭 헤더 아래에 수급·스테이지·스크리너·유튜브 4개 파이프라인의 최신 수집일과 상태(초록/노랑/빨강)를 한눈에 표시하는 `PipelineStatusBar` 컴포넌트 추가.
+  - **`GET /api/report/pipeline-status`** 신설: `daily_flow`(MAX trade_date + 티커수), `stage_classifications`(MAX classified_date), `chart_signals`(MAX screened_at), `youtube_attention_scores`(MAX window_end)를 단일 쿼리로 조회해 각 파이프라인의 날짜·상태(ok/warn/error)를 반환.
+  - 상태 임계값: 일간 파이프라인(수급·유튜브) — gap ≤1일=ok, ≤3일=warn, >3일=error. 주간 파이프라인(스테이지·스크리너) — gap ≤7일=ok, ≤14일=warn, >14일=error.
+  - 각 항목에 마우스오버 시 상세 툴팁(날짜·티커 수) 표시. 새로고침 버튼과 연동해 탭 리로드 시 상태도 함께 갱신.
+
 ## [0.10.1.5] - 2026-06-16
 
 ### Fixed

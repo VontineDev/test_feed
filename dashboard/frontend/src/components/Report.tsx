@@ -4,6 +4,67 @@ import DateRangeBar, { DateRange, computeRange } from './DateRangeBar'
 import StageHistoryPopup from './StageHistoryPopup'
 import Narrative from './Narrative'
 
+// ── 파이프라인 상태 배너 ──────────────────────────────────────
+type PipeStatus = 'ok' | 'warn' | 'error'
+interface PipelineData {
+  flow:     { date: string | null; tickers: number; status: PipeStatus }
+  stage:    { date: string | null; status: PipeStatus }
+  screener: { date: string | null; status: PipeStatus }
+  youtube:  { date: string | null; status: PipeStatus }
+}
+
+const STATUS_COLOR: Record<PipeStatus, string> = {
+  ok:    '#22c55e',
+  warn:  '#f59e0b',
+  error: '#f87171',
+}
+
+function PipelineStatusBar({ refreshKey }: { refreshKey: number }) {
+  const [data, setData] = useState<PipelineData | null>(null)
+
+  useEffect(() => {
+    fetch('/api/report/pipeline-status')
+      .then(r => r.json())
+      .then(setData)
+      .catch(() => setData(null))
+  }, [refreshKey])
+
+  if (!data) return null
+
+  const items: { label: string; date: string | null; status: PipeStatus; detail?: string }[] = [
+    { label: '수급',     date: data.flow.date,     status: data.flow.status,     detail: `${data.flow.tickers}개 티커` },
+    { label: '스테이지', date: data.stage.date,    status: data.stage.status },
+    { label: '스크리너', date: data.screener.date, status: data.screener.status },
+    { label: '유튜브',   date: data.youtube.date,  status: data.youtube.status },
+  ]
+
+  return (
+    <div style={ps.bar}>
+      <span style={ps.label}>파이프라인</span>
+      {items.map(({ label, date, status, detail }) => (
+        <span
+          key={label}
+          style={ps.item}
+          title={detail ? `${label}: ${date ?? '—'} (${detail})` : `${label}: ${date ?? '—'}`}
+        >
+          <span style={{ ...ps.dot, background: STATUS_COLOR[status] }} />
+          <span style={ps.itemLabel}>{label}</span>
+          <span style={ps.itemDate}>{date ? date.slice(5) : '—'}</span>
+        </span>
+      ))}
+    </div>
+  )
+}
+
+const ps: Record<string, React.CSSProperties> = {
+  bar:       { display: 'flex', alignItems: 'center', gap: 12, padding: '5px 14px', borderBottom: `1px solid ${tokens.bd.default}`, background: tokens.bg.panel, flexShrink: 0, flexWrap: 'wrap' as const },
+  label:     { fontSize: 10, color: tokens.tx.subtle, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' as const, marginRight: 4 },
+  item:      { display: 'flex', alignItems: 'center', gap: 4, cursor: 'default' },
+  dot:       { width: 6, height: 6, borderRadius: '50%', flexShrink: 0 },
+  itemLabel: { fontSize: 11, color: tokens.tx.secondary },
+  itemDate:  { fontSize: 11, color: tokens.tx.subtle },
+}
+
 export default function Report() {
   const [range, setRange] = useState<DateRange>(computeRange('today'))
 
@@ -67,6 +128,9 @@ export default function Report() {
           새로고침
         </button>
       </div>
+
+      {/* 파이프라인 수집 상태 */}
+      <PipelineStatusBar refreshKey={narrativeRefreshKey} />
 
       {/* 날짜 범위 선택 바 */}
       <DateRangeBar range={range} onChange={setRange} />

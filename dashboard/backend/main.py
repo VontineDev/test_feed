@@ -1444,6 +1444,45 @@ _AS_OF_HISTORY_SQL = """
          WHERE  window_end <= $2)                                   AS narrative_date
 """
 
+@app.get("/api/report/pipeline-status")
+async def get_pipeline_status():
+    """수급·스테이지·스크리너·유튜브 파이프라인 최신 날짜 및 상태 반환."""
+    from datetime import date as _date
+    today = _date.today()
+
+    def _status(last: _date | None, daily: bool) -> str:
+        if last is None:
+            return "error"
+        gap = (today - last).days
+        return ("ok" if gap <= (1 if daily else 7)
+                else "warn" if gap <= (3 if daily else 14)
+                else "error")
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT
+                (SELECT MAX(trade_date)        FROM daily_flow)               AS flow_date,
+                (SELECT COUNT(*) FROM daily_flow
+                 WHERE trade_date = (SELECT MAX(trade_date) FROM daily_flow)) AS flow_tickers,
+                (SELECT MAX(classified_date)   FROM stage_classifications)    AS stage_date,
+                (SELECT MAX(screened_at)::date FROM chart_signals)            AS screener_date,
+                (SELECT MAX(window_end)        FROM youtube_attention_scores) AS youtube_date
+        """)
+
+    flow_d     = row["flow_date"]
+    stage_d    = row["stage_date"]
+    screener_d = row["screener_date"]
+    youtube_d  = row["youtube_date"]
+
+    return {
+        "flow":     {"date": str(flow_d)     if flow_d     else None, "tickers": row["flow_tickers"], "status": _status(flow_d,     daily=True)},
+        "stage":    {"date": str(stage_d)    if stage_d    else None, "status": _status(stage_d,    daily=False)},
+        "screener": {"date": str(screener_d) if screener_d else None, "status": _status(screener_d, daily=False)},
+        "youtube":  {"date": str(youtube_d)  if youtube_d  else None, "status": _status(youtube_d,  daily=True)},
+    }
+
+
 @app.get("/api/report/unified")
 async def get_unified_screener(
     start: date | None = None,
