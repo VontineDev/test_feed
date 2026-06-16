@@ -75,8 +75,8 @@ paper_exit_checker → _fetch_prices_yf(tickers)        ← 가격 (yfinance)
 
 ### compose_paper_entry_job (일요일 21:15 KST)
 
-1. `strategy_compose.load_signal_frame()` + `STRATEGIES["FUNNEL-1"].run()` / `STRATEGIES["AND-1"].run()`으로 이번 주(ISO) 신호 추출 (8주 lookback)
-2. FUNNEL-1 상위 10개, AND-1 전체를 `compose-funnel1` / `compose-and1` 모델로 `pending` 삽입
+1. `strategy_compose.load_signal_frame()` + 각 전략 `.run()`으로 이번 주(ISO) 신호 추출 (8주 lookback)
+2. FUNNEL-1 상위 10개, AND-1 전체, SCORE-1 상위 5개를 각 모델(`compose-funnel1` / `compose-and1` / `compose-score1`)로 `pending` 삽입
 3. `entry_theory=0.0` (이론 진입가 없음 — `paper_open_entry_job`이 실제 시가로 채움)
 4. 같은 주에 이미 `pending/open`인 종목은 중복 스킵
 5. Kiwoom 계정 불필요 — DB 접근만으로 동작
@@ -172,7 +172,8 @@ exit 파라미터(`tp1_pct`, `trail_pct`, `hard_stop_pct` 등)는 `analysis/back
 | cross | 15% | 50% | 10% | 10% | val_sharpe=5.11, win=54.3% |
 | ichimoku | 25% | 70% | 10% | 10% | val_sharpe=7.50, win=55.8% |
 | compose-funnel1 | 15% | 50% | 10% | 10% | backtest sharpe=0.74, win=67% |
-| compose-and1 | 15% | 50% | 10% | 10% | backtest sharpe=1.75, win=67% |
+| compose-and1 | 15% | 50% | 10% | 10% | backtest sharpe=1.75, win=80% |
+| compose-score1 | 15% | 50% | 10% | 10% | backtest sharpe=1.17, win=67% |
 
 compose 모델의 exit 파라미터는 backtest 기본값을 사용한다. `OPTIMAL_EXIT_PARAMS`에서 오지 않고 `compose_paper_entry_job`에서 `insert_pending()` 호출 시 직접 전달된다. 4주 실전 결과 후 최적화 예정.
 
@@ -194,6 +195,7 @@ MODEL_CONFIG = {
     "ichimoku":        {"max_slots": 10, "position_krw": 10_000_000},
     "compose-funnel1": {"max_slots": 10, "position_krw": 10_000_000},
     "compose-and1":    {"max_slots":  5, "position_krw": 20_000_000},
+    "compose-score1":  {"max_slots":  5, "position_krw": 20_000_000},  # txamt z-score top-20
 }
 ```
 

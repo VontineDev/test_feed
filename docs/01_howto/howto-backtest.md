@@ -51,10 +51,14 @@
 
 | 인수 | 기본값 | 설명 |
 |------|--------|------|
-| `strategy` | 필수 | `AND-1` \| `AND-2` \| `SCORE-1` \| `FUNNEL-1` \| `ALL` |
+| `strategy` | 필수 | `AND-1` ~ `AND-6` \| `SCORE-1` \| `FUNNEL-1` \| `ALL` \| `TXAMT` \| `RELAX` |
 | `market` | `ALL` | `KOSPI` \| `KOSDAQ` \| `ALL` |
 
-`ALL` 선택 시 4전략 순차 실행 후 샤프28d 내림차순 비교표 전송. DB 연결(DSN) 필수.
+- `ALL`: 전체 전략 순차 실행 후 샤프28d 내림차순 비교표 전송
+- `TXAMT`: AND-1/2/3/4 (거래량 vs 거래대금 비교셋)
+- `RELAX`: AND-1/3/5/6 (stage2+ vs stage1+ 완화 비교셋)
+
+DB 연결(DSN) 필수.
 
 결과는 백테스트 완료 후 텍스트 요약 + HTML 리포트 경로로 전송됩니다.  
 중복 실행 방지 Lock 내장 — 실행 중 재시도 시 "백테스트 실행 중" 안내.
@@ -226,20 +230,29 @@ python scripts/run_compose.py --strategy FUNNEL-1 --start 2025-01-01 --end 2026-
 |------|------|------|---------------------|---------|---------|
 | AND-1 | AND-gate | 이치모쿠 ∩ Stage2+ ∩ 수급 비동시매도 | ~8 | 1.75 | 80% |
 | AND-2 | AND-gate | AND-1 ∩ 거래량 주내 중앙값 이상 | ~3 | — | 100% |
-| SCORE-1 | Composite Score | Stage·거래량·수급 z-score top-20/주 | ~1500 | 0.62 | 55% |
+| AND-3 | AND-gate | AND-1 ∩ 거래대금 주내 중앙값 이상 (txamt_above_med_cs) | ~5 | N/A | 100% |
+| AND-4 | AND-gate | AND-1 ∩ 거래대금 주내 상위 30% (txamt_top30_cs) | ~3 | — | — |
+| AND-5 | AND-gate | 이치모쿠 ∩ Stage1+ ∩ 수급 비동시매도 (stage 완화) | ~30 | 0.34 | 48% |
+| AND-6 | AND-gate | AND-5 ∩ 거래대금 주내 중앙값 이상 | ~22 | 0.41 | 46% |
+| SCORE-1 | Composite Score | Stage·거래대금·수급 z-score top-20/주 | ~1500 | 1.17 | 67% |
 | FUNNEL-1 | Funnel | 수급 스크린 → 4주 내 이치모쿠 트리거 | ~2009 | 0.74 | 67% |
+
+> AND-3/4는 신호 수가 적어 샤프 계산 불가. AND-5/6은 신호 확대 목적의 실험적 전략으로 품질이 AND-1/3 대비 낮습니다(샤프·MDD 모두 열위).
 
 ### 플래그 정의 (derive_flags)
 
-| 플래그 | 정의 |
-|--------|------|
-| `ichimoku` | chart_signals 7조건 통과 여부 |
-| `stage2plus` | stage >= 2 |
-| `stage_any` | stage >= 1 |
-| `flow_pos` | (외국인 > 0) OR (기관 > 0) — 엄격 |
-| `flow_loose` | NOT (외국인 < 0 AND 기관 < 0) — 완화 |
-| `vol_above_med` | 주내 이치모쿠 통과 종목 거래량 중앙값 이상 |
-| `vol_spike` | vol_ratio >= 2.0 (daily_ohlcv 기반) |
+| 플래그 | 소스 | 정의 |
+|--------|------|------|
+| `ichimoku` | chart_signals | 주봉 7조건 통과 여부 |
+| `stage2plus` | stage_classifications | stage >= 2 |
+| `stage_any` | stage_classifications | stage >= 1 |
+| `flow_pos` | daily_flow | (외국인 > 0) OR (기관 > 0) — 엄격 |
+| `flow_loose` | daily_flow | NOT (외국인 < 0 AND 기관 < 0) — 완화 |
+| `vol_above_med` | chart_signals | 주내 이치모쿠 통과 종목 거래량(volume_w) 중앙값 이상 |
+| `txamt_above_med_cs` | chart_signals | `volume_w × close` (주간 거래대금) 주내 중앙값 이상 |
+| `txamt_top30_cs` | chart_signals | 주간 거래대금 주내 70th percentile 이상 (상위 30%) |
+
+> `txamt_*_cs` 플래그는 `chart_signals.volume_w × close_chart`로 산출하며 daily_ohlcv가 불필요합니다. 플래그 계산은 동일 ISO 주 내 신호 종목 간 cross-sectional 비교입니다.
 
 ### 데이터 제약
 
@@ -255,7 +268,7 @@ from analysis.backtest_engine import BacktestConfig, run_backtest
 
 cfg = BacktestConfig(
     mode="compose",
-    strategy="FUNNEL-1",   # AND-1 | AND-2 | SCORE-1 | FUNNEL-1
+    strategy="FUNNEL-1",   # AND-1~6 | SCORE-1 | FUNNEL-1
     start=date(2025, 1, 1),
     end=date(2026, 6, 14),
     market="ALL",
