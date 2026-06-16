@@ -1270,7 +1270,14 @@ async def bot_polling_loop(pool) -> None:
     global _last_update_id
     logger.info("[봇] 명령어 수신 시작 (/status /signals /today /help)")
 
-    async with httpx.AsyncClient() as http:
+    _telegram_proxy = os.environ.get("TELEGRAM_PROXY", "")
+    if _telegram_proxy:
+        logger.info("[봇] TELEGRAM_PROXY 적용: %s", _telegram_proxy)
+
+    async with (
+        httpx.AsyncClient(proxy=_telegram_proxy) if _telegram_proxy
+        else httpx.AsyncClient()
+    ) as http:
         await _register_commands(http)
         while True:
             try:

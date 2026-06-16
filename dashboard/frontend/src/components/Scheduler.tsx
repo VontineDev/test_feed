@@ -10,9 +10,11 @@ interface TriggerRecord {
 }
 
 const JOB_LABELS: Record<string, string> = {
-  stage: '추세 단계',
-  screener: '강세 후보',
+  stage:        '추세 단계',
+  screener:     '강세 후보',
   paper_sample: '모의투자 샘플링',
+  youtube:      '유튜브 수집',
+  flow:         'KRX 수급',
 }
 
 const STATUS_META: Record<string, { label: string; color: string; pulse: boolean }> = {

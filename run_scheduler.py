@@ -659,6 +659,11 @@ async def _trigger_watcher_job():
                 await _dart_screened_sync_job()
             elif job_name == "paper_sample":
                 await _paper_eod_sampler_job()
+            elif job_name == "youtube":
+                await _youtube_narrative_sync_job()
+                await _youtube_attention_score_job()
+            elif job_name == "flow":
+                await _daily_flow_sync_job()
             else:
                 logger.warning("[trigger] 알 수 없는 잡: %s", job_name)
         finally:

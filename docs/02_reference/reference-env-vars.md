@@ -141,14 +141,35 @@ Caddy basicauth와 병행 사용하지 마세요. 두 인증 레이어가 충돌
 
 ## YouTube 내러티브 스크리닝
 
-삼프로TV 자막 수집·LLM 추출 파이프라인(`data/youtube_narrative_sync.py`). 세 변수 모두 설정 시 활성화.
+삼프로TV 자막 수집·LLM 추출 파이프라인(`data/youtube_narrative_sync.py`).
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
 | `YOUTUBE_API_KEY` | *(없음)* | [Google Cloud Console](https://console.cloud.google.com) YouTube Data API v3 키. 삼프로TV 영상 목록 수집에 사용. 미설정 시 `youtube_narrative_sync_job`이 조기 종료 |
-| `GEMINI_API_KEY` | *(없음)* | [Google AI Studio](https://aistudio.google.com) Gemini API 키. 자막 → 종목 언급 JSON 추출에 사용. Gemini 2.5 Flash 모델. 미설정 시 `youtube_narrative_sync_job`이 조기 종료 |
 
-두 키 모두 무료 등급으로 운영 가능합니다. YouTube Data API는 일일 할당량 10,000 units (영상 목록 조회 기준 약 100회), Gemini Free Tier는 분당 15 요청(15 RPM) 제한이 있어 `youtube_narrative_sync.py`가 영상당 4초 대기를 삽입합니다.
+자막 → 종목 언급 JSON 추출은 Ollama 로컬 LLM(`OLLAMA_MODEL`)을 사용합니다. `GEMINI_API_KEY`는 구 버전 호환용으로만 남아 있으며 현재 파이프라인에서 사용하지 않습니다.
+
+---
+
+## 네트워크 프록시 (선택)
+
+ISP 차단 환경(KT 회선 등)에서 YouTube 자막 수집과 Telegram API 접근에 Tor SOCKS5 프록시를 우회 경로로 사용합니다. Tor Browser(포트 9150) 또는 Tor Expert Bundle(포트 9050) 실행 중일 때 설정합니다.
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `TOR_PROXY` | *(없음)* | YouTube 자막 수집 Tor 우회 프록시. 형식: `socks5h://127.0.0.1:9150` (Tor Browser) 또는 `socks5h://127.0.0.1:9050` (Tor Expert Bundle). 미설정 시 직접 연결 시도 |
+| `TELEGRAM_PROXY` | *(없음)* | Telegram API(`api.telegram.org`) Tor 우회 프록시. KT 회선에서 TCP 443이 차단된 경우 설정. 형식: `socks5h://127.0.0.1:9150`. 미설정 시 직접 연결 |
+
+**주의:** `.env` 파일에서 인라인 주석(`KEY=value  # comment`)을 사용하면 `start_crawler.bat` 파서가 주석 텍스트까지 값에 포함시킵니다. 주석은 반드시 별도 줄에 작성하세요.
+
+```env
+# Tor Browser 9150
+TOR_PROXY=socks5h://127.0.0.1:9150
+# api.telegram.org KT 차단 우회
+TELEGRAM_PROXY=socks5h://127.0.0.1:9150
+```
+
+SOCKS5 프록시 지원은 `socksio` 패키지가 필요합니다 (`pip install socksio`).
 
 ---
 
