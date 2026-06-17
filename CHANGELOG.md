@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.1.8] - 2026-06-17
+
+### Removed
+- **`scripts/` 임시 디버그·일회성 체크 스크립트 67개 삭제**: 언더스코어 prefix(`_debug_*`, `_check_*`, `_analyze_*`, `_fix_*`, `_verify_*` 등) 54개(git-tracked) + 종목별 일회성 체크 스크립트 13개(untracked) 삭제. 파이프라인 핵심 스크립트 20개만 보존.
+
+### Added
+- **`scripts/dart_reextract_quarterly.py`** — 분기·반기보고서 선별 force 재추출 유틸리티: 사업보고서를 건드리지 않고 분기/반기 DART 디렉터리만 XBRL+LLM으로 재추출. `logs/dart_quarterly_reextract_YYYYMMDD.log`에 진행 로그 기록, `dart_extractions` 테이블에 `ON CONFLICT DO UPDATE`로 upsert.
+
 ## [0.10.1.7] - 2026-06-16
 
 ### Added
