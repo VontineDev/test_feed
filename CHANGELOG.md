@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.1.9] - 2026-06-18
+
+### Changed
+- **`scripts/dart_screened_sync.py` — 추출 우선순위에 `has_gapjum` + `attention_q` 반영**: 종목분석 탭의 정렬 기준(유튜브 관심도 ↓ → 스테이지 ↑ → 스크리너)에 맞게 `_priority_score` 로직 개선. `has_gapjum`(갭 스크리너)을 `is_enhanced`와 동등한 신호로 추가(−10 보너스), `attention_q` Q2−5를 우선순위에 반영(Q2: −10, Q3-5: −20). `_collect_targets` SQL에 `BOOL_OR(has_gapjum)` 집계와 `youtube_attention_scores` NTILE(5) CTE LEFT JOIN 추가. 트리플콤보(S1·S2 + 스크리너 + Q2+)가 limit 30개 안에서 가장 먼저 추출됨. `--dry-run` 출력에 `[갭]`, `Q{n}`, `score=` 표시 추가.
+
 ## [0.10.1.8] - 2026-06-17
 
 ### Removed
