@@ -41,11 +41,20 @@ _DART_DIR = Path(__file__).parent.parent / "reports" / "dart"
 
 # ── 우선순위 점수 ─────────────────────────────────────────────
 
-def _priority_score(stage: int | None, is_enhanced: bool, appearance_count: int) -> int:
-    """낮을수록 먼저 처리. Stage1 강화 > Stage1 일반 > Stage2 > 스크리너."""
-    base = {1: 0, 2: 100, None: 200}.get(stage, 200)
-    enhanced_bonus = -10 if is_enhanced else 0
-    return base + enhanced_bonus - min(appearance_count, 10)
+def _priority_score(
+    stage: int | None,
+    is_enhanced: bool,
+    has_gapjum: bool,
+    appearance_count: int,
+    attention_q: int | None,
+) -> int:
+    """낮을수록 먼저 처리.
+    트리플콤보(S1·S2 + 스크리너 + attention Q2+) > S1+스크리너 > S1 > S2 > 스크리너 전용.
+    """
+    base            = {1: 0, 2: 100, None: 200}.get(stage, 200)
+    screener_bonus  = -10 if (is_enhanced or has_gapjum) else 0
+    attention_bonus = {2: -10, 3: -20, 4: -20, 5: -20}.get(attention_q or 0, 0)
+    return base + screener_bonus + attention_bonus - min(appearance_count, 10)
 
 
 # ── 대상 종목 수집 ────────────────────────────────────────────
@@ -61,17 +70,19 @@ async def _collect_targets(pool, days: int, force: bool) -> list[dict]:
                        MAX(stage)           AS stage,
                        COUNT(*)             AS appearance_count,
                        MAX(classified_date) AS last_seen,
-                       FALSE                AS is_enhanced
+                       FALSE                AS is_enhanced,
+                       FALSE                AS has_gapjum
                 FROM   stage_classifications
                 WHERE  classified_date >= CURRENT_DATE - ($1 * INTERVAL '1 day')
                 GROUP  BY ticker
                 UNION ALL
                 -- 차트 스크리너 종목
                 SELECT ticker,
-                       NULL                                           AS stage,
-                       COUNT(*)                                       AS appearance_count,
+                       NULL                                              AS stage,
+                       COUNT(*)                                         AS appearance_count,
                        to_date(MAX(week_of) || ' 1', 'IYYY-"W"IW ID') AS last_seen,
-                       BOOL_OR(is_enhanced)                           AS is_enhanced
+                       BOOL_OR(is_enhanced)                             AS is_enhanced,
+                       BOOL_OR(has_gapjum)                              AS has_gapjum
                 FROM   chart_signals
                 WHERE  week_of >= to_char(CURRENT_DATE - ($1 * INTERVAL '1 day'), 'IYYY-"W"IW')
                 GROUP  BY ticker
@@ -81,19 +92,29 @@ async def _collect_targets(pool, days: int, force: bool) -> list[dict]:
                        MIN(stage)            AS stage,
                        SUM(appearance_count) AS appearance_count,
                        MAX(last_seen)        AS last_seen,
-                       BOOL_OR(is_enhanced)  AS is_enhanced
+                       BOOL_OR(is_enhanced)  AS is_enhanced,
+                       BOOL_OR(has_gapjum)   AS has_gapjum
                 FROM   screened
                 GROUP  BY ticker
+            ),
+            yt AS (
+                SELECT ticker,
+                       NTILE(5) OVER (ORDER BY attention_score) AS attention_q
+                FROM   youtube_attention_scores
+                WHERE  window_end = (SELECT MAX(window_end) FROM youtube_attention_scores)
             )
             SELECT d.ticker,
                    COALESCE(tn.name_ko, SPLIT_PART(d.ticker, '.', 1)) AS name,
-                   d.stage, d.appearance_count, d.last_seen, d.is_enhanced,
+                   d.stage, d.appearance_count, d.last_seen,
+                   d.is_enhanced, d.has_gapjum,
+                   yt.attention_q,
                    dc.corp_code, dc.corp_name, dc.stock_code
             FROM   deduped d
             JOIN   dart_companies dc
                    ON dc.stock_code = SPLIT_PART(d.ticker, '.', 1)
                    AND dc.stock_code IS NOT NULL
             LEFT JOIN ticker_names tn ON tn.ticker = d.ticker
+            LEFT JOIN yt ON yt.ticker = SPLIT_PART(d.ticker, '.', 1)
             WHERE  ($2::boolean OR NOT EXISTS (
                        SELECT 1 FROM dart_extractions de
                        WHERE  de.corp_name = dc.corp_name
@@ -112,6 +133,8 @@ async def _collect_targets(pool, days: int, force: bool) -> list[dict]:
             "stage":            r["stage"],
             "appearance_count": r["appearance_count"],
             "is_enhanced":      r["is_enhanced"],
+            "has_gapjum":       r["has_gapjum"],
+            "attention_q":      r["attention_q"],
             "corp_code":        r["corp_code"],
             "corp_name":        r["corp_name"],
             "stock_code":       r["stock_code"],
@@ -119,7 +142,8 @@ async def _collect_targets(pool, days: int, force: bool) -> list[dict]:
 
     # 우선순위 정렬
     targets.sort(key=lambda t: _priority_score(
-        t["stage"], t["is_enhanced"], t["appearance_count"]
+        t["stage"], t["is_enhanced"], t["has_gapjum"],
+        t["appearance_count"], t["attention_q"],
     ))
     return targets
 
@@ -218,8 +242,15 @@ async def dart_screened_sync_job(
     for t in targets:
         tag = f"{t['corp_name']}({t['stock_code']}) S{t['stage'] or '-'}"
         if dry_run:
-            enhanced = " [강화]" if t["is_enhanced"] else ""
-            print(f"  {tag}{enhanced} 등장{t['appearance_count']}회")
+            badges = ""
+            if t["is_enhanced"]: badges += " [강화]"
+            if t["has_gapjum"]:  badges += " [갭]"
+            if t["attention_q"]: badges += f" Q{t['attention_q']}"
+            score = _priority_score(
+                t["stage"], t["is_enhanced"], t["has_gapjum"],
+                t["appearance_count"], t["attention_q"],
+            )
+            print(f"  {tag}{badges} 등장{t['appearance_count']}회  (score={score})")
             continue
 
         import httpx as _httpx
