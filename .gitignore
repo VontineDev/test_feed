@@ -31,6 +31,7 @@ reports/
 results/
 exports/
 dart/
+data/dart_snapshots/
 volume_pattern_report_*.html
 screening_report_*.txt
 
