@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.1.10] - 2026-06-18
+
+### Added
+- **`pyrightconfig.json`**: Pyright 타입 체커 설정 추적 시작. venv 경로·Python 3.14·basic 모드, `core/dart/dashboard/jobs/scripts/telegram` 포함, `venv/data/logs/results/reports` 제외.
+
+### Changed
+- **`.gitignore`**: `data/dart_snapshots/` 추가 — 런타임 생성 JSON 스냅샷 디렉터리 추적 제외.
+
 ## [0.10.1.9] - 2026-06-18
 
 ### Changed
