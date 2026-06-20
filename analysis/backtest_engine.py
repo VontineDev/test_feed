@@ -47,11 +47,19 @@ TX_COST_DEFAULT: float = _TX_BUY + _TX_SELL      # ≈ 0.0021 (0.210%)
 _S1_THRESHOLD = {"KOSPI": 0.05, "KOSDAQ": 0.07}  # Stage 1 일봉 상승률 기준
 
 MODE_KOR: dict[str, str] = {
-    "ichimoku": "이치모쿠(주봉)",
-    "stage":    "3단계(일봉)",
-    "cross":    "이치모쿠×3단계",
-    "stage2":   "Stage 2(일봉)",
-    "compose":  "조합전략",
+    "ichimoku":   "이치모쿠(주봉)",
+    "stage":      "3단계 v1.0(일봉)",
+    "cross":      "이치모쿠×3단계",
+    "stage2":     "Stage2 v1.0(일봉)",
+    "compose":    "조합전략",
+    "stage_v11":  "3단계 v1.1(일봉)",
+    "stage2_v11": "Stage2 v1.1(일봉)",
+    "stage_v12":  "3단계 v1.2(일봉)",
+    "stage2_v12": "Stage2 v1.2(일봉)",
+    "stage_v13":  "3단계 v1.3(일봉)",
+    "stage2_v13": "Stage2 v1.3(일봉)",
+    "stage_v14":  "3단계 v1.4(일봉)",
+    "stage_v15":  "3단계 v1.5(일봉)",
 }
 
 # ── 그리드서치로 검증된 최적 청산 파라미터 (모드별) ─────────────────
@@ -123,10 +131,13 @@ class BacktestConfig:
     trail_pct:       float = 0.0    # 트레일링 스탑: 일봉 High 고점 대비 하락률 (0이면 미사용)
     hard_stop_pct:   float = 0.08            # 하드 스탑 (진입 Close 대비, 기존 _STOP_LOSS_PCT와 동일)
     use_stage3_peak: bool  = False   # Stage3 peakout_flag 트리거 사용 여부
+    use_ma5_stop:    bool  = False   # MA5 이탈 손절 (Stage 1 빠른 손절, MA20 이전에 체크)
+    exit_model:      str   = "default"  # "default" | "model_a" (ATR+Breakeven) | "model_b" (3단계분할)
 
     def __post_init__(self) -> None:
-        if self.mode not in ("ichimoku", "stage", "cross", "stage2", "compose"):
-            raise ValueError(f"mode는 ichimoku|stage|cross|stage2|compose 중 하나여야 합니다: {self.mode!r}")
+        _valid_modes = ("ichimoku", "stage", "cross", "stage2", "compose", "stage_v11", "stage2_v11", "stage_v12", "stage2_v12", "stage_v13", "stage2_v13", "stage_v14", "stage_v15")
+        if self.mode not in _valid_modes:
+            raise ValueError(f"mode는 {' | '.join(_valid_modes)} 중 하나여야 합니다: {self.mode!r}")
         if self.mode == "compose":
             if not self.strategy:
                 raise ValueError("mode='compose'는 strategy 지정이 필요합니다 (예: 'AND-1')")
@@ -144,6 +155,8 @@ class BacktestConfig:
             raise ValueError(f"trail_pct는 0~1 범위여야 합니다: {self.trail_pct!r}")
         if self.hard_stop_pct <= 0 or self.hard_stop_pct > 0.5:
             raise ValueError(f"hard_stop_pct는 0초과 0.5 이하여야 합니다: {self.hard_stop_pct!r}")
+        if self.exit_model not in ("default", "model_a", "model_b"):
+            raise ValueError(f"exit_model은 default|model_a|model_b 중 하나여야 합니다: {self.exit_model!r}")
 
 
 @dataclass
@@ -424,8 +437,18 @@ class BacktestResult:
             cls = "pos" if v is not None and v > 0 else ("neg" if v is not None else "")
             return f'<td class="num {cls}" data-v="{dv}">{pct(v)}</td>'
 
-        _STAGE_LABEL = {"stage": ("S1", "s1"), "stage2": ("S2", "s2"),
-                        "cross": ("교차", "cross"), "ichimoku": ("이치", "ichi")}
+        _STAGE_LABEL = {
+            "stage":      ("S1",   "s1"),
+            "stage2":     ("S2",   "s2"),
+            "stage_v11":  ("S1.1", "s1"),
+            "stage2_v11": ("S2.1", "s2"),
+            "stage_v12":  ("S1.2", "s1"),
+            "stage2_v12": ("S2.2", "s2"),
+            "stage_v13":  ("S1.3", "s1"),
+            "stage2_v13": ("S2.3", "s2"),
+            "cross":      ("교차", "cross"),
+            "ichimoku":   ("이치", "ichi"),
+        }
         _SELL_CLS    = {
             "MA20 이탈": "sell-ma",
             "손절":      "sell-sl",
@@ -1012,7 +1035,7 @@ def _compute_group_metrics(
     hold_days_list = [s.hold_days for s in signals if s.hold_days is not None]
     if hold_days_list:
         m.avg_hold_days = statistics.mean(hold_days_list)
-    s1_sigs = [s for s in signals if s.mode == "stage"]
+    s1_sigs = [s for s in signals if s.mode in ("stage", "stage_v11", "stage_v12", "stage_v13", "stage_v14", "stage_v15")]
     if s1_sigs:
         m.s2_progression_rate = sum(1 for s in s1_sigs if s.s2_date is not None) / len(s1_sigs)
     s2_sigs = [s for s in signals if s.s2_date is not None]
@@ -1270,7 +1293,7 @@ def _replay_stage(
         if flow_lookup is not None:
             flow = flow_lookup.get((ticker, row_date))
             if flow is not None:
-                f_net, i_net = flow
+                f_net, i_net, _p_net = flow
                 if not (
                     (f_net is not None and f_net > 0)
                     or (i_net is not None and i_net > 0)
@@ -1287,6 +1310,889 @@ def _replay_stage(
         ))
 
     return signals
+
+
+def _replay_stage_v11(
+    ticker: str,
+    name: str,
+    daily_df: pd.DataFrame,
+    market: str,
+    config: BacktestConfig,
+    flow_lookup: Optional[dict[tuple[str, date], tuple[Optional[int], Optional[int]]]] = None,
+) -> list[SignalRecord]:
+    """Stage 1 v1.1 walk-forward 재현.
+
+    v1.0 조건 5개 모두 + 조건 6 신규: RSI(14) ≥ 50.
+    """
+    threshold = _S1_THRESHOLD.get(market, 0.05)
+
+    df     = daily_df.copy()
+    closes = df["Close"]
+    vols   = df["Volume"]
+
+    df["ma_20"]  = closes.rolling(20, min_periods=20).mean()
+    df["ma_60"]  = closes.rolling(60, min_periods=60).mean()
+    df["rsi_14"] = _compute_rsi(closes)
+
+    signals: list[SignalRecord] = []
+
+    for i in range(21, len(df)):
+        row_date = df.index[i].date()
+        if row_date < config.start or row_date > config.end:
+            continue
+
+        cur  = df.iloc[i]
+        prev = df.iloc[i - 1]
+
+        if pd.isna(cur["Close"]) or pd.isna(prev["Close"]) or float(prev["Close"]) <= 0:
+            continue
+
+        close_today = float(cur["Close"])
+        close_prev  = float(prev["Close"])
+
+        # 조건 1: 상승률
+        change_pct = (close_today - close_prev) / close_prev
+        if change_pct < threshold:
+            continue
+
+        # 조건 2: 거래량
+        if pd.isna(cur["Volume"]):
+            continue
+        vol_today = float(cur["Volume"])
+        avg_vol20 = float(vols.iloc[i - 20:i].mean())
+        if avg_vol20 <= 0 or vol_today < 2.0 * avg_vol20:
+            continue
+
+        # 조건 3: MA20 / MA60
+        if pd.isna(cur["ma_20"]) or pd.isna(cur["ma_60"]):
+            continue
+        if close_today <= float(cur["ma_20"]) or close_today <= float(cur["ma_60"]):
+            continue
+
+        # 조건 4: 52주 고점 괴리율
+        closes_52 = closes.iloc[max(0, i - 251): i + 1].dropna()
+        if closes_52.empty:
+            continue
+        week52_high = float(closes_52.max())
+        if week52_high <= 0 or (week52_high - close_today) / week52_high > 0.20:
+            continue
+
+        # 조건 5: 수급
+        if flow_lookup is not None:
+            flow = flow_lookup.get((ticker, row_date))
+            if flow is not None:
+                f_net, i_net, _p_net = flow
+                if not (
+                    (f_net is not None and f_net > 0)
+                    or (i_net is not None and i_net > 0)
+                ):
+                    continue
+
+        # 조건 6 (v1.1): RSI(14) ≥ 50
+        rsi = cur.get("rsi_14")
+        if rsi is None or pd.isna(rsi) or float(rsi) < 50:
+            continue
+
+        signals.append(SignalRecord(
+            ticker=ticker,
+            name=name,
+            signal_date=row_date,
+            close_at_signal=close_today,
+            mode="stage_v11",
+            market=market,
+        ))
+
+    return signals
+
+
+def _replay_stage2_v11(
+    ticker: str,
+    name: str,
+    daily_df: pd.DataFrame,
+    market: str,
+    config: BacktestConfig,
+) -> list[SignalRecord]:
+    """Stage 2 v1.1 walk-forward 재현.
+
+    Stage 1 v1.1 신호 기반 + C3 거래대금 범위 0.30~0.60 (v1.0: 0.25~0.65).
+    """
+    s1_cfg = _dc_replace(config, mode="stage_v11", start=config.start - timedelta(days=21))
+    s1_signals = _replay_stage_v11(ticker, name, daily_df, market, s1_cfg)
+    if not s1_signals:
+        return []
+
+    idx_map: dict[date, int] = {}
+    for i, ts in enumerate(daily_df.index):
+        d = ts.date() if hasattr(ts, "date") else ts
+        idx_map[d] = i
+
+    df = daily_df.copy()
+    df["ma_20"] = df["Close"].rolling(20, min_periods=20).mean()
+
+    s2_signals: list[SignalRecord] = []
+    seen_dates: set[date] = set()
+
+    for s1 in s1_signals:
+        s1_idx = idx_map.get(s1.signal_date)
+        if s1_idx is None:
+            continue
+
+        s1_close = s1.close_at_signal
+        if s1_close <= 0:
+            continue
+
+        s1_row = df.iloc[s1_idx]
+        if pd.isna(s1_row["Volume"]) or pd.isna(s1_row["Close"]):
+            continue
+        txamt_s1 = float(s1_row["Volume"]) * float(s1_row["Close"])
+        if txamt_s1 <= 0:
+            continue
+
+        cutoff = s1.signal_date + timedelta(days=14)
+
+        for j in range(s1_idx + 1, len(df)):
+            ts       = df.index[j]
+            row_date = ts.date() if hasattr(ts, "date") else ts
+            if row_date > cutoff:
+                break
+            if row_date < config.start or row_date > config.end:
+                continue
+            if row_date in seen_dates:
+                continue
+
+            cur = df.iloc[j]
+            if pd.isna(cur["Close"]) or pd.isna(cur["Volume"]):
+                continue
+
+            c_today     = float(cur["Close"])
+            v_today     = float(cur["Volume"])
+            txamt_today = v_today * c_today
+            ma20        = cur["ma_20"]
+
+            # C1: -5% ~ -20% 되돌림
+            if not (0.80 <= c_today / s1_close <= 0.95):
+                continue
+            # C2: close ≥ MA20 × 0.95
+            if pd.isna(ma20) or c_today < float(ma20) * 0.95:
+                continue
+            # C3 v1.1: 거래대금 비율 [0.30, 0.60]
+            if not (0.30 <= txamt_today / txamt_s1 <= 0.60):
+                continue
+
+            seen_dates.add(row_date)
+            s2_signals.append(SignalRecord(
+                ticker=ticker,
+                name=name,
+                signal_date=row_date,
+                close_at_signal=c_today,
+                mode="stage2_v11",
+                market=market,
+            ))
+            break
+
+    return s2_signals
+
+
+def _replay_stage_v12(
+    ticker: str,
+    name: str,
+    daily_df: pd.DataFrame,
+    market: str,
+    config: "BacktestConfig",
+    flow_lookup: Optional[dict] = None,
+    streak_lookup: Optional[dict] = None,
+    shares_lookup: Optional[dict] = None,
+) -> list[SignalRecord]:
+    """Stage 1 v1.2 walk-forward 재현.
+
+    v1.1 조건 모두 + 조건 7: 수급 강화 + 조건 8: 개인 순매수 > 0 + 조건 9: 외인+기관 ≥ 상장주식수 0.2%.
+    streak_lookup: {(ticker, date): (foreign_streak, inst_streak)}
+    shares_lookup: {yfinance_symbol: listed_shares}
+    """
+    threshold = _S1_THRESHOLD.get(market, 0.05)
+
+    df     = daily_df.copy()
+    closes = df["Close"]
+    vols   = df["Volume"]
+
+    df["ma_20"]     = closes.rolling(20, min_periods=20).mean()
+    df["ma_60"]     = closes.rolling(60, min_periods=60).mean()
+    df["ma_20_5d"]  = closes.rolling(20, min_periods=20).mean().shift(5)
+    df["rsi_14"]    = _compute_rsi(closes)
+
+    signals: list[SignalRecord] = []
+
+    for i in range(21, len(df)):
+        row_date = df.index[i].date()
+        if row_date < config.start or row_date > config.end:
+            continue
+
+        cur  = df.iloc[i]
+        prev = df.iloc[i - 1]
+
+        if pd.isna(cur["Close"]) or pd.isna(prev["Close"]) or float(prev["Close"]) <= 0:
+            continue
+
+        close_today = float(cur["Close"])
+        close_prev  = float(prev["Close"])
+
+        # 조건 1: 상승률
+        if (close_today - close_prev) / close_prev < threshold:
+            continue
+
+        # 조건 2: 거래량
+        if pd.isna(cur["Volume"]):
+            continue
+        vol_today = float(cur["Volume"])
+        avg_vol20 = float(vols.iloc[i - 20:i].mean())
+        if avg_vol20 <= 0 or vol_today < 2.0 * avg_vol20:
+            continue
+
+        # 조건 3: MA20 / MA60
+        if pd.isna(cur["ma_20"]) or pd.isna(cur["ma_60"]):
+            continue
+        if close_today <= float(cur["ma_20"]) or close_today <= float(cur["ma_60"]):
+            continue
+
+        # 조건 4: 52주 고점 괴리율
+        closes_52 = closes.iloc[max(0, i - 251): i + 1].dropna()
+        if closes_52.empty:
+            continue
+        week52_high = float(closes_52.max())
+        if week52_high <= 0 or (week52_high - close_today) / week52_high > 0.20:
+            continue
+
+        # 조건 6 (v1.1): RSI(14) >= 50
+        rsi = cur.get("rsi_14")
+        if rsi is None or pd.isna(rsi) or float(rsi) < 50:
+            continue
+
+        # 조건 8 (v1.2): 개인 순매수 > 0
+        if flow_lookup is not None:
+            flow = flow_lookup.get((ticker, row_date))
+            if flow is not None:
+                f_net, i_net, p_net = flow
+                if p_net is not None and p_net <= 0:
+                    continue
+
+        # 조건 7 (v1.2): 수급 강화 — (외인>0 AND 기관>=0) OR 기관 streak >= 3
+        if flow_lookup is not None or streak_lookup is not None:
+            f_net = i_net = f_str = i_str = None
+            if flow_lookup is not None:
+                flow = flow_lookup.get((ticker, row_date))
+                if flow is not None:
+                    f_net, i_net, _p = flow
+            if streak_lookup is not None:
+                streak = streak_lookup.get((ticker, row_date))
+                if streak is not None:
+                    f_str, i_str = streak
+            # 데이터가 있는 경우에만 필터 적용
+            if f_net is not None or i_net is not None or f_str is not None:
+                both_buy  = f_net is not None and f_net > 0 and i_net is not None and i_net >= 0
+                inst_3day = i_str is not None and i_str >= 3
+                if not (both_buy or inst_3day):
+                    continue
+
+        # 조건 9 (v1.2): 외인+기관 합산 순매수 ≥ 상장주식수 0.2% (당일, 데이터 없으면 통과)
+        if flow_lookup is not None and shares_lookup is not None:
+            shares = shares_lookup.get(ticker)
+            if shares and shares > 0:
+                flow9 = flow_lookup.get((ticker, row_date))
+                if flow9 is not None:
+                    fn9, in9, _ = flow9
+                    if fn9 is not None and in9 is not None:
+                        if (fn9 + in9) < shares * 0.002:
+                            continue
+
+        signals.append(SignalRecord(
+            ticker=ticker,
+            name=name,
+            signal_date=row_date,
+            close_at_signal=close_today,
+            mode="stage_v12",
+            market=market,
+        ))
+
+    return signals
+
+
+def _replay_stage2_v12(
+    ticker: str,
+    name: str,
+    daily_df: pd.DataFrame,
+    market: str,
+    config: "BacktestConfig",
+) -> list[SignalRecord]:
+    """Stage 2 v1.2 walk-forward 재현.
+
+    Stage 1 v1.2 신호 기반 + C3 [0.30, 0.60] + C4 20일 평균 대비 100~150% + C5 고저폭 축소.
+    """
+    s1_cfg     = _dc_replace(config, mode="stage_v12", start=config.start - timedelta(days=21))
+    s1_signals = _replay_stage_v12(ticker, name, daily_df, market, s1_cfg)
+    if not s1_signals:
+        return []
+
+    idx_map: dict[date, int] = {}
+    for i, ts in enumerate(daily_df.index):
+        d = ts.date() if hasattr(ts, "date") else ts
+        idx_map[d] = i
+
+    df      = daily_df.copy()
+    closes  = df["Close"]
+    df["ma_20"] = closes.rolling(20, min_periods=20).mean()
+
+    # 고저폭 비율 시리즈 (20일 rolling 평균 기준)
+    if "High" in df.columns and "Low" in df.columns:
+        range_ratio = (df["High"] - df["Low"]) / df["Close"].replace(0, float("nan"))
+        df["avg_range_ratio"] = range_ratio.shift(1).rolling(20, min_periods=10).mean()
+        df["range_ratio"]     = range_ratio
+    else:
+        df["avg_range_ratio"] = float("nan")
+        df["range_ratio"]     = float("nan")
+
+    s2_signals: list[SignalRecord] = []
+    seen_dates: set[date] = set()
+
+    for s1 in s1_signals:
+        s1_idx = idx_map.get(s1.signal_date)
+        if s1_idx is None:
+            continue
+
+        s1_close = s1.close_at_signal
+        if s1_close <= 0:
+            continue
+
+        s1_row = df.iloc[s1_idx]
+        if pd.isna(s1_row["Volume"]) or pd.isna(s1_row["Close"]):
+            continue
+        txamt_s1 = float(s1_row["Volume"]) * float(s1_row["Close"])
+        if txamt_s1 <= 0:
+            continue
+
+        cutoff = s1.signal_date + timedelta(days=14)
+
+        for j in range(s1_idx + 1, len(df)):
+            ts       = df.index[j]
+            row_date = ts.date() if hasattr(ts, "date") else ts
+            if row_date > cutoff:
+                break
+            if row_date < config.start or row_date > config.end:
+                continue
+            if row_date in seen_dates:
+                continue
+
+            cur = df.iloc[j]
+            if pd.isna(cur["Close"]) or pd.isna(cur["Volume"]):
+                continue
+
+            c_today     = float(cur["Close"])
+            v_today     = float(cur["Volume"])
+            txamt_today = v_today * c_today
+            ma20        = cur["ma_20"]
+
+            # C1: -5% ~ -20% 되돌림
+            if not (0.80 <= c_today / s1_close <= 0.95):
+                continue
+            # C2: close >= MA20 * 0.95
+            if pd.isna(ma20) or c_today < float(ma20) * 0.95:
+                continue
+            # C3 v1.2: 거래대금 비율 [0.30, 0.60]
+            if not (0.30 <= txamt_today / txamt_s1 <= 0.60):
+                continue
+            # C4 v1.2: 거래대금이 20일 평균 대비 100~150%
+            avg_txamt20 = float(closes.iloc[max(0, j - 20):j].mean()) * float(
+                df["Volume"].iloc[max(0, j - 20):j].mean()
+            ) if j >= 20 else 0.0
+            if avg_txamt20 > 0 and not (1.0 <= txamt_today / avg_txamt20 <= 1.5):
+                continue
+            # C5 v1.2: 일일 고저폭이 20일 평균 대비 70% 이하
+            rr_today = cur.get("range_ratio")
+            rr_avg   = cur.get("avg_range_ratio")
+            if (
+                rr_today is not None and not pd.isna(rr_today)
+                and rr_avg   is not None and not pd.isna(rr_avg)
+                and float(rr_avg) > 0
+                and float(rr_today) > float(rr_avg) * 0.70
+            ):
+                continue
+
+            seen_dates.add(row_date)
+            s2_signals.append(SignalRecord(
+                ticker=ticker,
+                name=name,
+                signal_date=row_date,
+                close_at_signal=c_today,
+                mode="stage2_v12",
+                market=market,
+            ))
+            break
+
+    return s2_signals
+
+
+def _replay_stage_v13(
+    ticker: str,
+    name: str,
+    daily_df: pd.DataFrame,
+    market: str,
+    config: "BacktestConfig",
+    flow_lookup: Optional[dict] = None,
+    streak_lookup: Optional[dict] = None,
+    shares_lookup: Optional[dict] = None,
+) -> list[SignalRecord]:
+    """Stage 1 v1.3 walk-forward 재현.
+
+    v1.2에서 조건 8(개인 순매수 > 0) 제거. close > MA20은 조건 3에 이미 포함.
+    """
+    threshold = _S1_THRESHOLD.get(market, 0.05)
+
+    df     = daily_df.copy()
+    closes = df["Close"]
+    vols   = df["Volume"]
+
+    df["ma_20"]  = closes.rolling(20, min_periods=20).mean()
+    df["ma_60"]  = closes.rolling(60, min_periods=60).mean()
+    df["rsi_14"] = _compute_rsi(closes)
+
+    signals: list[SignalRecord] = []
+
+    for i in range(21, len(df)):
+        row_date = df.index[i].date()
+        if row_date < config.start or row_date > config.end:
+            continue
+
+        cur  = df.iloc[i]
+        prev = df.iloc[i - 1]
+
+        if pd.isna(cur["Close"]) or pd.isna(prev["Close"]) or float(prev["Close"]) <= 0:
+            continue
+
+        close_today = float(cur["Close"])
+        close_prev  = float(prev["Close"])
+
+        # 조건 1: 상승률
+        if (close_today - close_prev) / close_prev < threshold:
+            continue
+
+        # 조건 2: 거래량
+        if pd.isna(cur["Volume"]):
+            continue
+        vol_today = float(cur["Volume"])
+        avg_vol20 = float(vols.iloc[i - 20:i].mean())
+        if avg_vol20 <= 0 or vol_today < 2.0 * avg_vol20:
+            continue
+
+        # 조건 3: MA20 / MA60
+        if pd.isna(cur["ma_20"]) or pd.isna(cur["ma_60"]):
+            continue
+        if close_today <= float(cur["ma_20"]) or close_today <= float(cur["ma_60"]):
+            continue
+
+        # 조건 4: 52주 고점 괴리율
+        closes_52 = closes.iloc[max(0, i - 251): i + 1].dropna()
+        if closes_52.empty:
+            continue
+        week52_high = float(closes_52.max())
+        if week52_high <= 0 or (week52_high - close_today) / week52_high > 0.20:
+            continue
+
+        # 조건 6 (v1.1): RSI(14) >= 50
+        rsi = cur.get("rsi_14")
+        if rsi is None or pd.isna(rsi) or float(rsi) < 50:
+            continue
+
+        # 조건 7 (v1.2): 수급 강화 — (외인>0 AND 기관>=0) OR 기관 streak >= 3
+        if flow_lookup is not None or streak_lookup is not None:
+            f_net = i_net = f_str = i_str = None
+            if flow_lookup is not None:
+                flow = flow_lookup.get((ticker, row_date))
+                if flow is not None:
+                    f_net, i_net, _p = flow
+            if streak_lookup is not None:
+                streak = streak_lookup.get((ticker, row_date))
+                if streak is not None:
+                    f_str, i_str = streak
+            if f_net is not None or i_net is not None or f_str is not None:
+                both_buy  = f_net is not None and f_net > 0 and i_net is not None and i_net >= 0
+                inst_3day = i_str is not None and i_str >= 3
+                if not (both_buy or inst_3day):
+                    continue
+
+        # 조건 9 (v1.2): 외인+기관 합산 순매수 ≥ 상장주식수 0.2% (당일, 데이터 없으면 통과)
+        if flow_lookup is not None and shares_lookup is not None:
+            shares = shares_lookup.get(ticker)
+            if shares and shares > 0:
+                flow9 = flow_lookup.get((ticker, row_date))
+                if flow9 is not None:
+                    fn9, in9, _ = flow9
+                    if fn9 is not None and in9 is not None:
+                        if (fn9 + in9) < shares * 0.002:
+                            continue
+
+        signals.append(SignalRecord(
+            ticker=ticker,
+            name=name,
+            signal_date=row_date,
+            close_at_signal=close_today,
+            mode="stage_v13",
+            market=market,
+        ))
+
+    return signals
+
+
+def _replay_stage_v14(
+    ticker: str,
+    name: str,
+    daily_df: pd.DataFrame,
+    market: str,
+    config: "BacktestConfig",
+    flow_lookup: Optional[dict] = None,
+    streak_lookup: Optional[dict] = None,
+    shares_lookup: Optional[dict] = None,
+) -> list[SignalRecord]:
+    """Stage 1 v1.4 walk-forward 재현.
+
+    v1.3에서 거래량 비교 기준을 MA20 → MA30으로 변경.
+    MA20 기준은 신호 직전 다른 급등이 있으면 평균값이 왜곡되는 문제가 있음.
+    MA30은 더 안정적인 기저 거래량을 반영.
+    """
+    threshold = _S1_THRESHOLD.get(market, 0.05)
+
+    df     = daily_df.copy()
+    closes = df["Close"]
+    vols   = df["Volume"]
+
+    df["ma_20"]     = closes.rolling(20, min_periods=20).mean()
+    df["ma_60"]     = closes.rolling(60, min_periods=60).mean()
+    df["rsi_14"]    = _compute_rsi(closes)
+    df["avg_vol30"] = vols.rolling(30, min_periods=30).mean()  # MA30 사전 계산
+
+    signals: list[SignalRecord] = []
+
+    for i in range(21, len(df)):
+        row_date = df.index[i].date()
+        if row_date < config.start or row_date > config.end:
+            continue
+
+        cur  = df.iloc[i]
+        prev = df.iloc[i - 1]
+
+        if pd.isna(cur["Close"]) or pd.isna(prev["Close"]) or float(prev["Close"]) <= 0:
+            continue
+
+        close_today = float(cur["Close"])
+        close_prev  = float(prev["Close"])
+
+        # 조건 1: 상승률
+        if (close_today - close_prev) / close_prev < threshold:
+            continue
+
+        # 조건 2: 거래량 ≥ 2× MA30 (v1.4 핵심 변경)
+        if pd.isna(cur["Volume"]) or pd.isna(cur["avg_vol30"]):
+            continue
+        vol_today  = float(cur["Volume"])
+        avg_vol30  = float(cur["avg_vol30"])
+        if avg_vol30 <= 0 or vol_today < 2.0 * avg_vol30:
+            continue
+
+        # 조건 3: MA20 / MA60
+        if pd.isna(cur["ma_20"]) or pd.isna(cur["ma_60"]):
+            continue
+        if close_today <= float(cur["ma_20"]) or close_today <= float(cur["ma_60"]):
+            continue
+
+        # 조건 4: 52주 고점 괴리율
+        closes_52 = closes.iloc[max(0, i - 251): i + 1].dropna()
+        if closes_52.empty:
+            continue
+        week52_high = float(closes_52.max())
+        if week52_high <= 0 or (week52_high - close_today) / week52_high > 0.20:
+            continue
+
+        # 조건 6: RSI(14) >= 50
+        rsi = cur.get("rsi_14")
+        if rsi is None or pd.isna(rsi) or float(rsi) < 50:
+            continue
+
+        # 조건 7: 수급 강화 — (외인>0 AND 기관>=0) OR 기관 streak >= 3
+        if flow_lookup is not None or streak_lookup is not None:
+            f_net = i_net = f_str = i_str = None
+            if flow_lookup is not None:
+                flow = flow_lookup.get((ticker, row_date))
+                if flow is not None:
+                    f_net, i_net, _p = flow
+            if streak_lookup is not None:
+                streak = streak_lookup.get((ticker, row_date))
+                if streak is not None:
+                    f_str, i_str = streak
+            if f_net is not None or i_net is not None or f_str is not None:
+                both_buy  = f_net is not None and f_net > 0 and i_net is not None and i_net >= 0
+                inst_3day = i_str is not None and i_str >= 3
+                if not (both_buy or inst_3day):
+                    continue
+
+        # 조건 9: 외인+기관 합산 순매수 ≥ 상장주식수 0.2%
+        if flow_lookup is not None and shares_lookup is not None:
+            shares = shares_lookup.get(ticker)
+            if shares and shares > 0:
+                flow9 = flow_lookup.get((ticker, row_date))
+                if flow9 is not None:
+                    fn9, in9, _ = flow9
+                    if fn9 is not None and in9 is not None:
+                        if (fn9 + in9) < shares * 0.002:
+                            continue
+
+        signals.append(SignalRecord(
+            ticker=ticker,
+            name=name,
+            signal_date=row_date,
+            close_at_signal=close_today,
+            mode="stage_v14",
+            market=market,
+        ))
+
+    return signals
+
+
+def _replay_stage_v15(
+    ticker: str,
+    name: str,
+    daily_df: pd.DataFrame,
+    market: str,
+    config: "BacktestConfig",
+    flow_lookup: Optional[dict] = None,
+    streak_lookup: Optional[dict] = None,
+    shares_lookup: Optional[dict] = None,
+) -> list[SignalRecord]:
+    """Stage 1 v1.5 walk-forward 재현.
+
+    v1.4 + 조건 10: 20일 박스권 이탈 — close > 직전 20일 High 최고값.
+    단순 반등이 아닌 박스 상단 돌파 breakout만 통과.
+    """
+    threshold = _S1_THRESHOLD.get(market, 0.05)
+
+    df     = daily_df.copy()
+    closes = df["Close"]
+    vols   = df["Volume"]
+
+    df["ma_20"]     = closes.rolling(20, min_periods=20).mean()
+    df["ma_60"]     = closes.rolling(60, min_periods=60).mean()
+    df["rsi_14"]    = _compute_rsi(closes)
+    df["avg_vol30"] = vols.rolling(30, min_periods=30).mean()
+    df["high_20d"]  = df["High"].shift(1).rolling(20, min_periods=20).max()  # 당일 제외 전 20일 High
+
+    signals: list[SignalRecord] = []
+
+    for i in range(21, len(df)):
+        row_date = df.index[i].date()
+        if row_date < config.start or row_date > config.end:
+            continue
+
+        cur  = df.iloc[i]
+        prev = df.iloc[i - 1]
+
+        if pd.isna(cur["Close"]) or pd.isna(prev["Close"]) or float(prev["Close"]) <= 0:
+            continue
+
+        close_today = float(cur["Close"])
+        close_prev  = float(prev["Close"])
+
+        # 조건 1: 상승률
+        if (close_today - close_prev) / close_prev < threshold:
+            continue
+
+        # 조건 2: 거래량 ≥ 2× MA30
+        if pd.isna(cur["Volume"]) or pd.isna(cur["avg_vol30"]):
+            continue
+        vol_today = float(cur["Volume"])
+        avg_vol30 = float(cur["avg_vol30"])
+        if avg_vol30 <= 0 or vol_today < 2.0 * avg_vol30:
+            continue
+
+        # 조건 3: MA20 / MA60
+        if pd.isna(cur["ma_20"]) or pd.isna(cur["ma_60"]):
+            continue
+        if close_today <= float(cur["ma_20"]) or close_today <= float(cur["ma_60"]):
+            continue
+
+        # 조건 4: 52주 고점 괴리율
+        closes_52 = closes.iloc[max(0, i - 251): i + 1].dropna()
+        if closes_52.empty:
+            continue
+        week52_high = float(closes_52.max())
+        if week52_high <= 0 or (week52_high - close_today) / week52_high > 0.20:
+            continue
+
+        # 조건 6: RSI(14) >= 50
+        rsi = cur.get("rsi_14")
+        if rsi is None or pd.isna(rsi) or float(rsi) < 50:
+            continue
+
+        # 조건 7: 수급 강화 — (외인>0 AND 기관>=0) OR 기관 streak >= 3
+        if flow_lookup is not None or streak_lookup is not None:
+            f_net = i_net = f_str = i_str = None
+            if flow_lookup is not None:
+                flow = flow_lookup.get((ticker, row_date))
+                if flow is not None:
+                    f_net, i_net, _p = flow
+            if streak_lookup is not None:
+                streak = streak_lookup.get((ticker, row_date))
+                if streak is not None:
+                    f_str, i_str = streak
+            if f_net is not None or i_net is not None or f_str is not None:
+                both_buy  = f_net is not None and f_net > 0 and i_net is not None and i_net >= 0
+                inst_3day = i_str is not None and i_str >= 3
+                if not (both_buy or inst_3day):
+                    continue
+
+        # 조건 9: 외인+기관 합산 순매수 ≥ 상장주식수 0.2%
+        if flow_lookup is not None and shares_lookup is not None:
+            shares = shares_lookup.get(ticker)
+            if shares and shares > 0:
+                flow9 = flow_lookup.get((ticker, row_date))
+                if flow9 is not None:
+                    fn9, in9, _ = flow9
+                    if fn9 is not None and in9 is not None:
+                        if (fn9 + in9) < shares * 0.002:
+                            continue
+
+        # 조건 10 (v1.5): 20일 박스권 이탈 — close > 직전 20일 High 최고값
+        high_20d = cur.get("high_20d")
+        if high_20d is None or pd.isna(high_20d) or close_today <= float(high_20d):
+            continue
+
+        signals.append(SignalRecord(
+            ticker=ticker,
+            name=name,
+            signal_date=row_date,
+            close_at_signal=close_today,
+            mode="stage_v15",
+            market=market,
+        ))
+
+    return signals
+
+
+def _replay_stage2_v13(
+    ticker: str,
+    name: str,
+    daily_df: pd.DataFrame,
+    market: str,
+    config: "BacktestConfig",
+    flow_lookup: Optional[dict] = None,
+) -> list[SignalRecord]:
+    """Stage 2 v1.3 walk-forward 재현.
+
+    Stage 1 v1.3 신호 기반 + v1.2 조건 전체 + C6 개인 출회(personal_net ≤ 0).
+    """
+    s1_cfg     = _dc_replace(config, mode="stage_v13", start=config.start - timedelta(days=21))
+    s1_signals = _replay_stage_v13(ticker, name, daily_df, market, s1_cfg)
+    if not s1_signals:
+        return []
+
+    idx_map: dict[date, int] = {}
+    for i, ts in enumerate(daily_df.index):
+        d = ts.date() if hasattr(ts, "date") else ts
+        idx_map[d] = i
+
+    df      = daily_df.copy()
+    closes  = df["Close"]
+    df["ma_20"] = closes.rolling(20, min_periods=20).mean()
+
+    if "High" in df.columns and "Low" in df.columns:
+        range_ratio = (df["High"] - df["Low"]) / df["Close"].replace(0, float("nan"))
+        df["avg_range_ratio"] = range_ratio.shift(1).rolling(20, min_periods=10).mean()
+        df["range_ratio"]     = range_ratio
+    else:
+        df["avg_range_ratio"] = float("nan")
+        df["range_ratio"]     = float("nan")
+
+    s2_signals: list[SignalRecord] = []
+    seen_dates: set[date] = set()
+
+    for s1 in s1_signals:
+        s1_idx = idx_map.get(s1.signal_date)
+        if s1_idx is None:
+            continue
+
+        s1_close = s1.close_at_signal
+        if s1_close <= 0:
+            continue
+
+        s1_row = df.iloc[s1_idx]
+        if pd.isna(s1_row["Volume"]) or pd.isna(s1_row["Close"]):
+            continue
+        txamt_s1 = float(s1_row["Volume"]) * float(s1_row["Close"])
+        if txamt_s1 <= 0:
+            continue
+
+        cutoff = s1.signal_date + timedelta(days=14)
+
+        for j in range(s1_idx + 1, len(df)):
+            ts       = df.index[j]
+            row_date = ts.date() if hasattr(ts, "date") else ts
+            if row_date > cutoff:
+                break
+            if row_date < config.start or row_date > config.end:
+                continue
+            if row_date in seen_dates:
+                continue
+
+            cur = df.iloc[j]
+            if pd.isna(cur["Close"]) or pd.isna(cur["Volume"]):
+                continue
+
+            c_today     = float(cur["Close"])
+            v_today     = float(cur["Volume"])
+            txamt_today = v_today * c_today
+            ma20        = cur["ma_20"]
+
+            # C1: -5% ~ -20% 되돌림
+            if not (0.80 <= c_today / s1_close <= 0.95):
+                continue
+            # C2: close >= MA20 * 0.95
+            if pd.isna(ma20) or c_today < float(ma20) * 0.95:
+                continue
+            # C3: 거래대금 비율 [0.30, 0.60]
+            if not (0.30 <= txamt_today / txamt_s1 <= 0.60):
+                continue
+            # C4: 거래대금이 20일 평균 대비 100~150%
+            avg_txamt20 = float(closes.iloc[max(0, j - 20):j].mean()) * float(
+                df["Volume"].iloc[max(0, j - 20):j].mean()
+            ) if j >= 20 else 0.0
+            if avg_txamt20 > 0 and not (1.0 <= txamt_today / avg_txamt20 <= 1.5):
+                continue
+            # C5: 일일 고저폭이 20일 평균 대비 70% 이하
+            rr_today = cur.get("range_ratio")
+            rr_avg   = cur.get("avg_range_ratio")
+            if (
+                rr_today is not None and not pd.isna(rr_today)
+                and rr_avg   is not None and not pd.isna(rr_avg)
+                and float(rr_avg) > 0
+                and float(rr_today) > float(rr_avg) * 0.70
+            ):
+                continue
+            # C6 (v1.3): 개인 출회 — personal_net ≤ 0 (데이터 없으면 통과)
+            if flow_lookup is not None:
+                flow_c6 = flow_lookup.get((ticker, row_date))
+                if flow_c6 is not None:
+                    _, _, p_net = flow_c6
+                    if p_net is not None and p_net > 0:
+                        continue
+
+            seen_dates.add(row_date)
+            s2_signals.append(SignalRecord(
+                ticker=ticker,
+                name=name,
+                signal_date=row_date,
+                close_at_signal=c_today,
+                mode="stage2_v13",
+                market=market,
+            ))
+            break
+
+    return s2_signals
 
 
 def _apply_cross_filter(signals: list[SignalRecord]) -> list[SignalRecord]:
@@ -1552,6 +2458,276 @@ def _compute_exit_logic(
         sig.blended_return = sig.tp1_ret
 
 
+def _compute_atr(df: "pd.DataFrame", period: int = 14) -> "pd.Series":
+    """True Range 기반 ATR 계산 (period일 단순이동평균)."""
+    high  = df["High"].astype(float)
+    low   = df["Low"].astype(float)
+    close = df["Close"].astype(float)
+    prev_close = close.shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low  - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    return tr.rolling(period, min_periods=period).mean()
+
+
+def _compute_exit_logic_model_a(
+    sig: "SignalRecord",
+    df: "pd.DataFrame",
+    entry_idx: int,
+    entry_price: float,
+    cfg: "BacktestConfig",
+    stage3_peakout_dates: "frozenset[date]",
+    atr_series: "pd.Series",
+) -> None:
+    """모델 A: ATR 기반 가변형 트레일링 스탑 + Breakeven Rule.
+
+    1. Hard stop: Close ≤ entry - 2×ATR(entry일)
+    2. 1차 TP(tp1_pct, 기본 25%): 50% 청산 + 잔여분 손절가를 entry(본전)로 상향
+    3. Breakeven stop: tp1 이후 Close ≤ entry → 잔여분 청산
+    4. Stage3 피크아웃: 잔여분 청산
+    5. Chandelier Exit: Close ≤ tp1 이후 최고가 - 3×ATR(현재) → 잔여분 청산
+    6. 기간 종료
+    """
+    raw_atr      = atr_series.iloc[entry_idx]
+    atr_at_entry = float(raw_atr) if not pd.isna(raw_atr) else entry_price * 0.05
+    hard_stop    = entry_price - 2.0 * atr_at_entry
+    tp1_pct      = cfg.tp1_pct if cfg.tp1_pct > 0 else 0.25
+    tp1_price    = entry_price * (1.0 + tp1_pct)
+    tx_half      = cfg.tx_cost_rt / 2.0
+
+    tp1_triggered  = False
+    breakeven_stop = 0.0
+    watermark      = entry_price
+
+    def _ret(close: float, cost: float) -> float:
+        return (close / entry_price - 1.0) - cost
+
+    for j in range(entry_idx + 1, len(df)):
+        ts       = df.index[j]
+        row_date = ts.date() if hasattr(ts, "date") else ts
+        cur      = df.iloc[j]
+        if pd.isna(cur["Close"]):
+            continue
+
+        close   = float(cur["Close"])
+        high    = float(cur["High"]) if not pd.isna(cur["High"]) else close
+        is_last = (j == len(df) - 1)
+
+        raw_atr_cur = atr_series.iloc[j]
+        atr_cur = float(raw_atr_cur) if not pd.isna(raw_atr_cur) else atr_at_entry
+
+        if tp1_triggered:
+            watermark = max(watermark, high)
+
+        # 1. Hard stop (1차 TP 전)
+        if not tp1_triggered and close <= hard_stop:
+            ret = _ret(close, cfg.tx_cost_rt)
+            sig.final_exit_date = row_date
+            sig.final_exit_ret  = ret
+            sig.final_exit_type = "hard_stop"
+            sig.sell_date   = row_date
+            sig.sell_reason = "ATR손절 (2×ATR)"
+            sig.sell_return = ret
+            sig.hold_days   = (row_date - sig.signal_date).days
+            break
+
+        # Breakeven stop (1차 TP 이후 Close ≤ entry)
+        if tp1_triggered and close <= breakeven_stop:
+            ret = _ret(close, tx_half)
+            sig.final_exit_date = row_date
+            sig.final_exit_ret  = ret
+            sig.final_exit_type = "breakeven"
+            sig.sell_date   = row_date
+            sig.sell_reason = "본전 스탑"
+            sig.sell_return = ret
+            sig.hold_days   = (row_date - sig.signal_date).days
+            break
+
+        # 2. 1차 TP
+        if not tp1_triggered and close >= tp1_price:
+            tp1_triggered  = True
+            breakeven_stop = entry_price
+            watermark      = close
+            sig.tp1_date   = row_date
+            sig.tp1_ret    = _ret(close, tx_half)
+            sig.sell_date  = row_date
+            sig.sell_reason = f"1차TP +{tp1_pct*100:.0f}%"
+            sig.sell_return = sig.tp1_ret
+            sig.hold_days   = (row_date - sig.signal_date).days
+            continue
+
+        # 3. Stage3 피크아웃 (잔여분)
+        if tp1_triggered and cfg.use_stage3_peak and row_date in stage3_peakout_dates:
+            ret = _ret(close, tx_half)
+            sig.final_exit_date = row_date
+            sig.final_exit_ret  = ret
+            sig.final_exit_type = "stage3"
+            sig.sell_date   = row_date
+            sig.sell_reason = "Stage3 피크아웃"
+            sig.sell_return = ret
+            sig.hold_days   = (row_date - sig.signal_date).days
+            break
+
+        # 4. Chandelier Exit: watermark - 3×ATR (잔여분, tp1 이후)
+        if tp1_triggered:
+            chandelier = watermark - 3.0 * atr_cur
+            if close <= chandelier:
+                ret = _ret(close, tx_half)
+                sig.final_exit_date = row_date
+                sig.final_exit_ret  = ret
+                sig.final_exit_type = "trail"
+                sig.sell_date   = row_date
+                sig.sell_reason = "Chandelier (3×ATR)"
+                sig.sell_return = ret
+                sig.hold_days   = (row_date - sig.signal_date).days
+                break
+
+        # 5. 기간 종료
+        if is_last:
+            cost = tx_half if tp1_triggered else cfg.tx_cost_rt
+            ret  = _ret(close, cost)
+            sig.final_exit_date = row_date
+            sig.final_exit_ret  = ret
+            sig.final_exit_type = "period_end"
+            if sig.sell_date is None:
+                sig.sell_date   = row_date
+                sig.sell_reason = "보유 중 (기간 종료)"
+                sig.sell_return = ret
+                sig.hold_days   = (row_date - sig.signal_date).days
+            break
+
+    if sig.tp1_ret is not None and sig.final_exit_ret is not None:
+        r = cfg.tp1_ratio
+        sig.blended_return = r * sig.tp1_ret + (1.0 - r) * sig.final_exit_ret
+    elif sig.final_exit_ret is not None:
+        sig.blended_return = sig.final_exit_ret
+    elif sig.tp1_ret is not None:
+        sig.blended_return = sig.tp1_ret
+
+
+def _compute_exit_logic_model_b(
+    sig: "SignalRecord",
+    df: "pd.DataFrame",
+    entry_idx: int,
+    entry_price: float,
+    cfg: "BacktestConfig",
+    stage3_peakout_dates: "frozenset[date]",
+) -> None:
+    """모델 B: 3단계 분할 청산 (MDD 방어형).
+
+    1. Hard stop (전량): Close ≤ entry × 0.92
+    2. 1차 TP (30%): Close ≥ entry × 1.15
+    3. 2차 TP (40%): Close ≥ entry × 1.30
+    4. 3차 Trailing (30%): Close ≤ watermark × 0.90
+    5. 기간 종료
+    blended = 0.30×tp1 + 0.40×tp2 + 0.30×trail (실제 발동된 단계까지)
+    """
+    _B_HARD  = 0.08
+    _B_TP1   = 0.15
+    _B_TP2   = 0.30
+    _B_TRAIL = 0.10
+    _R1, _R2, _R3 = 0.30, 0.40, 0.30  # 청산 비율
+
+    hard_stop = entry_price * (1.0 - _B_HARD)
+    tp1_price = entry_price * (1.0 + _B_TP1)
+    tp2_price = entry_price * (1.0 + _B_TP2)
+    tx_part   = cfg.tx_cost_rt / 3.0  # 3단계 분할 시 단계별 비용
+
+    tp1_triggered = False
+    tp2_triggered = False
+    tp1_ret_val: Optional[float] = None
+    tp2_ret_val: Optional[float] = None
+    watermark = entry_price
+
+    def _ret(close: float, cost: float) -> float:
+        return (close / entry_price - 1.0) - cost
+
+    for j in range(entry_idx + 1, len(df)):
+        ts       = df.index[j]
+        row_date = ts.date() if hasattr(ts, "date") else ts
+        cur      = df.iloc[j]
+        if pd.isna(cur["Close"]):
+            continue
+
+        close   = float(cur["Close"])
+        high    = float(cur["High"]) if not pd.isna(cur["High"]) else close
+        is_last = (j == len(df) - 1)
+
+        watermark = max(watermark, high)
+
+        # 1. Hard stop (전량, 1차 TP 전)
+        if not tp1_triggered and close <= hard_stop:
+            ret = _ret(close, cfg.tx_cost_rt)
+            sig.final_exit_date = row_date
+            sig.final_exit_ret  = ret
+            sig.final_exit_type = "hard_stop"
+            sig.sell_date   = row_date
+            sig.sell_reason = f"손절 -{_B_HARD*100:.0f}%"
+            sig.sell_return = ret
+            sig.hold_days   = (row_date - sig.signal_date).days
+            sig.blended_return = ret
+            break
+
+        # 2. 1차 TP (30%)
+        if not tp1_triggered and close >= tp1_price:
+            tp1_triggered = True
+            tp1_ret_val   = _ret(close, tx_part)
+            sig.tp1_date  = row_date
+            sig.tp1_ret   = tp1_ret_val
+            sig.sell_date  = row_date
+            sig.sell_reason = f"1차TP +{_B_TP1*100:.0f}%"
+            sig.sell_return = tp1_ret_val
+            sig.hold_days   = (row_date - sig.signal_date).days
+            continue
+
+        # 3. 2차 TP (40%)
+        if tp1_triggered and not tp2_triggered and close >= tp2_price:
+            tp2_triggered = True
+            tp2_ret_val   = _ret(close, tx_part)
+            continue
+
+        # 4. 3차 Trailing (30%, tp1 이후)
+        if tp1_triggered:
+            trail_price = watermark * (1.0 - _B_TRAIL)
+            if close <= trail_price:
+                trail_ret = _ret(close, tx_part)
+                sig.final_exit_date = row_date
+                sig.final_exit_ret  = trail_ret
+                sig.final_exit_type = "trail"
+                sig.sell_date   = row_date
+                sig.sell_reason = f"3차Trail -{_B_TRAIL*100:.0f}%"
+                sig.sell_return = trail_ret
+                sig.hold_days   = (row_date - sig.signal_date).days
+                break
+
+        # 5. 기간 종료
+        if is_last:
+            cost = tx_part if tp1_triggered else cfg.tx_cost_rt
+            final_ret = _ret(close, cost)
+            sig.final_exit_date = row_date
+            sig.final_exit_ret  = final_ret
+            sig.final_exit_type = "period_end"
+            if sig.sell_date is None:
+                sig.sell_date   = row_date
+                sig.sell_reason = "보유 중 (기간 종료)"
+                sig.sell_return = final_ret
+                sig.hold_days   = (row_date - sig.signal_date).days
+            break
+
+    # blended_return — 실제 발동된 단계 기준
+    final = sig.final_exit_ret
+    if tp1_ret_val is not None and tp2_ret_val is not None and final is not None:
+        sig.blended_return = _R1 * tp1_ret_val + _R2 * tp2_ret_val + _R3 * final
+    elif tp1_ret_val is not None and final is not None:
+        sig.blended_return = _R1 * tp1_ret_val + (1.0 - _R1) * final
+    elif final is not None:
+        sig.blended_return = final
+    elif tp1_ret_val is not None:
+        sig.blended_return = tp1_ret_val
+
+
 def _compute_sell_signals_and_s2(
     signals: list[SignalRecord],
     ohlcv_map: dict[str, "pd.DataFrame"],
@@ -1560,6 +2736,7 @@ def _compute_sell_signals_and_s2(
     flow_lookup: Optional[dict] = None,
     cfg: Optional["BacktestConfig"] = None,
     stage3_peakout_map: Optional[dict[str, "frozenset[date]"]] = None,
+    streak_lookup: Optional[dict] = None,
 ) -> None:
     """매도 신호(MA20 이탈 / 손절) 및 S1→S2 진행일 인-플레이스 계산.
 
@@ -1580,11 +2757,15 @@ def _compute_sell_signals_and_s2(
             continue
 
         df = raw_df.copy()
+        df["ma_5"]      = df["Close"].rolling(5,  min_periods=5).mean()
         df["ma_20"]     = df["Close"].rolling(20, min_periods=20).mean()
         df["rsi_14"]    = _compute_rsi(df["Close"])
         df["avg_vol30"] = df["Volume"].rolling(30, min_periods=30).mean()
         df["high_10d"]  = df["High"].shift(1).rolling(10, min_periods=10).max()
         df["pct_chg"]   = df["Close"].pct_change(fill_method=None)
+        # v1.1 S3: 52주 고점 돌파 조건용 (해당 모드 신호 있을 때만)
+        if any(s.mode in ("stage_v11", "stage2_v11", "stage_v12", "stage2_v12", "stage_v13", "stage2_v13", "stage_v14", "stage_v15") for s in sigs):
+            df["high_52w"] = df["High"].shift(1).rolling(252, min_periods=52).max()
 
         # 이치모쿠 주봉 사전 계산 (ichimoku 모드 신호가 있을 때만)
         has_ichi    = any(s.mode == "ichimoku" for s in sigs)
@@ -1595,13 +2776,21 @@ def _compute_sell_signals_and_s2(
             d = ts.date() if hasattr(ts, "date") else ts
             idx_map[d] = i
 
-        # 분할 청산 모드: cfg.tp1_pct > 0 또는 trail_pct > 0
+        # 분할 청산 모드 판별
+        _em = cfg.exit_model if cfg is not None else "default"
         use_exit_logic = (
-            cfg is not None and (cfg.tp1_pct > 0 or cfg.trail_pct > 0)
+            cfg is not None and (
+                cfg.tp1_pct > 0 or cfg.trail_pct > 0 or _em in ("model_a", "model_b")
+            )
         )
         ticker_peakout: frozenset[date] = frozenset()
         if use_exit_logic and cfg.use_stage3_peak and stage3_peakout_map:
             ticker_peakout = stage3_peakout_map.get(ticker, frozenset())
+
+        # 모델 A용 ATR 시리즈 — ticker 단위로 한 번만 계산
+        _atr_series: Optional["pd.Series"] = None
+        if _em == "model_a":
+            _atr_series = _compute_atr(df)
 
         for sig in sigs:
             entry_idx = idx_map.get(sig.signal_date)
@@ -1612,15 +2801,20 @@ def _compute_sell_signals_and_s2(
             if entry_price <= 0:
                 continue
 
-            # ── 분할 청산 모드 분기 ─────────────────────────────────
+            # ── 분할 청산 모델 분기 ─────────────────────────────────
             if use_exit_logic:
-                _compute_exit_logic(sig, df, entry_idx, entry_price, cfg, ticker_peakout)
+                if _em == "model_a" and _atr_series is not None:
+                    _compute_exit_logic_model_a(sig, df, entry_idx, entry_price, cfg, ticker_peakout, _atr_series)
+                elif _em == "model_b":
+                    _compute_exit_logic_model_b(sig, df, entry_idx, entry_price, cfg, ticker_peakout)
+                else:
+                    _compute_exit_logic(sig, df, entry_idx, entry_price, cfg, ticker_peakout)
                 # S2/S3/MDD는 아래 기존 루프에서 계속 처리 (sell 판정만 교체)
 
             stop_price = entry_price * (1 - stop_loss_pct)
 
             s1_txamt: float = 0.0
-            if sig.mode == "stage":
+            if sig.mode in ("stage", "stage_v11", "stage_v12", "stage_v13", "stage_v14", "stage_v15"):
                 v = df.iloc[entry_idx]["Volume"]
                 c = df.iloc[entry_idx]["Close"]
                 if not pd.isna(v) and not pd.isna(c):
@@ -1642,6 +2836,7 @@ def _compute_sell_signals_and_s2(
 
                 close    = float(cur["Close"])
                 vol      = float(cur["Volume"])  if not pd.isna(cur["Volume"])  else 0.0
+                ma5      = float(cur["ma_5"])    if not pd.isna(cur["ma_5"])    else None
                 ma20     = float(cur["ma_20"])   if not pd.isna(cur["ma_20"])   else None
                 rsi14    = float(cur["rsi_14"])  if not pd.isna(cur["rsi_14"])  else None
                 avg30    = float(cur["avg_vol30"]) if not pd.isna(cur["avg_vol30"]) else None
@@ -1657,35 +2852,56 @@ def _compute_sell_signals_and_s2(
                         max_dd_frac = dd
 
                 # S2 진행 감지 (Stage 1 신호 × 14일 이내)
-                if sig.mode == "stage" and not s2_found and row_date <= s2_cutoff:
+                if sig.mode in ("stage", "stage_v11", "stage_v12", "stage_v13", "stage_v14", "stage_v15") and not s2_found and row_date <= s2_cutoff:
                     if ma20 is not None and s1_txamt > 0:
                         ratio       = close / entry_price
                         txamt_today = vol * close
                         txamt_ratio = txamt_today / s1_txamt
+                        # v1.1/v1.2: 거래대금 범위 0.30~0.60, v1.0: 0.25~0.65
+                        tx_lo, tx_hi = (0.30, 0.60) if sig.mode in ("stage_v11", "stage_v12", "stage_v13", "stage_v14", "stage_v15") else (0.25, 0.65)
                         if (0.80 <= ratio <= 0.95
                                 and close >= ma20 * 0.95
-                                and 0.25 <= txamt_ratio <= 0.65):
+                                and tx_lo <= txamt_ratio <= tx_hi):
                             sig.s2_date = row_date
                             s2_found    = True
 
                 # S3 감지 (S2 이후, 조정 고점 돌파 + RSI≥70 + 거래량 + 외인·기관 동시 순매수)
                 if (s2_found and sig.s3_date is None
                         and sig.s2_date is not None and row_date > sig.s2_date):
+                    # C3: v1.0=10일 고가 돌파, v1.1=10일 고가 또는 52주 고가 돌파
+                    high52w = None
+                    if "high_52w" in df.columns:
+                        _h52 = cur.get("high_52w")
+                        if _h52 is not None and not pd.isna(_h52):
+                            high52w = float(_h52)
+                    c3_breakout = high10d is not None and close > high10d
+                    if sig.mode in ("stage_v11", "stage_v12", "stage_v13", "stage_v14", "stage_v15") and not c3_breakout:
+                        c3_breakout = high52w is not None and close > high52w
                     if (pct_chg  is not None and pct_chg  >= 0.05   # C1: +5%
                             and rsi14   is not None and rsi14   >= 70    # C2: RSI≥70
-                            and high10d is not None and close > high10d  # C3: 10일 고가 돌파
+                            and c3_breakout                              # C3: 돌파
                             and avg30   is not None and avg30   >  0
                             and vol >= 1.5 * avg30):                     # C4: 1.5× vol30
                         # C5: 외인+기관 동시 순매수 (flow_lookup 있고 해당 날짜 데이터 있을 때만 적용)
+                        # v1.2: streak >= 2 강화 (streak_lookup 있을 때만)
                         s3_flow_ok = True
                         if flow_lookup is not None:
                             flow = flow_lookup.get((ticker, row_date))
                             if flow is not None:
-                                f_net, i_net = flow
-                                s3_flow_ok = (
-                                    f_net is not None and f_net > 0
-                                    and i_net is not None and i_net > 0
-                                )
+                                f_net, i_net, _p = flow
+                                if sig.mode in ("stage_v12", "stage_v13") and streak_lookup is not None:
+                                    streak = streak_lookup.get((ticker, row_date))
+                                    if streak is not None:
+                                        f_str, i_str = streak
+                                        s3_flow_ok = (
+                                            f_str is not None and f_str >= 2
+                                            and i_str is not None and i_str >= 2
+                                        )
+                                else:
+                                    s3_flow_ok = (
+                                        f_net is not None and f_net > 0
+                                        and i_net is not None and i_net > 0
+                                    )
                         if s3_flow_ok:
                             sig.s3_date = row_date
 
@@ -1694,6 +2910,12 @@ def _compute_sell_signals_and_s2(
                     if close <= stop_price:
                         sig.sell_date   = row_date
                         sig.sell_reason = f"손절 -{stop_loss_pct * 100:.0f}%"
+                        sig.sell_return = (close / entry_price - 1.0) - tx_cost_rt
+                        sig.hold_days   = (row_date - sig.signal_date).days
+                    elif (cfg is not None and cfg.use_ma5_stop
+                          and ma5 is not None and close < ma5):
+                        sig.sell_date   = row_date
+                        sig.sell_reason = "MA5 이탈"
                         sig.sell_return = (close / entry_price - 1.0) - tx_cost_rt
                         sig.hold_days   = (row_date - sig.signal_date).days
                     elif ma20 is not None and close < ma20:
@@ -1948,6 +3170,21 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
     from analysis.chart_screener import fetch_kind_sector_map
     sector_map  = fetch_kind_sector_map()
     all_tickers = get_all_tickers(sector_map=sector_map if sector_map else None)
+
+    # 외부 API 타임아웃 등으로 목록이 비면 DB daily_flow에서 직접 로드
+    if not all_tickers and config.dsn:
+        try:
+            import psycopg2
+            conn = psycopg2.connect(config.dsn)
+            cur  = conn.cursor()
+            cur.execute("SELECT DISTINCT ticker FROM daily_flow ORDER BY ticker")
+            rows = cur.fetchall()
+            conn.close()
+            all_tickers = [(r[0], r[0].split(".")[0], "") for r in rows]
+            logger.info("[백테스트] DB fallback 티커 %d개 로드", len(all_tickers))
+        except Exception as _e:
+            logger.warning("[백테스트] DB fallback 실패: %s", _e)
+
     if config.market == "KOSPI":
         tickers = [(t, n, s) for t, n, s in all_tickers if t.endswith(".KS")]
     elif config.market == "KOSDAQ":
@@ -1993,14 +3230,27 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
     # 5. 수급 데이터 사전 로드 (DSN 있을 때 전 모드 공통 — S1 조건 5 + S3 조건 5 공용)
     #    S3 감지는 신호일 이후 최대 91일까지 스캔 → fetch_end까지 로드
     flow_lookup: Optional[dict] = None
+    streak_lookup: Optional[dict] = None
     if config.dsn:
         try:
-            from core.ohlcv_cache import load_flow_data
+            from core.ohlcv_cache import load_flow_data, load_flow_streaks
             ticker_syms = [t for t, _, _ in tickers]
             flow_lookup = load_flow_data(config.dsn, ticker_syms, config.start, fetch_end)
             logger.info("[백테스트] 수급 데이터 로드: %d건", len(flow_lookup))
+            if config.mode in ("stage_v12", "stage2_v12", "stage_v13", "stage2_v13", "stage_v14", "stage_v15"):
+                streak_lookup = load_flow_streaks(config.dsn, ticker_syms, config.start, fetch_end)
+                logger.info("[백테스트] streak 데이터 로드: %d건", len(streak_lookup))
         except Exception as e:
             logger.warning("[백테스트] 수급 데이터 로드 실패 (조건 5 생략): %s", e)
+
+    shares_lookup: Optional[dict] = None
+    if config.mode in ("stage_v12", "stage_v13", "stage_v14", "stage_v15") and config.dsn:
+        try:
+            from core.ohlcv_cache import load_listed_shares
+            shares_lookup = load_listed_shares(config.dsn)
+            logger.info("[백테스트] 상장주식수 로드: %d종목", len(shares_lookup))
+        except Exception as e:
+            logger.warning("[백테스트] 상장주식수 로드 실패 (조건 9 생략): %s", e)
 
     # 6. 신호 재현
     all_signals: list[SignalRecord] = []
@@ -2017,6 +3267,22 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
             all_signals.extend(_replay_stage(ticker, name, df, mkt, config, flow_lookup))
         if config.mode == "stage2":
             all_signals.extend(_replay_stage2(ticker, name, df, mkt, config))
+        if config.mode == "stage_v11":
+            all_signals.extend(_replay_stage_v11(ticker, name, df, mkt, config, flow_lookup))
+        if config.mode == "stage2_v11":
+            all_signals.extend(_replay_stage2_v11(ticker, name, df, mkt, config))
+        if config.mode == "stage_v12":
+            all_signals.extend(_replay_stage_v12(ticker, name, df, mkt, config, flow_lookup, streak_lookup, shares_lookup))
+        if config.mode == "stage2_v12":
+            all_signals.extend(_replay_stage2_v12(ticker, name, df, mkt, config))
+        if config.mode == "stage_v13":
+            all_signals.extend(_replay_stage_v13(ticker, name, df, mkt, config, flow_lookup, streak_lookup, shares_lookup))
+        if config.mode == "stage2_v13":
+            all_signals.extend(_replay_stage2_v13(ticker, name, df, mkt, config, flow_lookup))
+        if config.mode == "stage_v14":
+            all_signals.extend(_replay_stage_v14(ticker, name, df, mkt, config, flow_lookup, streak_lookup, shares_lookup))
+        if config.mode == "stage_v15":
+            all_signals.extend(_replay_stage_v15(ticker, name, df, mkt, config, flow_lookup, streak_lookup, shares_lookup))
 
     # 7. Cross 필터
     if config.mode == "cross":
@@ -2057,6 +3323,7 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
         flow_lookup=flow_lookup,
         cfg=config,
         stage3_peakout_map=stage3_peakout_map,
+        streak_lookup=streak_lookup,
     )
 
     # 9. 날짜 순 정렬 → MDD equity curve가 시간 순서대로 누적

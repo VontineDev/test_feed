@@ -64,6 +64,7 @@ async def build_watchlist_entries(pool) -> dict:
     flow_map: dict[str, dict]           = {}
     ichimoku_set: set[str]              = set()
     stage_map: dict[str, int]           = {}
+    flow_score_map: dict[str, float]    = {}
     yesterday_stage_map: dict[str, int] = {}
     latest_week: Optional[str]          = None
 
@@ -94,7 +95,7 @@ async def build_watchlist_entries(pool) -> dict:
 
             stage_rows = await conn.fetch(
                 """
-                SELECT DISTINCT ON (ticker) ticker, stage
+                SELECT DISTINCT ON (ticker) ticker, stage, flow_score
                 FROM   stage_classifications
                 WHERE  ticker = ANY($1)
                 ORDER  BY ticker, classified_date DESC
@@ -103,6 +104,8 @@ async def build_watchlist_entries(pool) -> dict:
             )
             for r in stage_rows:
                 stage_map[r["ticker"]] = r["stage"]
+                if r["flow_score"] is not None:
+                    flow_score_map[r["ticker"]] = float(r["flow_score"])
 
             prev_stage_rows = await conn.fetch(
                 """
@@ -184,6 +187,7 @@ async def build_watchlist_entries(pool) -> dict:
             "i_streak":        flow.get("i_streak"),
             "ichimoku_ok":     ichimoku_ok,
             "current_stage":   current_stage,
+            "flow_score":      flow_score_map.get(ticker),
         })
 
         if vol_ratio is not None:
@@ -197,10 +201,14 @@ async def build_watchlist_entries(pool) -> dict:
 
     # Step 7: 확신도 순 정렬
     def _conviction(e: dict) -> float:
-        vr  = e.get("vol_ratio") or 0.0
-        fs  = e.get("f_streak") or 0
-        is_ = e.get("i_streak") or 0
-        return vr + ((1 if fs > 0 else 0) + (1 if is_ > 0 else 0)) * 0.1
+        vr = e.get("vol_ratio") or 0.0
+        fs = e.get("flow_score")
+        if fs is not None:
+            return vr + fs * 0.2
+        # flow_score 미확보 시 streak 기반 폴백
+        f_str = e.get("f_streak") or 0
+        i_str = e.get("i_streak") or 0
+        return vr + ((1 if f_str > 0 else 0) + (1 if i_str > 0 else 0)) * 0.1
 
     entries.sort(key=_conviction, reverse=True)
 

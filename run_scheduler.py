@@ -559,6 +559,11 @@ async def _daily_ohlcv_warm_job():
     await daily_ohlcv_warm_job()
 
 
+async def _sector_stats_job():
+    from jobs.sector_stats_job import sector_stats_job
+    await sector_stats_job(_db_pool)
+
+
 async def _daily_dart_disclosure_job():
     if not _db_pool:
         return
@@ -959,6 +964,17 @@ async def main(interval: int, enable_summary: bool) -> None:
         misfire_grace_time=3600,
         replace_existing=True,
     )
+    # ── 섹터 일별 수급·수익률 집계: 평일 19:00 KST (10:00 UTC) ──
+    # daily_flow_sync(18:00) + daily_ohlcv_warm(18:30) 완료 후 집계.
+    scheduler.add_job(
+        _sector_stats_job,
+        CronTrigger(day_of_week="mon-fri", hour=10, minute=0, timezone="UTC"),  # = 19:00 KST
+        id="sector_stats",
+        max_instances=1,
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+    logger.info("[스케줄러] sector_stats 잡 등록 완료 (평일 19:00 KST)")
     # ── OpenDART 공시 수집: 평일 09:00 KST (00:00 UTC) ──────────
     # 전일 Top 20 기업 공시 이벤트 (실적발표·유상증자 등) → dart_disclosures
     # DART_API_KEY 미설정 시 내부에서 경고 후 skip — 스케줄러 크래시 없음.

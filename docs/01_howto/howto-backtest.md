@@ -135,10 +135,17 @@ ichimoku 신호와 stage 신호가 동일 ISO 주에 발동한 종목. 해당 �
 
 | 순위 | 조건 | 기록값 |
 |------|------|--------|
-| 1 | `close ≤ 진입가 × (1 − 8%)` | `손절 -8%` |
-| 2 | `close < MA20` (20일 이동평균 이탈) | `MA20 이탈` |
+| 1 | `close ≤ 진입가 × (1 − hard_stop_pct)` | `손절 -N%` |
+| 2 | `close < MA5` (5일 이동평균 이탈, `use_ma5_stop=True`일 때) | `MA5 이탈` |
+| 3 | `close < MA20` (20일 이동평균 이탈) | `MA20 이탈` |
 
 매도 신호가 없으면 `보유 중`으로 표시.
+
+`use_ma5_stop`은 `BacktestConfig`에서 설정합니다. Stage 1 초기 진입 이후 빠른 손절을 원할 때 사용합니다.
+
+```python
+cfg = BacktestConfig(mode="stage_v15", ..., use_ma5_stop=True)
+```
 
 ---
 

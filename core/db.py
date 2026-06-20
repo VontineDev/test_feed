@@ -110,13 +110,15 @@ CREATE INDEX IF NOT EXISTS idx_daily_market
 
 -- ── 일별 외국인/기관 순매수 (3단계 스크리닝용) ─────────────
 CREATE TABLE IF NOT EXISTS daily_flow (
-    ticker          TEXT        NOT NULL,
-    trade_date      DATE        NOT NULL,
-    foreign_net     BIGINT,                  -- 외국인 순매수 (주)
-    inst_net        BIGINT,                  -- 기관 순매수 (주)
-    foreign_streak  SMALLINT,               -- 외국인 연속 순매수일 (음수 = 순매도)
-    inst_streak     SMALLINT,               -- 기관 연속 순매수일 (음수 = 순매도)
-    created_at      TIMESTAMPTZ DEFAULT now(),
+    ticker           TEXT        NOT NULL,
+    trade_date       DATE        NOT NULL,
+    foreign_net      BIGINT,                  -- 외국인 순매수 (주)
+    inst_net         BIGINT,                  -- 기관 순매수 (주)
+    foreign_streak   SMALLINT,               -- 외국인 연속 순매수일 (음수 = 순매도)
+    inst_streak      SMALLINT,               -- 기관 연속 순매수일 (음수 = 순매도)
+    personal_net     BIGINT,                  -- 개인 순매수 (주). 음수 = 개인 순매도
+    personal_streak  SMALLINT,               -- 개인 연속 순매수일
+    created_at       TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (ticker, trade_date)
 );
 CREATE INDEX IF NOT EXISTS idx_daily_flow_date ON daily_flow (trade_date DESC);
@@ -344,6 +346,25 @@ CREATE INDEX IF NOT EXISTS idx_dart_segments_corp_year
     ON dart_segments (corp_code, bsns_year DESC);
 """
 
+_CREATE_SECTOR_DAILY_STATS = """
+CREATE TABLE IF NOT EXISTS sector_daily_stats (
+    sector          TEXT        NOT NULL,
+    trade_date      DATE        NOT NULL,
+    ticker_count    INT         NOT NULL DEFAULT 0,
+    avg_return_pct  FLOAT,          -- 당일 평균 수익률 (Close/prev_Close - 1)
+    foreign_net_sum BIGINT,         -- 섹터 외국인 순매수 합계
+    inst_net_sum    BIGINT,         -- 섹터 기관 순매수 합계
+    avg_flow_score  FLOAT,          -- 평균 flow_score (stage_classifications 기준)
+    stage1_count    INT,            -- 당일 Stage 1 종목 수
+    stage2_count    INT,            -- 당일 Stage 2 종목 수
+    stage3_count    INT,            -- 당일 Stage 3 종목 수
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (sector, trade_date)
+);
+CREATE INDEX IF NOT EXISTS idx_sector_daily_stats_date
+    ON sector_daily_stats (trade_date DESC);
+"""
+
 
 # ── RLS 활성화 (Supabase PostgREST 노출 차단) ────────────────────
 # 이 백엔드는 asyncpg 직접 연결(postgres/service_role)을 사용하므로 RLS 영향 없음.
@@ -367,6 +388,7 @@ _RLS_ALWAYS: list[str] = [
     "dart_disclosures",
     "dart_xbrl",
     "dart_segments",
+    "sector_daily_stats",
 ]
 
 # init_db 호출 시점에 아직 없을 수 있는 테이블 — DO 블록으로 안전하게 처리
@@ -384,6 +406,7 @@ async def init_db(pool: asyncpg.Pool) -> None:
         await conn.execute(_CREATE_TICKER_NAMES)
         await conn.execute(_CREATE_SCHEDULER_TRIGGERS)
         await conn.execute(_CREATE_DART_TABLES)
+        await conn.execute(_CREATE_SECTOR_DAILY_STATS)
         await conn.execute(
             "ALTER TABLE chart_signals ADD COLUMN IF NOT EXISTS sector VARCHAR(80) DEFAULT ''"
         )
@@ -401,6 +424,12 @@ async def init_db(pool: asyncpg.Pool) -> None:
         )
         await conn.execute(
             "ALTER TABLE stage_classifications ADD COLUMN IF NOT EXISTS s1_txamt BIGINT"
+        )
+        await conn.execute(
+            "ALTER TABLE stage_classifications ADD COLUMN IF NOT EXISTS foreign_chg_14d_pct FLOAT"
+        )
+        await conn.execute(
+            "ALTER TABLE stage_classifications ADD COLUMN IF NOT EXISTS flow_score FLOAT"
         )
         await conn.execute(
             "ALTER TABLE watchlist_vol_log ADD COLUMN IF NOT EXISTS s1_txamt BIGINT"
@@ -926,25 +955,30 @@ async def save_chart_signals(
 async def save_daily_flow(
     pool: asyncpg.Pool,
     ticker: str,
-    trade_date: str,
+    trade_date: "date",
     foreign_net: Optional[int],
     inst_net: Optional[int],
     foreign_streak: Optional[int] = None,
     inst_streak: Optional[int] = None,
+    personal_net: Optional[int] = None,
+    personal_streak: Optional[int] = None,
 ) -> None:
     """Upsert one daily_flow row. trade_date: 'YYYY-MM-DD' string."""
     async with pool.acquire() as conn:
         await conn.execute(
             """
             INSERT INTO daily_flow
-                (ticker, trade_date, foreign_net, inst_net, foreign_streak, inst_streak)
-            VALUES ($1, $2, $3, $4, $5, $6)
+                (ticker, trade_date, foreign_net, inst_net, foreign_streak, inst_streak,
+                 personal_net, personal_streak)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT (ticker, trade_date)
             DO UPDATE SET
-                foreign_net    = EXCLUDED.foreign_net,
-                inst_net       = EXCLUDED.inst_net,
-                foreign_streak = EXCLUDED.foreign_streak,
-                inst_streak    = EXCLUDED.inst_streak
+                foreign_net     = EXCLUDED.foreign_net,
+                inst_net        = EXCLUDED.inst_net,
+                foreign_streak  = EXCLUDED.foreign_streak,
+                inst_streak     = EXCLUDED.inst_streak,
+                personal_net    = EXCLUDED.personal_net,
+                personal_streak = EXCLUDED.personal_streak
             """,
             ticker,
             trade_date,
@@ -952,6 +986,8 @@ async def save_daily_flow(
             inst_net,
             foreign_streak,
             inst_streak,
+            personal_net,
+            personal_streak,
         )
 
 
@@ -1052,7 +1088,8 @@ async def save_stage_classifications(
 ) -> int:
     """
     stage_classifications upsert.
-    rows: list of {ticker, classified_date, stage, s1_entry_date, s1_high, s1_volume, s1_txamt, peakout_flag}
+    rows: list of {ticker, classified_date, stage, s1_entry_date, s1_high, s1_volume,
+                   s1_txamt, peakout_flag, foreign_chg_14d_pct, flow_score}
     반환: 저장/갱신 건수.
     """
     if not rows:
@@ -1065,15 +1102,18 @@ async def save_stage_classifications(
                     """
                     INSERT INTO stage_classifications
                         (ticker, classified_date, stage,
-                         s1_entry_date, s1_high, s1_volume, s1_txamt, peakout_flag)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                         s1_entry_date, s1_high, s1_volume, s1_txamt, peakout_flag,
+                         foreign_chg_14d_pct, flow_score)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
                     ON CONFLICT (ticker, classified_date) DO UPDATE SET
-                        stage         = EXCLUDED.stage,
-                        s1_entry_date = EXCLUDED.s1_entry_date,
-                        s1_high       = EXCLUDED.s1_high,
-                        s1_volume     = EXCLUDED.s1_volume,
-                        s1_txamt      = EXCLUDED.s1_txamt,
-                        peakout_flag  = EXCLUDED.peakout_flag
+                        stage               = EXCLUDED.stage,
+                        s1_entry_date       = EXCLUDED.s1_entry_date,
+                        s1_high             = EXCLUDED.s1_high,
+                        s1_volume           = EXCLUDED.s1_volume,
+                        s1_txamt            = EXCLUDED.s1_txamt,
+                        peakout_flag        = EXCLUDED.peakout_flag,
+                        foreign_chg_14d_pct = EXCLUDED.foreign_chg_14d_pct,
+                        flow_score          = EXCLUDED.flow_score
                     """,
                     r["ticker"],
                     r["classified_date"],
@@ -1083,11 +1123,65 @@ async def save_stage_classifications(
                     r.get("s1_volume"),
                     r.get("s1_txamt"),
                     r.get("peakout_flag", False),
+                    r.get("foreign_chg_14d_pct"),
+                    r.get("flow_score"),
                 )
                 count += 1
         logger.info("[stage] stage_classifications %d건 저장/갱신", count)
     except Exception as e:
         logger.error("[stage] save_stage_classifications 실패: %s", e)
+    return count
+
+
+async def upsert_sector_daily_stats(
+    pool: asyncpg.Pool,
+    rows: list[dict],
+) -> int:
+    """
+    sector_daily_stats upsert.
+    rows: list of {sector, trade_date, ticker_count, avg_return_pct,
+                   foreign_net_sum, inst_net_sum, avg_flow_score,
+                   stage1_count, stage2_count, stage3_count}
+    반환: 저장/갱신 건수.
+    """
+    if not rows:
+        return 0
+    count = 0
+    try:
+        async with pool.acquire() as conn:
+            for r in rows:
+                await conn.execute(
+                    """
+                    INSERT INTO sector_daily_stats
+                        (sector, trade_date, ticker_count, avg_return_pct,
+                         foreign_net_sum, inst_net_sum, avg_flow_score,
+                         stage1_count, stage2_count, stage3_count)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                    ON CONFLICT (sector, trade_date) DO UPDATE SET
+                        ticker_count    = EXCLUDED.ticker_count,
+                        avg_return_pct  = EXCLUDED.avg_return_pct,
+                        foreign_net_sum = EXCLUDED.foreign_net_sum,
+                        inst_net_sum    = EXCLUDED.inst_net_sum,
+                        avg_flow_score  = EXCLUDED.avg_flow_score,
+                        stage1_count    = EXCLUDED.stage1_count,
+                        stage2_count    = EXCLUDED.stage2_count,
+                        stage3_count    = EXCLUDED.stage3_count
+                    """,
+                    r["sector"],
+                    r["trade_date"],
+                    r["ticker_count"],
+                    r.get("avg_return_pct"),
+                    r.get("foreign_net_sum"),
+                    r.get("inst_net_sum"),
+                    r.get("avg_flow_score"),
+                    r.get("stage1_count", 0),
+                    r.get("stage2_count", 0),
+                    r.get("stage3_count", 0),
+                )
+                count += 1
+        logger.info("[sector] sector_daily_stats %d건 저장/갱신", count)
+    except Exception as e:
+        logger.error("[sector] upsert_sector_daily_stats 실패: %s", e)
     return count
 
 
@@ -1225,13 +1319,13 @@ async def get_prev_streak(
     pool: asyncpg.Pool,
     ticker: str,
     trade_date: "date",
-) -> tuple[Optional[int], Optional[int]]:
-    """전일 foreign_streak, inst_streak 반환. 없으면 (None, None)."""
+) -> tuple[Optional[int], Optional[int], Optional[int]]:
+    """전일 foreign_streak, inst_streak, personal_streak 반환. 없으면 (None, None, None)."""
     try:
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT foreign_streak, inst_streak
+                SELECT foreign_streak, inst_streak, personal_streak
                 FROM   daily_flow
                 WHERE  ticker = $1
                   AND  trade_date < $2
@@ -1242,10 +1336,10 @@ async def get_prev_streak(
                 trade_date,
             )
         if row:
-            return row["foreign_streak"], row["inst_streak"]
+            return row["foreign_streak"], row["inst_streak"], row["personal_streak"]
     except Exception as e:
         logger.debug("[stage] get_prev_streak 실패 (%s): %s", ticker, e)
-    return None, None
+    return None, None, None
 
 
 # ── 재시작 시 중복 해시 복원 ──────────────────────────────────

@@ -53,7 +53,7 @@ Enhanced 종목은 구름 돌파에 더해 Ichimoku 내부 구조까지 강세�
 
 ```bash
 # 텔레그램 명령어
-/scan
+/run_screener
 
 # 또는 CLI
 python run_scheduler.py --once screener

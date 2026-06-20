@@ -5,10 +5,33 @@ KOSPI + KOSDAQ 전 종목(~2770개)을 대상으로 매일 16:30 KST에 실행.
 Ichimoku 주봉 스크리너와 완전히 독립된 시스템.
 
 classify_stage(ticker, price_df, flow_df, s1_history, market) -> int | None
+    v1.0: 5+조건 분류기 (production)
     1  =  Stage 1 (랠리 초입)
     2  =  Stage 2 (중간 조정·재매집)
     3  =  Stage 3 (과열 재가속)
     None  =  어느 단계도 해당 없음
+
+classify_stage_v11(ticker, price_df, flow_df, s1_history, market) -> int | None
+    v1.1: howto-stage-classifier.md 기준 — v1.0 대비 차이:
+      Stage 1: RSI(14) ≥ 50 조건 추가
+      Stage 2: 거래대금 범위 0.30~0.60 (v1.0: 0.25~0.65)
+      Stage 3: 조정 고점 또는 52주 고점 돌파 (v1.0: 10일 고점만)
+
+classify_stage_v12(ticker, price_df, flow_df, s1_history, s2_history, market) -> int | None
+    v1.2: v1.1 + 미구현 howto 항목 추가:
+      Stage 1: 수급 조건 강화 — (외인>0 AND 기관≥0) OR 기관 3일 연속 순매수
+      Stage 2: 거래대금 20일 평균 대비 100~150% 추가 + 일일 고저폭 축소
+      Stage 3: Stage 2 이력 전제 + 외인·기관 streak ≥ 2 (연속 2일 이상 순매수)
+
+classify_stage_v13(ticker, price_df, flow_df, s1_history, s2_history, market) -> int | None
+    v1.3: v1.2 howto 잔여 갭 해소:
+      Stage 1: 개인 순매수 > 0 조건 제거(howto 초과). close > MA20은 v1.0 base에 이미 포함.
+      Stage 2: 개인 출회 신호 추가(personal_net ≤ 0)
+      Stage 3: v1.2와 동일
+
+classify_stage_v14(ticker, price_df, flow_df, s1_history, s2_history, market) -> int | None
+    v1.4: v1.3 + 거래량 기준 강화:
+      Stage 1: 거래대금 비교 기준 MA20 → MA30 (단기 급등 직전 왜곡 방지)
 
 check_peakout(ticker, flow_df, price_df) -> bool
     Stage 3 피크아웃 신호 여부
@@ -41,6 +64,23 @@ def _calc_txamt(price_df: pd.DataFrame) -> pd.Series:
     (compare_tx_amt.py 검증: Volume×Close ≈ 실제 거래대금, MAE 1.38%)
     """
     return (price_df["Volume"] * price_df["Close"]).dropna()
+
+
+def classify_stage_v11(
+    ticker: str,
+    price_df: pd.DataFrame,
+    flow_df: pd.DataFrame,
+    s1_history: dict[str, list[dict]],
+    market: str = "KOSPI",
+) -> Optional[int]:
+    """v1.1 분류기. 우선순위: Stage 3 > Stage 2 > Stage 1."""
+    if _check_stage3_v11(ticker, price_df, flow_df, s1_history):
+        return 3
+    if _check_stage2_v11(ticker, price_df, flow_df, s1_history):
+        return 2
+    if _check_stage1_v11(ticker, price_df, flow_df, market):
+        return 1
+    return None
 
 
 def classify_stage(
@@ -303,3 +343,517 @@ def _check_stage3(
         return False
 
     return True
+
+
+# ── v1.1 헬퍼 ────────────────────────────────────────────────
+
+def _check_stage1_v11(
+    ticker: str,
+    price_df: pd.DataFrame,
+    flow_df: pd.DataFrame,
+    market: str,
+) -> bool:
+    """Stage 1 v1.1: v1.0 조건 + RSI(14) ≥ 50."""
+    if not _check_stage1(ticker, price_df, flow_df, market):
+        return False
+    closes = price_df["Close"].dropna()
+    rsi = calc_rsi(closes.tolist())
+    return rsi is not None and rsi >= 50
+
+
+def _check_stage2_v11(
+    ticker: str,
+    price_df: pd.DataFrame,
+    flow_df: pd.DataFrame,
+    s1_history: dict[str, list[dict]],
+) -> bool:
+    """Stage 2 v1.1: 거래대금 범위 0.30~0.60 (v1.0: 0.25~0.65)."""
+    history = s1_history.get(ticker, [])
+    if not history:
+        return False
+
+    entry     = history[0]
+    s1_high   = entry.get("s1_high")
+    s1_volume = entry.get("s1_volume")
+
+    closes = price_df["Close"].dropna()
+    txamts = _calc_txamt(price_df)
+
+    if len(closes) < 21:
+        return False
+
+    close_today = float(closes.iloc[-1])
+
+    if s1_high is not None and s1_high > 0:
+        discount = (float(s1_high) - close_today) / float(s1_high)
+        if not (0.05 <= discount <= 0.20):
+            return False
+
+    ma20 = float(closes.iloc[-20:].mean())
+    if close_today < ma20 * 0.95:
+        return False
+
+    s1_txamt = entry.get("s1_txamt")
+    if s1_txamt is None and s1_volume is not None and s1_high is not None:
+        s1_txamt = int(float(s1_volume) * float(s1_high))
+    if s1_txamt is not None and s1_txamt > 0 and len(txamts) >= 1:
+        txamt_today = float(txamts.iloc[-1])
+        ratio = txamt_today / float(s1_txamt)
+        if not (0.30 <= ratio <= 0.60):  # v1.1: 0.30~0.60
+            return False
+
+    if not flow_df.empty:
+        inst_streak = flow_df.iloc[-1].get("inst_streak")
+        if inst_streak is not None and inst_streak < 0:
+            return False
+
+    return True
+
+
+def _check_stage3_v11(
+    ticker: str,
+    price_df: pd.DataFrame,
+    flow_df: pd.DataFrame,
+    s1_history: dict[str, list[dict]],
+) -> bool:
+    """Stage 3 v1.1: 조정 고점(10일) 또는 52주 고점 돌파 (v1.0: 10일만)."""
+    closes = price_df["Close"].dropna()
+    txamts = _calc_txamt(price_df)
+    highs  = price_df["High"].dropna() if "High" in price_df.columns else pd.Series(dtype=float)
+
+    if len(closes) < 31 or len(highs) < 11:
+        return False
+
+    close_today = float(closes.iloc[-1])
+    close_prev  = float(closes.iloc[-2]) if len(closes) >= 2 else close_today
+
+    # 조건 1: 조정 구간 고점(10일) 또는 52주 고점 돌파
+    recent_10_high = float(highs.iloc[-11:-1].max()) if len(highs) >= 11 else None
+    week52_high    = float(highs.iloc[-252:].max())  if len(highs) >= 52 else None
+    breakout_ok = (
+        (recent_10_high is not None and close_today > recent_10_high)
+        or (week52_high  is not None and close_today > week52_high)
+    )
+    if not breakout_ok:
+        return False
+
+    # 조건 2: 일일 상승률 ≥ +5%
+    if close_prev <= 0 or (close_today - close_prev) / close_prev < 0.05:
+        return False
+
+    # 조건 3: RSI(14) ≥ 70
+    rsi = calc_rsi(closes.tolist())
+    if rsi is None or rsi < 70:
+        return False
+
+    # 조건 4: 거래대금 ≥ 1.5× 30일 평균
+    if len(txamts) < 31:
+        return False
+    txamt_today = float(txamts.iloc[-1])
+    avg_txamt30 = float(txamts.iloc[-31:-1].mean())
+    if avg_txamt30 <= 0 or txamt_today < 1.5 * avg_txamt30:
+        return False
+
+    # 조건 5: 외국인 AND 기관 동시 순매수
+    if flow_df.empty:
+        return False
+    last_flow   = flow_df.iloc[-1]
+    foreign_net = last_flow.get("foreign_net")
+    inst_net    = last_flow.get("inst_net")
+    if not (
+        (foreign_net is not None and foreign_net > 0)
+        and (inst_net is not None and inst_net > 0)
+    ):
+        return False
+
+    return True
+
+
+# ── v1.2 헬퍼 ────────────────────────────────────────────────
+
+def classify_stage_v12(
+    ticker: str,
+    price_df: pd.DataFrame,
+    flow_df: pd.DataFrame,
+    s1_history: dict[str, list[dict]],
+    s2_history: Optional[dict[str, list[dict]]] = None,
+    market: str = "KOSPI",
+    listed_shares: Optional[dict[str, int]] = None,
+) -> Optional[int]:
+    """v1.2 분류기. 우선순위: Stage 3 > Stage 2 > Stage 1."""
+    if _check_stage3_v12(ticker, price_df, flow_df, s1_history, s2_history, listed_shares):
+        return 3
+    if _check_stage2_v12(ticker, price_df, flow_df, s1_history, listed_shares):
+        return 2
+    if _check_stage1_v12(ticker, price_df, flow_df, market, listed_shares):
+        return 1
+    return None
+
+
+def _check_stage1_v12(
+    ticker: str,
+    price_df: pd.DataFrame,
+    flow_df: pd.DataFrame,
+    market: str,
+    listed_shares: Optional[dict[str, int]] = None,
+) -> bool:
+    """Stage 1 v1.2: v1.1 + 개인 순매수 > 0 + 수급 강화 + 3거래일 외인+기관 ≥ 상장주식수 0.2%."""
+    if not _check_stage1_v11(ticker, price_df, flow_df, market):
+        return False
+
+    if flow_df.empty:
+        return False
+    last_flow    = flow_df.iloc[-1]
+    personal_net = last_flow.get("personal_net")
+    # 개인 순매수 > 0 (데이터 없는 경우 통과)
+    if personal_net is not None and personal_net <= 0:
+        return False
+
+    foreign_net = last_flow.get("foreign_net")
+    inst_net    = last_flow.get("inst_net")
+    inst_streak = last_flow.get("inst_streak")
+    flow_ok = (
+        (foreign_net is not None and foreign_net > 0 and inst_net is not None and inst_net >= 0)
+        or (inst_streak is not None and inst_streak >= 3)
+    )
+    if not flow_ok:
+        return False
+
+    # 조건 9: 최근 3거래일 외인+기관 합산 순매수 ≥ 상장주식수 0.2% (데이터 없으면 통과)
+    if listed_shares is not None:
+        shares = listed_shares.get(ticker)
+        if shares and shares > 0:
+            recent = flow_df.tail(3)
+            f_sum  = float(recent["foreign_net"].dropna().sum())
+            i_sum  = float(recent["inst_net"].dropna().sum())
+            if len(recent["foreign_net"].dropna()) >= 1:
+                if (f_sum + i_sum) < shares * 0.002:
+                    return False
+
+    return True
+
+
+def _check_stage2_v12(
+    ticker: str,
+    price_df: pd.DataFrame,
+    flow_df: pd.DataFrame,
+    s1_history: dict[str, list[dict]],
+    listed_shares: Optional[dict[str, int]] = None,
+) -> bool:
+    """Stage 2 v1.2: v1.1 + 거래대금 100~150% + 고저폭 축소 + 외국인 14일 누적 지분율 -1%p 차단."""
+    if not _check_stage2_v11(ticker, price_df, flow_df, s1_history):
+        return False
+
+    closes = price_df["Close"].dropna()
+    txamts = _calc_txamt(price_df)
+    if len(closes) < 21 or len(txamts) < 21:
+        return False
+
+    close_today = float(closes.iloc[-1])
+    txamt_today = float(txamts.iloc[-1])
+
+    # 추가 조건 A: 거래대금이 20일 평균 대비 100~150% (과다 거래 없는 매집 구간)
+    avg_txamt20 = float(txamts.iloc[-21:-1].mean())
+    if avg_txamt20 > 0:
+        ratio_to_avg = txamt_today / avg_txamt20
+        if not (1.0 <= ratio_to_avg <= 1.5):
+            return False
+
+    # 추가 조건 B: 일일 고저폭이 20일 평균 대비 70% 이하 (눌림목 특성)
+    if "High" in price_df.columns and "Low" in price_df.columns:
+        highs = price_df["High"].dropna()
+        lows  = price_df["Low"].dropna()
+        if len(highs) >= 21 and len(lows) >= 21 and close_today > 0:
+            today_range_ratio = (float(highs.iloc[-1]) - float(lows.iloc[-1])) / close_today
+            hist_closes = closes.iloc[-21:-1]
+            hist_range_ratio = float(
+                ((highs.iloc[-21:-1] - lows.iloc[-21:-1]) / hist_closes).mean()
+            )
+            if hist_range_ratio > 0 and today_range_ratio > hist_range_ratio * 0.70:
+                return False
+
+    # 추가 조건 C: 외국인 14일 누적 순매수 ≥ 상장주식수 -1% (지분율 1%p 이상 이탈 차단)
+    if listed_shares is not None and not flow_df.empty:
+        shares = listed_shares.get(ticker)
+        if shares and shares > 0:
+            f_14d = float(flow_df.tail(14)["foreign_net"].dropna().sum())
+            if f_14d < -0.01 * shares:
+                return False
+
+    return True
+
+
+def _check_stage3_v12(
+    ticker: str,
+    price_df: pd.DataFrame,
+    flow_df: pd.DataFrame,
+    s1_history: dict[str, list[dict]],
+    s2_history: Optional[dict[str, list[dict]]] = None,
+    listed_shares: Optional[dict[str, int]] = None,
+) -> bool:
+    """Stage 3 v1.2: v1.1 + Stage 2 이력 전제 + streak >= 2 + 3거래일 외인+기관 ≥ 상장주식수 0.2%."""
+    # 전제: Stage 2 이력 (s2_history 제공 시에만 강제)
+    if s2_history is not None:
+        if not s2_history.get(ticker):
+            return False
+
+    if not _check_stage3_v11(ticker, price_df, flow_df, s1_history):
+        return False
+
+    # 수급 강화: 외인·기관 모두 2일 이상 연속 순매수
+    if flow_df.empty:
+        return False
+    last_flow = flow_df.iloc[-1]
+    f_streak  = last_flow.get("foreign_streak")
+    i_streak  = last_flow.get("inst_streak")
+    if not (
+        (f_streak is not None and f_streak >= 2)
+        and (i_streak is not None and i_streak >= 2)
+    ):
+        return False
+
+    # 추가 조건: 최근 3거래일 외인+기관 합산 순매수 ≥ 상장주식수 0.2% (데이터 없으면 통과)
+    if listed_shares is not None:
+        shares = listed_shares.get(ticker)
+        if shares and shares > 0:
+            recent = flow_df.tail(3)
+            f_sum  = float(recent["foreign_net"].dropna().sum())
+            i_sum  = float(recent["inst_net"].dropna().sum())
+            if len(recent["foreign_net"].dropna()) >= 1:
+                if (f_sum + i_sum) < shares * 0.002:
+                    return False
+
+    return True
+
+
+# ── v1.3 헬퍼 ────────────────────────────────────────────
+
+def classify_stage_v13(
+    ticker: str,
+    price_df: pd.DataFrame,
+    flow_df: pd.DataFrame,
+    s1_history: dict[str, list[dict]],
+    s2_history: Optional[dict[str, list[dict]]] = None,
+    market: str = "KOSPI",
+    listed_shares: Optional[dict[str, int]] = None,
+) -> Optional[int]:
+    """v1.3 분류기. 우선순위: Stage 3 > Stage 2 > Stage 1."""
+    if _check_stage3_v12(ticker, price_df, flow_df, s1_history, s2_history, listed_shares):
+        return 3
+    if _check_stage2_v13(ticker, price_df, flow_df, s1_history, listed_shares):
+        return 2
+    if _check_stage1_v13(ticker, price_df, flow_df, market, listed_shares):
+        return 1
+    return None
+
+
+def _check_stage1_v13(
+    ticker: str,
+    price_df: pd.DataFrame,
+    flow_df: pd.DataFrame,
+    market: str,
+    listed_shares: Optional[dict[str, int]] = None,
+) -> bool:
+    """Stage 1 v1.3: v1.2에서 개인 순매수 조건 제거. close > MA20은 v1.0 base 조건으로 이미 포함."""
+    if not _check_stage1_v11(ticker, price_df, flow_df, market):
+        return False
+
+    # 수급 강화: (외인>0 AND 기관≥0) OR 기관 3일 연속 순매수
+    if flow_df.empty:
+        return False
+    last_flow   = flow_df.iloc[-1]
+    foreign_net = last_flow.get("foreign_net")
+    inst_net    = last_flow.get("inst_net")
+    inst_streak = last_flow.get("inst_streak")
+    flow_ok = (
+        (foreign_net is not None and foreign_net > 0 and inst_net is not None and inst_net >= 0)
+        or (inst_streak is not None and inst_streak >= 3)
+    )
+    if not flow_ok:
+        return False
+
+    # 3거래일 외인+기관 합산 ≥ 상장주식수 0.2% (데이터 없으면 통과)
+    if listed_shares is not None:
+        shares = listed_shares.get(ticker)
+        if shares and shares > 0:
+            recent = flow_df.tail(3)
+            f_sum  = float(recent["foreign_net"].dropna().sum())
+            i_sum  = float(recent["inst_net"].dropna().sum())
+            if len(recent["foreign_net"].dropna()) >= 1:
+                if (f_sum + i_sum) < shares * 0.002:
+                    return False
+
+    return True
+
+
+def _check_stage2_v13(
+    ticker: str,
+    price_df: pd.DataFrame,
+    flow_df: pd.DataFrame,
+    s1_history: dict[str, list[dict]],
+    listed_shares: Optional[dict[str, int]] = None,
+) -> bool:
+    """Stage 2 v1.3: v1.2 + 개인 출회 신호(personal_net ≤0)."""
+    if not _check_stage2_v12(ticker, price_df, flow_df, s1_history, listed_shares):
+        return False
+
+    # 개인 출회 신호: personal_net ≤0 (데이터 없으면 통과)
+    if not flow_df.empty:
+        personal_net = flow_df.iloc[-1].get("personal_net")
+        if personal_net is not None and personal_net > 0:
+            return False
+
+    return True
+
+
+def classify_stage_v14(
+    ticker: str,
+    price_df: pd.DataFrame,
+    flow_df: pd.DataFrame,
+    s1_history: dict[str, list[dict]],
+    s2_history: Optional[dict[str, list[dict]]] = None,
+    market: str = "KOSPI",
+    listed_shares: Optional[dict[str, int]] = None,
+) -> Optional[int]:
+    """v1.4 분류기. v1.3 + 거래량 기준 MA20 → MA30."""
+    if _check_stage3_v12(ticker, price_df, flow_df, s1_history, s2_history, listed_shares):
+        return 3
+    if _check_stage2_v13(ticker, price_df, flow_df, s1_history, listed_shares):
+        return 2
+    if _check_stage1_v14(ticker, price_df, flow_df, market, listed_shares):
+        return 1
+    return None
+
+
+def _check_stage1_v14(
+    ticker: str,
+    price_df: pd.DataFrame,
+    flow_df: pd.DataFrame,
+    market: str,
+    listed_shares: Optional[dict[str, int]] = None,
+) -> bool:
+    """Stage 1 v1.4: v1.3 + 거래대금 기준 MA20 → MA30.
+
+    MA20 기준은 신호 직전 20일 내 다른 급등이 있으면 기준값이 높아져
+    역설적으로 통과가 어려워지거나 기준이 왜곡된다.
+    MA30은 더 안정적인 기저 거래량을 반영한다.
+    """
+    txamts = _calc_txamt(price_df)
+    if len(txamts) < 31:
+        return False
+    txamt_today = float(txamts.iloc[-1])
+    avg_txamt30 = float(txamts.iloc[-31:-1].mean())
+    if avg_txamt30 <= 0 or txamt_today < 2.0 * avg_txamt30:
+        return False
+
+    return _check_stage1_v13(ticker, price_df, flow_df, market, listed_shares)
+
+
+def compute_foreign_chg_pct(
+    flow_df: pd.DataFrame,
+    listed_shares: Optional[int],
+) -> Optional[float]:
+    """14일 누적 외국인 순매수 / 상장주식수 (지분율 변화 근사).
+
+    양수 = 지분율 증가, 음수 = 감소.
+    데이터 부족(< 5행) 또는 상장주식수 미제공 시 None 반환.
+    """
+    if flow_df is None or flow_df.empty:
+        return None
+    if not listed_shares or listed_shares <= 0:
+        return None
+    if "foreign_net" not in flow_df.columns:
+        return None
+    recent = flow_df["foreign_net"].dropna().tail(14)
+    if len(recent) < 5:
+        return None
+    return float(recent.sum()) / listed_shares
+
+
+def compute_flow_score(
+    flow_df: pd.DataFrame,
+    price_df: Optional[pd.DataFrame] = None,
+) -> float:
+    """수급 컨빅션 점수 (-1.0 ~ +1.0).
+
+    기본 점수:
+      +1.0: f_streak >= 3 AND i_streak >= 3
+      +0.5: f_streak >= 3 OR  i_streak >= 3
+      -0.5: f_streak <= -2 OR  i_streak <= -2
+      -1.0: f_streak <= -2 AND i_streak <= -2
+    보너스:
+      +0.3: 오늘 거래대금 > 20일 평균 × 1.2 (price_df 있을 때)
+    결과는 [-1.0, +1.0] 클램프.
+    """
+    if flow_df is None or flow_df.empty:
+        return 0.0
+    if "foreign_streak" not in flow_df.columns or "inst_streak" not in flow_df.columns:
+        return 0.0
+
+    last = flow_df.iloc[-1]
+    f_streak = int(last.get("foreign_streak") or 0)
+    i_streak = int(last.get("inst_streak") or 0)
+
+    if f_streak >= 3 and i_streak >= 3:
+        score = 1.0
+    elif f_streak >= 3 or i_streak >= 3:
+        score = 0.5
+    elif f_streak <= -2 and i_streak <= -2:
+        score = -1.0
+    elif f_streak <= -2 or i_streak <= -2:
+        score = -0.5
+    else:
+        score = 0.0
+
+    if price_df is not None and not price_df.empty and len(price_df) >= 21:
+        txamt = (price_df["Volume"] * price_df["Close"]).dropna()
+        if len(txamt) >= 21:
+            avg20 = float(txamt.iloc[-21:-1].mean())
+            today_tx = float(txamt.iloc[-1])
+            if avg20 > 0 and today_tx > avg20 * 1.2:
+                score += 0.3
+
+    return max(-1.0, min(1.0, score))
+
+
+def classify_stage_v15(
+    ticker: str,
+    price_df: pd.DataFrame,
+    flow_df: pd.DataFrame,
+    s1_history: dict[str, list[dict]],
+    s2_history: Optional[dict[str, list[dict]]] = None,
+    market: str = "KOSPI",
+    listed_shares: Optional[dict[str, int]] = None,
+) -> Optional[int]:
+    """v1.5 분류기. v1.4 + 20일 박스권 이탈 조건."""
+    if _check_stage3_v12(ticker, price_df, flow_df, s1_history, s2_history, listed_shares):
+        return 3
+    if _check_stage2_v13(ticker, price_df, flow_df, s1_history, listed_shares):
+        return 2
+    if _check_stage1_v15(ticker, price_df, flow_df, market, listed_shares):
+        return 1
+    return None
+
+
+def _check_stage1_v15(
+    ticker: str,
+    price_df: pd.DataFrame,
+    flow_df: pd.DataFrame,
+    market: str,
+    listed_shares: Optional[dict[str, int]] = None,
+) -> bool:
+    """Stage 1 v1.5: v1.4 + 20일 박스권 이탈 (close > 직전 20일 High 최고값).
+
+    단순 반등이 아닌 박스 상단 돌파 breakout만 통과시킴.
+    """
+    if not _check_stage1_v14(ticker, price_df, flow_df, market, listed_shares):
+        return False
+
+    highs = price_df["High"].dropna() if "High" in price_df.columns else pd.Series(dtype=float)
+    closes = price_df["Close"].dropna()
+    if len(highs) < 21 or len(closes) < 1:
+        return False
+
+    close_today = float(closes.iloc[-1])
+    high_20d = float(highs.iloc[-21:-1].max())  # 당일 제외 직전 20일 최고 High
+    return close_today > high_20d

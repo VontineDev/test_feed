@@ -16,7 +16,10 @@ import pandas as pd
 import yfinance as yf
 
 from analysis.chart_screener import get_all_tickers
-from analysis.stage_classifier import classify_stage, check_peakout
+from analysis.stage_classifier import (
+    classify_stage, check_peakout,
+    compute_foreign_chg_pct, compute_flow_score,
+)
 from core.db import (
     load_chart_signals_latest,
     get_stage1_history,
@@ -96,7 +99,7 @@ async def daily_stage_job(db_pool) -> set[str]:
             rows_flow = await conn.fetch(
                 """
                 SELECT ticker, trade_date, foreign_net, inst_net,
-                       foreign_streak, inst_streak
+                       foreign_streak, inst_streak, personal_net
                 FROM   daily_flow
                 WHERE  trade_date >= $1
                 ORDER  BY trade_date ASC
@@ -115,6 +118,19 @@ async def daily_stage_job(db_pool) -> set[str]:
             flow_map[t] = df_f
     except Exception as e:
         logger.warning("[3단계] flow_map 로드 실패: %s", e)
+
+    # 3b. listed_shares 배치 로드 (krx_listings, yfinance_symbol 기준)
+    listed_shares_map: dict[str, int] = {}
+    try:
+        async with db_pool.acquire() as conn:
+            share_rows = await conn.fetch(
+                "SELECT yfinance_symbol, listed_shares FROM krx_listings WHERE listed_shares IS NOT NULL"
+            )
+        for r in share_rows:
+            listed_shares_map[r["yfinance_symbol"]] = r["listed_shares"]
+        logger.info("[3단계] listed_shares 로드: %d종목", len(listed_shares_map))
+    except Exception as e:
+        logger.warning("[3단계] listed_shares 로드 실패: %s", e)
 
     # 4. s1_history 배치 조회
     all_ticker_list = [t for t, _, _ in all_tickers]
@@ -160,15 +176,21 @@ async def daily_stage_job(db_pool) -> set[str]:
                             s1_vol   = _vol or None
                             s1_txamt = int(_vol * _close) or None  # 거래대금 = Volume × Close
 
+                    flow_df_for_score = flow_map.get(ticker, pd.DataFrame())
+                    price_df_for_score = price_map.get(ticker)
+                    lshares = listed_shares_map.get(ticker)
+
                     upsert_rows.append({
-                        "ticker":          ticker,
-                        "classified_date": today,
-                        "stage":           stage,
-                        "s1_entry_date":   today if stage == 1 else None,
-                        "s1_high":         s1_high,
-                        "s1_volume":       s1_vol,
-                        "s1_txamt":        s1_txamt,
-                        "peakout_flag":    peakout,
+                        "ticker":               ticker,
+                        "classified_date":      today,
+                        "stage":                stage,
+                        "s1_entry_date":        today if stage == 1 else None,
+                        "s1_high":              s1_high,
+                        "s1_volume":            s1_vol,
+                        "s1_txamt":             s1_txamt,
+                        "peakout_flag":         peakout,
+                        "foreign_chg_14d_pct":  compute_foreign_chg_pct(flow_df_for_score, lshares),
+                        "flow_score":           compute_flow_score(flow_df_for_score, price_df_for_score),
                     })
             except Exception as e:
                 logger.debug("[3단계] 분류 오류: %s", e)
