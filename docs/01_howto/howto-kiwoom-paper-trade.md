@@ -36,10 +36,11 @@ python run_scheduler.py
 시작 로그에서 초기화 성공 메시지를 확인합니다:
 
 ```
-[paper] 모의투자 클라이언트 초기화 완료
-[paper] Exit Checker 등록 완료 (16:10 KST)
+[paper] 키움 모의투자 클라이언트 초기화 완료
+[paper] Exit Checker 등록 완료 (15:20 KST)
 [paper] EOD 샘플러 등록 완료 (16:40 KST)
 [paper] T+1 진입 잡 등록 완료 (09:05 KST)
+[compose-paper] 주간 신호 적재 잡 등록 완료 (일요일 21:15 KST)
 ```
 
 `KIWOOM_MOCK_APPKEY` 미설정이면:
@@ -59,18 +60,19 @@ python run_scheduler.py
 또는 DB에서 직접 조회:
 
 ```sql
--- 현재 오픈 포지션
-SELECT ticker, model, entry_price, qty, entry_date
+-- 현재 오픈 포지션 (paper_trades 테이블은 존재하지 않음 — paper_positions 하나로 관리)
+SELECT ticker, model, entry_theory, entry_actual, qty, signal_date
 FROM paper_positions
-WHERE closed_at IS NULL
-ORDER BY entry_date DESC;
+WHERE status != 'closed'
+ORDER BY signal_date DESC;
 
--- 모델별 성과
+-- 모델별 성과 (/paper_perf 명령어와 동일 쿼리, telegram_bot.py 참고)
 SELECT model,
-       COUNT(*) as trades,
-       AVG(pnl_pct) as avg_return,
-       SUM(CASE WHEN pnl_pct > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as win_rate
-FROM paper_trades
+       COUNT(*) FILTER (WHERE status = 'closed')                       AS closed,
+       AVG(blended_return) FILTER (WHERE status = 'closed')            AS avg_return,
+       AVG(CASE WHEN blended_return > 0 AND status = 'closed' THEN 1.0
+                WHEN status = 'closed' THEN 0.0 END)                   AS win_rate
+FROM paper_positions
 GROUP BY model;
 ```
 
@@ -88,9 +90,13 @@ GROUP BY model;
 
 ```python
 MODEL_CONFIG = {
-    "stage":    {"max_slots": 10, "position_krw": 10_000_000},
-    "ichimoku": {"max_slots": 10, "position_krw": 10_000_000},
-    "cross":    {"max_slots":  5, "position_krw": 20_000_000},
+    "stage":           {"max_slots": 10, "position_krw": 10_000_000},
+    "kosdaq":          {"max_slots": 10, "position_krw": 10_000_000},
+    "cross":           {"max_slots":  5, "position_krw": 20_000_000},
+    "ichimoku":        {"max_slots": 10, "position_krw": 10_000_000},
+    "compose-funnel1": {"max_slots": 10, "position_krw": 10_000_000},
+    "compose-and1":    {"max_slots":  5, "position_krw": 20_000_000},
+    "compose-score1":  {"max_slots":  5, "position_krw": 20_000_000},
 }
 ```
 
@@ -101,6 +107,8 @@ MODEL_CONFIG = {
 - 모의투자 서버는 KRX 거래 시간(09:00~15:30 KST)에만 주문이 체결됩니다.
 - 모의투자 계좌 초기 예수금은 키움 HTS에서 확인/재설정합니다 (일반적으로 1억원).
 - `paper_open_entry` 잡(09:05 KST)이 전일 신호 종목에 대해 당일 시가로 주문합니다.
+- `paper_exit_checker` 잡(15:20 KST, 정규장 마감 직전)이 익절/손절 조건 충족 종목을 시장가로 청산합니다.
+- `compose_paper_entry` 잡(일요일 21:15 KST)은 FUNNEL-1/AND-1/SCORE-1 조합전략 주간 신호를 DB에 적재만 하며, 이 시점에는 Kiwoom 호출이 필요 없습니다 — 실제 주문은 다음 평일 `paper_open_entry`에서 실행됩니다.
 
 ## 관련 문서
 
