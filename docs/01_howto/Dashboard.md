@@ -617,10 +617,10 @@ DART 최신 보고서 기준 재무 요약(매출·영업이익·사업부문)�
 ```
 YouTube Data API v3 → 영상 목록
   → youtube-transcript-api → 한국어 자막
-  → Gemini 2.5 Flash LLM → 종목 언급 JSON
-  → youtube_stock_mentions 테이블
+  → Ollama 로컬 LLM(기본 qwen3.5:9b) → 종목 언급 JSON
+  → youtube_mention_raw 테이블
   → 5영업일 롤링 → youtube_attention_scores
-  → 15:40 KST pykrx → youtube_mention_forward_returns (백테스트 재료)
+  → 15:40 KST yfinance → youtube_mention_forward_returns (백테스트 재료)
 ```
 
 ### 테이블 구조

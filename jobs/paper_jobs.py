@@ -31,35 +31,6 @@ from telegram.telegram_notify import _get_token, _get_chat_id, _post_message
 logger = logging.getLogger(__name__)
 
 
-def _fetch_prices_yf(tickers: list[str]) -> dict[str, float]:
-    """yfinance로 당일 최신 가격 일괄 조회. {ticker: price} 반환."""
-    try:
-        import yfinance as yf
-        import pandas as pd
-        hist = yf.download(
-            tickers, period="1d", interval="1m",
-            auto_adjust=True, progress=False, threads=True,
-        )
-        if hist.empty:
-            return {}
-        close = hist["Close"]
-        result: dict[str, float] = {}
-        if isinstance(close, pd.Series):
-            val = close.dropna()
-            if len(val) >= 1 and len(tickers) == 1:
-                result[tickers[0]] = float(val.iloc[-1])
-        else:
-            for t in tickers:
-                if t in close.columns:
-                    val = close[t].dropna()
-                    if len(val) >= 1:
-                        result[t] = float(val.iloc[-1])
-        return result
-    except Exception as e:
-        logger.warning("[paper-exit] yfinance 가격 조회 실패: %s", e)
-        return {}
-
-
 async def paper_exit_checker_job(db_pool, paper_trader) -> None:
     """정규장 마감 직전(15:20 KST) — 오픈 포지션 전체에 대해 exit 조건 판정 → 시장가 매도주문."""
     today = date.today()

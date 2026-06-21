@@ -35,7 +35,7 @@ forward return은 `youtube_forward_return_job` (15:40 KST)이 자동 채움.
 ## P1: YouTube 내러티브 — 스케줄러 재시작으로 운영 시작
 
 **What:** `run_scheduler.py` 재시작. 이미 09:05/09:10/15:40 KST 잡 등록 완료.
-`.env`에 `YOUTUBE_API_KEY` + `GEMINI_API_KEY` 있으면 자동 가동.
+`.env`에 `YOUTUBE_API_KEY` 있으면 자동 가동 (LLM 추출은 Gemini가 아닌 Ollama 로컬 모델로 전환됨 — `OLLAMA_BASE`/`OLLAMA_MODEL`).
 
 **체크리스트:**
 - [x] 서버 재시작 (또는 스케줄러 프로세스 재시작) — 2026-06-03 12:53 KST, `schtasks /Run "NewsCrawler"`

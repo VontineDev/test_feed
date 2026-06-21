@@ -6,7 +6,7 @@
 
 ## 전제 조건
 
-- `YOUTUBE_API_KEY`, `GEMINI_API_KEY`, `DATABASE_URL` 환경변수 설정
+- `YOUTUBE_API_KEY`, `DATABASE_URL` 환경변수 설정 (LLM 추출은 Gemini가 아닌 Ollama 사용 — `OLLAMA_BASE`/`OLLAMA_MODEL`, 기본값 `http://localhost:11434` / `qwen3.5:9b`)
 - 테이블이 이미 생성되어 있어야 함 (없으면 `--ensure-tables` 먼저 실행)
 - yfinance 설치: `pip install yfinance` (forward return 채우기에 필요)
 
@@ -58,7 +58,7 @@ python scripts/youtube_backfill_monthly.py --step scores
 python data/youtube_narrative_sync.py --backfill --from 2026-01-01 --to 2026-01-31
 ```
 
-**소요 시간**: 날짜당 ~10초 (YouTube API 호출 + Gemini 호출). burst 방식은 1년치 백필이 수십 분
+**소요 시간**: 날짜당 ~10초 (YouTube API 호출 + Ollama 로컬 LLM 추출). burst 방식은 1년치 백필이 수십 분
 이내에 끝나지만 IP 차단 위험이 크다. 분산 백필은 8개/회 × 하루 3회 = 24개/일로, 810개 기준
 약 34일이 소요된다. YouTube API 일일 쿼터(10,000 units) 확인 필요.
 
@@ -154,7 +154,7 @@ python data/youtube_narrative_sync.py --fill-returns
 - `--backfill`은 이미 수집된 `(video_id, stock_name_raw, source_quote)` 조합을 자동 스킵합니다. 중단 후 재시작해도 중복 없이 이어서 진행됩니다.
 - YouTube Data API는 일일 10,000 units 쿼터가 있습니다. 검색 1회 = 100 units. 하루 100회 검색 가능.
 - 삼프로TV 영상 자막이 없는 경우(`_MIN_TRANSCRIPT_LEN = 200자 미만`) 해당 영상은 스킵됩니다.
-- Gemini가 가끔 배열 대신 객체를 반환합니다. 이 경우 해당 언급은 빈 배열로 처리됩니다.
+- Ollama가 가끔 배열 대신 객체를 반환합니다. 이 경우 해당 언급은 빈 배열로 처리됩니다.
 - forward return 채우기는 최대 500건씩 처리합니다. 미채움 레코드가 많으면 반복 실행하세요.
 
 ## 관련 문서

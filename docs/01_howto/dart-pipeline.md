@@ -29,13 +29,15 @@ OpenDART API (https://opendart.fss.or.kr)
 
 ## 스케줄
 
-| 잡 | 실행 시각 (KST) | 담당 레이어 |
-|----|-----------------|-------------|
-| `daily_dart_disclosures` | 평일 09:00 | dart_sync: 전일 공시 이벤트 |
-| `monthly_dart_xbrl` | 매월 1일 02:00 | dart_sync: XBRL 재무수치 |
-| `dart_extractions_spring` | 5월 20일 03:00 | dart_extractor: 사업보고서 + 1분기 |
-| `dart_extractions_autumn` | 9월 1일 03:00 | dart_extractor: 반기보고서 |
-| `dart_extractions_winter` | 11월 20일 03:00 | dart_extractor: 3분기보고서 |
+스케줄러 등록은 `run_scheduler.py`에서 UTC 기준 `CronTrigger`로 이루어집니다. 자정을 넘기는 시각(UTC+9)은 KST로 환산하면 날짜가 하루 밀립니다 — 아래 표는 실제 KST 기준 발생일입니다.
+
+| 잡 | 등록값 (UTC) | 실행 시각 (KST) | 담당 레이어 |
+|----|--------------|-----------------|-------------|
+| `daily_dart_disclosures` | 평일 00:00 UTC | 평일 09:00 | dart_sync: 전일 공시 이벤트 |
+| `monthly_dart_xbrl` | 매월 1일 17:00 UTC | **매월 2일** 02:00 | dart_sync: XBRL 재무수치 |
+| `dart_extractions_spring` | 5월 20일 18:00 UTC | **5월 21일** 03:00 | dart_extractor: 사업보고서 + 1분기 |
+| `dart_extractions_autumn` | 9월 1일 18:00 UTC | **9월 2일** 03:00 | dart_extractor: 반기보고서 |
+| `dart_extractions_winter` | 11월 20일 18:00 UTC | **11월 21일** 03:00 | dart_extractor: 3분기보고서 |
 
 ## 필수 환경 변수
 

@@ -134,7 +134,7 @@ NotebookLM을 파이프라인에서 제거하고, 전 과정을 코드로 묶는
 
 ### 소급 백테스트 (즉시 실행 가능)
 
-YouTube Data API로 과거 영상을 날짜 범위 지정 수집 → Gemini 추출 → attention_score 재계산 → yfinance 실제 수익률과 IC 측정.
+YouTube Data API로 과거 영상을 날짜 범위 지정 수집 → Ollama 추출 → attention_score 재계산 → yfinance 실제 수익률과 IC 측정.
 
 **핵심 방법론 — 주간 신호 → 1달 수익률:**
 

@@ -11,7 +11,7 @@ YouTube Data API v3
 youtube-transcript-api  [쿠키 선택 적용]
     │  (한국어 자막 텍스트)
     ↓
-Gemini Flash LLM
+Ollama 로컬 LLM (기본 qwen3.5:9b)
     │  (종목 언급 JSON 추출)
     ↓
 youtube_mention_raw         ← 원시 언급 데이터
@@ -28,8 +28,11 @@ youtube_mention_forward_returns  ← 1d/5d/20d 수익률 (백테스트용)
 | 변수 | 필수 | 설명 |
 |------|------|------|
 | `YOUTUBE_API_KEY` | 필수 | YouTube Data API v3 키 |
-| `GEMINI_API_KEY` | 필수 | Google Gemini API 키 |
+| `OLLAMA_BASE` | 선택 (기본 `http://localhost:11434`) | Ollama 서버 주소 |
+| `OLLAMA_MODEL` | 선택 (기본 `qwen3.5:9b`) | 종목 언급 추출에 사용할 모델 |
 | `DATABASE_URL` | 필수 | PostgreSQL DSN |
+
+`GEMINI_API_KEY`는 더 이상 사용하지 않습니다 (Ollama 로컬 LLM으로 마이그레이션됨).
 
 ## 모듈 상수
 
@@ -37,9 +40,10 @@ youtube_mention_forward_returns  ← 1d/5d/20d 수익률 (백테스트용)
 |------|-----|------|
 | `_MIN_TRANSCRIPT_LEN` | `200` | 이보다 짧은 자막은 유효하지 않은 것으로 간주 |
 | `_ROLLING_DAYS` | `5` | attention_score rolling window (영업일) |
-| `_MAX_TRANSCRIPT_CHARS` | `8000` | Gemini 프롬프트에 전달하는 자막 최대 길이 |
-| `_GEMINI_RPM_SLEEP` | `4.0` | Gemini free tier 15 RPM 대응 대기 시간(초) |
+| `_MAX_TRANSCRIPT_CHARS` | `8000` | Ollama 프롬프트에 전달하는 자막 최대 길이 |
 | `_FILL_RETURNS_BATCH` | `500` | `fill_forward_returns` 1회 처리 최대 행 수 |
+
+Ollama 호출은 로컬 서버이므로 RPM 제한이 없습니다 (`requests.post(timeout=120)`로 순차 호출).
 
 **쿠키 파일 (선택)**: `docs/youtube.com_cookies.txt` — Netscape 형식 쿠키. 파일이 존재하면 자막 요청에 자동 적용됩니다. IP 차단 우회에 사용. `.gitignore` 등록됨.
 
@@ -82,9 +86,9 @@ python data/youtube_narrative_sync.py --ensure-tables
 
 한국어 자막 텍스트 반환. 언어 우선순위: `["ko", "ko-KR"]` → 자동 생성 자막 fallback. 자막이 `_MIN_TRANSCRIPT_LEN = 200`자 미만이면 `None` 반환. YouTube IP 차단 시 `IpBlocked` 예외가 발생하며 `None`을 반환하고 WARNING 로그를 남깁니다.
 
-### `extract_mentions(transcript, gemini_api_key) -> list[dict]`
+### `extract_mentions(transcript) -> list[dict]`
 
-Gemini Flash로 종목 언급 추출. 응답 형식:
+`OLLAMA_BASE`/`OLLAMA_MODEL`(기본 `qwen3.5:9b`)로 종목 언급 추출 (`/api/chat`, `timeout=120`). Qwen3 reasoning 모델의 `<think>` 블록과 마크다운 코드블록을 후처리로 제거합니다. 응답 형식:
 
 ```json
 [
@@ -139,7 +143,7 @@ LLM이 배열 대신 객체를 반환하면 빈 배열로 처리 (버그 방어)
 구분해 `process_backfill_queue`가 차단 시에는 큐 항목을 `pending`으로 유지하고,
 자막이 없을 때는 `no_transcript`로 표시할 수 있게 합니다.
 
-### `process_backfill_queue(dsn, gemini_key, limit=8) -> dict`
+### `process_backfill_queue(dsn, limit=8) -> dict`
 
 분산 백필 2단계. `youtube_backfill_queue`에서 `status='pending'`인 영상을 `video_date`
 오름차순으로 최대 `limit`개 꺼내 자막 수집 → `extract_mentions` → `youtube_mention_raw`
@@ -153,9 +157,9 @@ LLM이 배열 대신 객체를 반환하면 빈 배열로 처리 (버그 방어)
 하루 2~3회 호출하는 것을 전제로 설계되었습니다 — burst 요청량이 IP 차단 임계값을 넘기지
 않도록 하기 위함입니다. 자세한 설계 배경은 [백필 계획](plan-youtube-backfill.md) 참고.
 
-### `compute_attention_scores(dsn, window_end, rolling_days=5)`
+### `compute_attention_scores(dsn, window_end=None)`
 
-`youtube_mention_raw`에서 `window_end` 기준 `rolling_days` 영업일 rolling attention_score 계산.
+`youtube_mention_raw`에서 `window_end`(기본 오늘) 기준 `_ROLLING_DAYS`(5) 영업일 rolling attention_score 계산.
 
 ```
 attention_score = SUM(sentiment_weight) / distinct_videos
@@ -253,9 +257,9 @@ SELECT status, COUNT(*) FROM youtube_backfill_queue GROUP BY status;
 | `youtube_attention_score` | 평일 09:35 | attention_score 계산 (sync 대비 30분 여유) |
 | `youtube_forward_return` | 평일 15:40 | forward return 채우기 |
 
-`YOUTUBE_API_KEY` 또는 `GEMINI_API_KEY` 미설정 시 잡이 자동 스킵.
+`YOUTUBE_API_KEY` 미설정 시 잡이 자동 스킵.
 
-09:35 시작은 의도된 설계: 삼프로TV 일평균 5~15개 영상, Gemini 호출 포함 sync는 60~120초 소요. 09:05에 sync 시작 후 30분이면 완료 보장.
+09:35 시작은 의도된 설계: 삼프로TV 일평균 5~15개 영상, Ollama 호출 포함 sync는 60~120초 소요. 09:05에 sync 시작 후 30분이면 완료 보장.
 
 ---
 

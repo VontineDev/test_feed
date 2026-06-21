@@ -235,10 +235,12 @@ python data/dart_sync.py --sync-disclosures --bgn-de 20260101 --end-de 20260531
 | 잡 ID | 실행 시각 (KST) | 내용 |
 |-------|-----------------|------|
 | `daily_dart_disclosures` | 평일 09:00 | 전일 Top 20 공시 수집 |
-| `monthly_dart_xbrl` | 매월 1일 02:00 | Top 20 XBRL 재무수치 갱신 |
-| `dart_extractions_spring` | 5월 20일 03:00 | 사업보고서(12월결산) + 1분기 보고서 추출 |
-| `dart_extractions_autumn` | 9월 1일 03:00 | 반기보고서(6월결산) 추출 |
-| `dart_extractions_winter` | 11월 20일 03:00 | 3분기보고서(9월결산) 추출 |
+| `monthly_dart_xbrl` | 매월 **2일** 02:00 | Top 20 XBRL 재무수치 갱신 |
+| `dart_extractions_spring` | **5월 21일** 03:00 | 사업보고서(12월결산) + 1분기 보고서 추출 |
+| `dart_extractions_autumn` | **9월 2일** 03:00 | 반기보고서(6월결산) 추출 |
+| `dart_extractions_winter` | **11월 21일** 03:00 | 3분기보고서(9월결산) 추출 |
+
+(스케줄러는 UTC 기준으로 등록되며, 자정을 넘기는 시각은 KST 환산 시 날짜가 하루 밀립니다 — 등록값은 `run_scheduler.py` 참고.)
 
 `DART_API_KEY` 미설정 시 잡은 경고 로그 후 자동 스킵 — 스케줄러 크래시 없음.
 

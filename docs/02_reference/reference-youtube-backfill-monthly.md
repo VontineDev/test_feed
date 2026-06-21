@@ -39,7 +39,7 @@ python scripts/youtube_backfill_monthly.py [--from YYYY-MM] [--to YYYY-MM] [--st
 | 변수 | 필수 단계 | 설명 |
 |------|---------|------|
 | `YOUTUBE_API_KEY` | sync | YouTube Data API v3 키 |
-| `GEMINI_API_KEY` | sync | Google Gemini Flash API 키 |
+| `OLLAMA_BASE` / `OLLAMA_MODEL` | sync, process | Ollama 로컬 LLM 서버/모델 (기본 `http://localhost:11434` / `qwen3.5:9b`) |
 | `DATABASE_URL` | 전체 | PostgreSQL DSN. 없으면 `core.db.get_dsn()` fallback |
 
 ## 예시

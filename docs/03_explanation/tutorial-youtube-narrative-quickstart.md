@@ -9,17 +9,19 @@
 - Python 환경 및 의존성 설치 완료 (`pip install -r requirements.txt`)
 - PostgreSQL 접속 가능 (`.env`에 `DATABASE_URL` 설정)
 - **YouTube Data API v3 키** — [Google Cloud Console](https://console.cloud.google.com/)에서 발급
-- **Google Gemini API 키** — [Google AI Studio](https://aistudio.google.com/)에서 발급
+- **Ollama 로컬 서버 실행 중** — 종목 언급 추출용 LLM (Gemini 아님, 로컬 모델). `ollama pull qwen3.5:9b` 후 `ollama serve`
 
 ---
 
 ## 1단계: API 키를 .env에 추가
 
-`.env` 파일에 두 키를 추가한다.
+`.env` 파일에 YouTube API 키를 추가한다. Ollama는 기본값(`http://localhost:11434`, `qwen3.5:9b`)이면 별도 설정 불필요 — 다른 서버/모델을 쓸 때만 `OLLAMA_BASE`/`OLLAMA_MODEL`을 추가한다.
 
 ```
 YOUTUBE_API_KEY=AIza...
-GEMINI_API_KEY=AIza...
+# 기본값과 다를 때만:
+# OLLAMA_BASE=http://localhost:11434
+# OLLAMA_MODEL=qwen3.5:9b
 ```
 
 ---
@@ -96,7 +98,7 @@ scripts\restart_scheduler.bat
 
 | 잡 ID | 실행 시각 (KST) | 동작 |
 |-------|----------------|------|
-| `youtube_narrative_sync` | 평일 09:05 | 전일 영상 수집 + Gemini 추출 |
+| `youtube_narrative_sync` | 평일 09:05 | 전일 영상 수집 + Ollama 추출 |
 | `youtube_attention_score` | 평일 09:35 | attention_score 집계 |
 | `youtube_forward_return` | 평일 15:40 | yfinance forward return 채우기 |
 

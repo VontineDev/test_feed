@@ -55,7 +55,7 @@ python run_scheduler.py --no-summary  # 요약 없이 수집만
 | `daily_stage_classifier` | 평일 16:30 | 일봉 3단계 Stage 분류기 |
 | `daily_watchlist_brief` | 평일 17:00 | 워치리스트 거래대금 일보 → Telegram |
 
-### YouTube 잡 (YOUTUBE_API_KEY + GEMINI_API_KEY 필수)
+### YouTube 잡 (`YOUTUBE_API_KEY` 필수, LLM 추출은 Ollama — `OLLAMA_BASE`/`OLLAMA_MODEL`)
 
 | 잡 ID | 실행 시각 (KST) | 내용 |
 |-------|-----------------|------|
@@ -70,8 +70,10 @@ python run_scheduler.py --no-summary  # 요약 없이 수집만
 | 잡 ID | 실행 시각 (KST) | 내용 |
 |-------|-----------------|------|
 | `daily_dart_disclosures` | 평일 09:00 | 전일 Top 20 공시 이벤트 수집 |
-| `monthly_dart_xbrl` | 매월 1일 09:10 | Top 20 XBRL 재무수치 갱신 |
-| `annual_dart_extractor` | 연 1회 (설정값) | 사업보고서 Ollama 내러티브 추출 |
+| `monthly_dart_xbrl` | 매월 2일 02:00 | Top 20 XBRL 재무수치 갱신 |
+| `dart_extractions_spring` | 5월 21일 03:00 | 사업보고서 + 1분기 보고서 Ollama 내러티브 추출 |
+| `dart_extractions_autumn` | 9월 2일 03:00 | 반기보고서 Ollama 내러티브 추출 |
+| `dart_extractions_winter` | 11월 21일 03:00 | 3분기보고서 Ollama 내러티브 추출 |
 
 `DART_API_KEY` 미설정 시 잡은 경고 로그 후 자동 스킵.
 
@@ -164,8 +166,8 @@ scheduler.add_job(
 
 | 환경변수 | 없을 때 비활성화되는 잡 |
 |----------|------------------------|
-| `DART_API_KEY` | daily_dart_disclosures, monthly_dart_xbrl, annual_dart_extractor |
-| `YOUTUBE_API_KEY` / `GEMINI_API_KEY` | youtube_narrative_sync, youtube_attention_score, youtube_forward_return |
+| `DART_API_KEY` | daily_dart_disclosures, monthly_dart_xbrl, dart_extractions_spring/autumn/winter |
+| `YOUTUBE_API_KEY` | youtube_narrative_sync, youtube_attention_score, youtube_forward_return |
 | `KIWOOM_MOCK_APPKEY` | paper_open_entry, paper_exit_checker, paper_eod_sampler |
 | `KRX_OPENAPI_KEY` | daily_ohlcv_warm (경고 후 0 반환, 스케줄러 크래시 없음) |
 | (DB 연결만 필요) | compose_paper_entry — Kiwoom 계정 없이도 동작 |

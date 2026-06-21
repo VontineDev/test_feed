@@ -31,8 +31,10 @@
 > v0.10.0.0부터 **YouTube 내러티브 스크리닝 파이프라인**이 추가되었습니다. `data/youtube_narrative_sync.py` — 삼프로TV(채널 ID: `UChlv4GSd7OQl3js-jkLOnFA`) 자막을 YouTube Data API v3로 수집하고 Gemini 2.5 Flash로 종목 언급을 JSON 구조화 추출. DB 테이블 3종(`youtube_mention_raw`·`youtube_attention_scores`·`youtube_mention_forward_returns`). 스케줄러 잡 3종(09:05 수집·09:35 attention_score 집계·15:40 forward return 채우기 KST 기준). `data/youtube_ticker_aliases.json` — 100개 한국어 약칭 → KRX 코드 수동 매핑. `scripts/youtube_backtest.py` — Spearman IC·t-stat·종목 히트율 블라인드 백테스트. 블라인드 백테스트 프로토콜: `git tag backtest-v1-blind` 후 `--backfill` 실행으로 방법론 동결 보장. attention_score는 soft feature(LEFT JOIN)로 기존 시스템에 영향 없음.
 > v0.10.0.0부터 **DART XML Ollama 추출기**(`data/dart_extractor.py`)가 추가되었습니다. `reports/dart/`의 로컬 XML 파일을 keyword grep + 헤더 앵커 2-트랙으로 최대 20,000자 컨텍스트 추출 후 Ollama(`qwen3.5:9b`)로 투자 판단 내러티브 생성. 결과를 `dart_extractions` 테이블에 저장. `scripts/export_dart_md.py` — `dart_extractions` DB → `dart/{날짜}_{기업명}_{기간}_{보고서유형}.md` 내보내기.
 > v0.10.0.1부터 **모의투자 exit checker 가격 소스 수정** — `paper_exit_checker_job`의 현재가 조회를 `KiwoomPaperTrader.get_current_price()`(mockapi.kiwoom.com ka10001 — 시장 데이터 미지원)에서 **yfinance 배치 조회**(`_fetch_prices_yf()`)로 교체. 대시보드와 동일 소스 통일. 수정 전: 매일 전 포지션이 "현재가 조회 실패"로 스킵 → 손절·익절 무발동.
+> v1.0.4.1부터 **모의투자 exit checker 가격 소스가 다시 Kiwoom mock API로 환원**되었습니다 (`jobs/paper_jobs.py`, 커밋 `72e06c3`). exit checker 실행 시점이 장 마감 후 → **정규장 마감 직전(15:20 KST) 시장가 매도**로 바뀌면서 정규장 중 실시간가가 필요해졌고, yfinance 1분봉은 지연이 있어 부적합 — v0.10.0.1에서 도입한 `_fetch_prices_yf()` 배치 조회는 더 이상 호출되지 않는 미사용 함수로 남아있었기에 제거했습니다. v0.10.0.1 항목은 해당 시점의 기록으로 보존하되, 현재 가격 소스는 본 항목이 최신입니다.
 > v1.0.4.0부터 **대시보드 파이프라인 직접 트리거 + Tor 프록시 우회 안정화**가 적용되었습니다. 종목 분석 탭 `PipelineStatusBar`에 파이프라인별 `▶` 실행 버튼(admin 전용)과 `↺` 상태 새로고침 버튼이 추가되어 텔레그램 없이 대시보드에서 직접 수급·스테이지·스크리너·유튜브 파이프라인을 트리거할 수 있습니다. 백엔드 `_VALID_JOBS`에 `youtube`·`flow`가 추가되고, 스케줄러 `_trigger_watcher_job`에 `youtube`(narrative_sync → attention_score 순차) / `flow` 디스패치 케이스가 추가됐습니다. 헤더의 "데이터 기준" 텍스트가 제거되고 파이프라인 상태 바로 통합됐습니다. Telegram 봇에 `TELEGRAM_PROXY` 환경변수 지원 추가 — KT 회선에서 `api.telegram.org` TCP 차단 시 Tor SOCKS5로 우회합니다. `.env` 인라인 주석 파싱 버그(`start_crawler.bat`) 수정 — `TOR_PROXY` 값에 주석 텍스트가 포함되어 URL 파싱 실패하던 문제 해결.
 
+> v1.0.3.5부터 **YouTube 내러티브 추출 LLM이 Gemini → Ollama 로컬 모델로 교체**되었습니다 (커밋 `a4f28a8`, 2026-06-16). `data/youtube_narrative_sync.py`의 `extract_mentions()`가 더 이상 `GEMINI_API_KEY`를 받지 않고, `OLLAMA_BASE`(기본 `http://localhost:11434`)/`OLLAMA_MODEL`(기본 `qwen3.5:9b`)로 `/api/chat`을 호출합니다. Qwen3 reasoning 모델의 `<think>` 블록 후처리 제거가 추가됐습니다. API 키 발급·크레딧·RPM 제한 의존성이 제거되고 로컬 추론으로 전환됨.
 > v1.0.3.0부터 **거래대금(txamt) 필터 전략 + SCORE-1 업그레이드 + compose-score1 모의투자 연결**이 추가되었습니다. `chart_signals.close × volume_w`로 주간 거래대금을 산출하는 cross-sectional 플래그 2종(`txamt_above_med_cs` — 주내 중앙값 이상, `txamt_top30_cs` — 주내 상위 30%)이 `derive_flags()`에 추가됐습니다(daily_ohlcv 불필요). AND-3(AND-1 ∩ txamt_above_med_cs, 샤프N/A·승률100%), AND-4(AND-1 ∩ txamt_top30_cs), AND-5(stage_any 완화, 30신호), AND-6(AND-5 ∩ txamt_above_med_cs) 4전략이 `STRATEGIES`에 추가됐습니다. SCORE-1의 가중치 항목이 `vol_ratio`(daily_ohlcv 기반, 갭 13개월)에서 `txamt_above_med_cs`로 교체됐습니다. `compose-score1` 모델(5슬롯, 2000만원/종목)이 `MODEL_CONFIG`와 `compose_paper_entry_job`에 추가되어 매주 일요일 21:15 KST에 자동 진입합니다. `run_compose.py`에 `TXAMT`(AND-1~4 비교) / `RELAX`(AND-1/3/5/6 비교) 그룹 라우팅이 추가됐습니다.
 
 > v1.0.2.0부터 **종목분석 탭 데이터 품질 개선**이 적용되었습니다. `/api/report/unified`에 `as_of` 필드 추가 — stage·screener·narrative 소스별 최신 수집일을 반환하며 히스토리 모드에서는 요청 날짜 범위에 바운드된 값 반환. `close` 폴백: `chart_signals`에 없는 YouTube·Stage 종목에 `daily_ohlcv` 최신 종가 적용. `sector` 폴백: `chart_signals` 현재 배치 → 히스토리 최근 KIND 업종 → `krx_listings` COALESCE 체인. `Report.tsx` `onLoad` 메모이제이션(`useCallback`) — 날짜 필터 변경 시 double-fetch 깜빡임 제거.
@@ -868,7 +870,7 @@ python data/dart_download.py --year 2026 --zip            # ZIP 파일 그대로
 ```
 YouTube Data API v3 (삼프로TV 채널 영상 목록)
     ↓ youtube-transcript-api (한국어 자막)
-    ↓ Gemini 2.5 Flash LLM (종목 언급 JSON 구조화)
+    ↓ Ollama 로컬 LLM, 기본 qwen3.5:9b (종목 언급 JSON 구조화)
     ↓ youtube_mention_raw  ← 원시 언급
     ↓ youtube_attention_scores  ← 5영업일 rolling attention_score
     ↓ youtube_mention_forward_returns  ← 1d/5d/20d 수익률
@@ -891,7 +893,7 @@ python data/youtube_narrative_sync.py --fill-returns              # forward retu
 
 **블라인드 백테스트 보장**: `git tag backtest-v1-blind` → `--backfill` 순서로 방법론 확정 후 데이터 채우기. 방법론 역산 방지.
 
-**환경변수**: `YOUTUBE_API_KEY`, `GEMINI_API_KEY`
+**환경변수**: `YOUTUBE_API_KEY` (필수), `OLLAMA_BASE`/`OLLAMA_MODEL` (선택, 기본 `http://localhost:11434` / `qwen3.5:9b`). `GEMINI_API_KEY`는 더 이상 사용하지 않음 (v0.10.0.0 출시 당시엔 Gemini 2.5 Flash 사용, 이후 Ollama로 마이그레이션됨 — 아래 v1.0.3.5 항목 참고).
 
 ---
 
@@ -958,7 +960,7 @@ test_feed/
 │   ├── dart_sync.py               # DART 전자공시 수집·XBRL 파싱·세그먼트 Ollama 추출
 │   ├── dart_download.py           # DART 보고서 원문 로컬 다운로더 (CLI 독립 실행)
 │   ├── dart_extractor.py          # DART XML → Ollama 내러티브 추출 → dart_extractions
-│   ├── youtube_narrative_sync.py  # 삼프로TV 자막 수집 → Gemini 종목 언급 추출 → attention_score
+│   ├── youtube_narrative_sync.py  # 삼프로TV 자막 수집 → Ollama 종목 언급 추출 → attention_score
 │   └── youtube_ticker_aliases.json # 한국어 약칭 → yfinance 심볼 수동 매핑 (100개)
 │
 ├── analysis/                      # 분석·전략 (v0.9.6.0~)
