@@ -4,30 +4,16 @@ Items deferred from code review and planning sessions.
 
 ---
 
-## P1: YouTube 내러티브 — 블라인드 백테스트 실행 (분산 백필 완료 후)
+## P1: YouTube 내러티브 — 블라인드 백테스트 실행 (분산 백필 완료 후) — ✅ 완료, 불합격
 
 **What:** `python scripts/youtube_backtest.py --ret ret_5d` 실행.
 
-**When:** ~~2026-06-05 이후~~ → **최소 2~4월 backfill 완료 후** (IP 해제 시점부터 약 8일)
-
-현황 (2026-06-09):
-- 수집 완료: 2026-01 (175건/37종목), 2026-05 (63건), 2026-06 (109건)
-- 미수집: 2026-02~04 (0건) — backfill 큐 972건 전체 pending
-- 백테스트 가능 샘플: 175건(2026-01-26~01-31 6일치) — 수치상 ≥100 충족이나 편향 심해 의미 없음
-- 블로커: YouTube IP 차단(2026-06-09, 수 시간~1일 내 자동 해제 예상) + Gemini 크레딧 소진(충전 완료)
-- schtasks "YTBackfillBatch" 등록됨 — IP 해제 시 자동 재개, 하루 24개 처리
+**결과:** 분산 백필 완전 소진(`youtube_backfill_queue` 964 `ok` / 8 `no_transcript`, pending 0). 백테스트 실행 결과(n=2,587) — **Spearman IC +0.0136, t-stat +0.69, p=0.4889 → 불합격** (합격 기준 IC>0.05 AND t-stat>1.65 미달). "IC ≈ 0" 경로 — 채널 교체 또는 전처리 개선 후 v2 재검증 필요. `attention_score`는 `effective_confidence`에 편입하지 않음.
 
 자세한 내용은 [백필 계획](plan-youtube-backfill.md) 참고.
-forward return은 `youtube_forward_return_job` (15:40 KST)이 자동 채움.
-
-**합격 기준:**
-- IC(ret_5d) > 0.05 AND t-stat > 1.65 AND 샘플 ≥ 100
-- 합격 → `attention_score`를 `effective_confidence`에 낮은 가중치로 편입
-- IC 음수 → 역지표(청산 경계 신호)로 재설계
-- IC ≈ 0 → 채널 교체 or 전처리 개선 후 v2 재검증
 
 **Effort:** XS (human: ~5min / CC: ~2min)
-**Priority:** P1
+**Priority:** P1 → 완료 (후속 v2 재검증은 별도 항목으로 분리 필요)
 **Depends on:** 스케줄러 운영 중 (forward return 자동 누적)
 
 ---
