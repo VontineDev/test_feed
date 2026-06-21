@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+> **2026-06-21 버전 체계 통합**: 이 프로젝트는 한동안 두 개의 독립된 changelog를 병행 운영했습니다 — `ARCHITECTURE.md`(블록쿼트, `v1.0.x` 계열)와 본 `CHANGELOG.md`(`v0.10.1.x` 계열). 둘 다 활발히 갱신되며 서로 갈라졌고, `VERSION` 파일은 `v0.10.0.0`에서 멈춰 있었습니다. 앞으로는 **이 `CHANGELOG.md`가 유일한 변경 이력**이며, `ARCHITECTURE.md`는 정적 아키텍처 설명만 유지합니다. `v1.0.x` 계열의 항목 6건(2026-06-14~16 발생, 실제 발생일 기준 정렬)을 아래로 이전했습니다 — 날짜가 위 항목(`0.10.1.11` 등)보다 과거인 것은 의도된 것입니다.
+
+## [0.10.1.17] - 2026-06-16 (이전: ARCHITECTURE.md `v1.0.4.0`)
+
+### Added
+- **대시보드 파이프라인 직접 트리거 + Tor 프록시 우회 안정화**: 종목 분석 탭 `PipelineStatusBar`에 파이프라인별 `▶` 실행 버튼(admin 전용)과 `↺` 상태 새로고침 버튼 추가 — 텔레그램 없이 대시보드에서 직접 수급·스테이지·스크리너·유튜브 파이프라인 트리거 가능. 백엔드 `_VALID_JOBS`에 `youtube`·`flow` 추가, 스케줄러 `_trigger_watcher_job`에 해당 디스패치 케이스 추가. 헤더의 "데이터 기준" 텍스트 제거, 파이프라인 상태 바로 통합.
+- Telegram 봇에 `TELEGRAM_PROXY` 환경변수 지원 추가 — KT 회선에서 `api.telegram.org` TCP 차단 시 Tor SOCKS5로 우회 (2026-06-21 기준 차단 해제 확인, 기본 비활성으로 전환됨 — `0.10.1.11` 참고).
+
+### Fixed
+- `.env` 인라인 주석 파싱 버그(`start_crawler.bat`) — `TOR_PROXY` 값에 주석 텍스트가 포함되어 URL 파싱 실패하던 문제 해결.
+
+## [0.10.1.16] - 2026-06-16 (이전: ARCHITECTURE.md `v1.0.3.0`)
+
+### Added
+- **거래대금(txamt) 필터 전략 + SCORE-1 업그레이드 + compose-score1 모의투자 연결**: `chart_signals.close × volume_w`로 주간 거래대금을 산출하는 cross-sectional 플래그 2종(`txamt_above_med_cs`, `txamt_top30_cs`)을 `derive_flags()`에 추가(daily_ohlcv 불필요). `STRATEGIES`에 AND-3~AND-6 4전략 추가. SCORE-1 가중치를 `vol_ratio`에서 `txamt_above_med_cs`로 교체. `compose-score1` 모델(5슬롯, 2000만원/종목)을 `MODEL_CONFIG`와 `compose_paper_entry_job`에 추가 — 매주 일요일 21:15 KST 자동 진입. `run_compose.py`에 `TXAMT`/`RELAX` 그룹 라우팅 추가.
+
+## [0.10.1.15] - 2026-06-15 (이전: ARCHITECTURE.md `v1.0.2.0`)
+
+### Added
+- **종목분석 탭 데이터 품질 개선**: `/api/report/unified`에 `as_of` 필드 추가(소스별 최신 수집일, 히스토리 모드에서는 요청 범위에 바운드). `close` 폴백 — `chart_signals`에 없는 종목에 `daily_ohlcv` 최신 종가 적용. `sector` 폴백 체인(`chart_signals` → 히스토리 KIND 업종 → `krx_listings`). `Report.tsx` `onLoad` 메모이제이션으로 날짜 필터 변경 시 double-fetch 깜빡임 제거.
+
+## [0.10.1.14] - 2026-06-14 (이전: ARCHITECTURE.md `v1.0.1.0`)
+
+### Added
+- **조합전략 텔레그램 연동 + daily_ohlcv 워밍 잡**: `/backtest compose <strategy> <start> <end> [market]` — AND-1 | AND-2 | SCORE-1 | FUNNEL-1 | ALL, ALL 선택 시 4전략 순차 실행 후 비교표 전송. `jobs/ohlcv_warm.py` — KRX OpenAPI 기반 daily_ohlcv 히스토리 백필 + 평일 18:30 KST 일배치. KOSPI/KOSDAQ → 'KR' 정규화. 초기 백필 완료: 71,341행 / 1,442 distinct dates.
+
+## [0.10.1.13] - 2026-06-14 (이전: ARCHITECTURE.md `v1.0.0.0`)
+
+### Added
+- **Tier-1 조합전략 백테스트 시스템**: `analysis/strategy_compose.py` 신호 합성 레이어(`load_signal_frame`/`derive_flags`/`and_gate`/`composite_score`/`funnel`). `backtest_engine.py`에 `compose` 모드 추가 — JOIN+백필 아키텍처로 라이브 스크리너와 백테스트가 동일 precompute 테이블 사용. Tier-1 전략 4종(AND-1/AND-2/SCORE-1/FUNNEL-1). 히스토리 백필 잡 `jobs/stage_backfill.py`/`jobs/screener_backfill.py`. CLI `scripts/run_compose.py`. 단위/통합/패리티 테스트 63개 추가.
+
+## [0.10.1.12] - 2026-06-21 (이전: ARCHITECTURE.md `v1.0.3.5`/`v1.0.4.1`, 통합 작성)
+
+### Changed
+- **YouTube 내러티브 추출 LLM을 Gemini → Ollama 로컬 모델로 교체** (커밋 `a4f28a8`, 실제 변경일 2026-06-16): `extract_mentions()`가 `GEMINI_API_KEY` 대신 `OLLAMA_BASE`/`OLLAMA_MODEL`로 `/api/chat` 호출. Qwen3 reasoning 모델 `<think>` 블록 후처리 제거 추가. API 키·크레딧·RPM 제한 의존성 제거.
+- **모의투자 exit checker 가격 소스가 다시 Kiwoom mock API로 환원** (커밋 `72e06c3`, 실제 변경일 2026-06-11): exit checker 실행 시점이 장 마감 후 → 정규장 마감 직전(15:20 KST) 시장가 매도로 바뀌며 정규장 중 실시간가가 필요해졌고, yfinance 1분봉은 지연이 있어 부적합. `_fetch_prices_yf()`는 이후 미사용 함수로 남아있어 `jobs/paper_jobs.py`에서 제거.
+
 ## [0.10.1.11] - 2026-06-21
 
 ### Changed
