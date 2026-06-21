@@ -15,7 +15,7 @@ KOSPI/KOSDAQ 전 종목을 자동 분석하여 매매 시그널을 Telegram으�
    - [4-b. 웹 대시보드](#4-b-웹-대시보드)
 5. [Telegram 명령어](#5-telegram-명령어)
    - 정보 조회: /status · /signals · /today · /screener · /top
-   - 분석: /backtest · /scan
+   - 분석: /backtest · /run_screener · /run_flow · /run_stage · /run_youtube · /run_all
    - 거래 저널: /buy · /sell · /port · /pnl
    - 모의투자: /paper · /paper_perf · /paper_exit
 6. [자동 실행 일정](#6-자동-실행-일정)
@@ -31,15 +31,15 @@ KOSPI/KOSDAQ 전 종목을 자동 분석하여 매매 시그널을 Telegram으�
 자동 실행 (손댈 것 없음)                   Telegram 명령어 (수동)
 ────────────────────────────────────      ───────────────────────
 평일 09:05 모의투자 T+1 매수주문           /status   — 시스템 상태
-평일 15:40 거래량 일보 전송                /signals  — 최근 매매 신호
-평일 16:10 모의투자 Exit 체크              /screener — 주봉 스크리닝 결과
-평일 16:30 전 종목 Stage 분류              /backtest — 전략 백테스트
-평일 16:40 모의투자 신호 샘플링            /buy /sell /port /pnl — 거래 기록
-평일 17:00 감시 종목 워치리스트 전송       /paper /paper_perf — 모의투자 현황
-매일 16:05 시간외 단일가 수집
-매일 20:00 KRX 종목 리스트 갱신
+평일 15:20 모의투자 Exit 체크              /signals  — 최근 매매 신호
+평일 16:30 전 종목 Stage 분류              /screener — 주봉 스크리닝 결과
+평일 16:40 모의투자 신호 샘플링            /backtest — 전략 백테스트
+평일 17:00 감시 종목 워치리스트 전송       /buy /sell /port /pnl — 거래 기록
+일요일 21:15 조합전략 모의투자 진입        /paper /paper_perf — 모의투자 현황
+평일 16:05 시간외 단일가 수집
+매일 20:00 KRX 종목 리스트 갱신 (요일 제한 없음)
 일요일 20:30 주봉 Ichimoku 스크리닝
-7분마다 뉴스 수집 + 신호 감지
+10분마다 뉴스 수집 + 신호 감지
 ```
 
 **실거래 자동화:** 없음. 실제 매매는 사용자가 직접 증권사 앱에서 실행합니다.
@@ -376,12 +376,12 @@ reuters: 23건 / yfinance_news: 15건 / yonhap: 8건
 
 ---
 
-### /scan
+### /run_screener
 
-주봉 스크리닝을 즉시 실행합니다. 전 종목(~2,700개)을 처리하므로 10~20분 소요됩니다.
+주봉 스크리닝을 즉시 실행합니다. 전 종목(~2,700개)을 처리하므로 10~20분 소요됩니다. (구 `/scan` 명령어는 `/run_screener`와 기능이 중복되어 제거됨)
 
 ```
-/scan
+/run_screener
 ```
 
 ---
@@ -842,7 +842,7 @@ psql -h localhost -U news_user -d news_db
 첫 설치 후 일요일 20:30 KST 자동 실행 전에는 DB가 비어 있습니다.
 
 ```
-/scan   ← 즉시 실행 (10~20분 소요)
+/run_screener   ← 즉시 실행 (10~20분 소요)
 ```
 
 ---
