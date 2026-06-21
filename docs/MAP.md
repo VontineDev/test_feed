@@ -54,6 +54,10 @@
 - `tutorial-youtube-narrative-quickstart.md`: 유튜브 내러티브 분석 엔진 신속 시작 가이드
 - `삼프로TV_자막샘플.md`: 내러티브 모델 학습 및 테스트용 텍스트 원본 샘플
 
+## 04_assets (Generated Charts & Data)
+분석 스크립트가 생성한 이미지·CSV 등 보조 자산을 보관하는 폴더입니다. 문서 본문에서 직접 참조(임베드)할 때만 채워 넣고, 참조가 끊긴 산출물은 정기적으로 정리합니다.
+- *(현재 비어 있음 — 2026-06-21 기준 미참조 IC 분석 산출물 삭제. 필요 시 `scripts/youtube_ic_analysis.py` 등으로 재생성 후 본문에서 링크 추가)*
+
 ---
 
 ## Claude 가동용 워크플로우 (AI Workflow)
