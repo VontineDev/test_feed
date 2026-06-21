@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.1.11] - 2026-06-21
+
+### Changed
+- **`docs/02_reference/reference-env-vars.md` — `TELEGRAM_PROXY` 기본 비활성으로 전환**: `api.telegram.org` 직접 연결 테스트(DNS·TCP 443·HTTPS) 모두 성공 확인 — KT 차단이 더 이상 적용되지 않음. `TELEGRAM_PROXY`를 켜둔 채 텔레그램 봇이 계속 폴링하면 9150 포트 점유 경쟁으로 실제 Tor Browser 연결이 실패할 수 있다는 점을 문서에 추가. `.env`의 `TELEGRAM_PROXY` 주석 처리, `NewsCrawler` 스케줄러 작업 재시작으로 반영.
+
 ## [0.10.1.10] - 2026-06-18
 
 ### Added

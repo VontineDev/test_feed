@@ -34,6 +34,8 @@ dart/
 data/dart_snapshots/
 volume_pattern_report_*.html
 screening_report_*.txt
+*.db
+data/youtube_ic_price_cache.pkl
 
 # ── IDE / OS ─────────────────────────────────────────────────
 .vscode/

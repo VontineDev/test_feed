@@ -158,15 +158,17 @@ ISP 차단 환경(KT 회선 등)에서 YouTube 자막 수집과 Telegram API 접
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
 | `TOR_PROXY` | *(없음)* | YouTube 자막 수집 Tor 우회 프록시. 형식: `socks5h://127.0.0.1:9150` (Tor Browser) 또는 `socks5h://127.0.0.1:9050` (Tor Expert Bundle). 미설정 시 직접 연결 시도 |
-| `TELEGRAM_PROXY` | *(없음)* | Telegram API(`api.telegram.org`) Tor 우회 프록시. KT 회선에서 TCP 443이 차단된 경우 설정. 형식: `socks5h://127.0.0.1:9150`. 미설정 시 직접 연결 |
+| `TELEGRAM_PROXY` | *(없음, 기본 비활성)* | Telegram API(`api.telegram.org`) Tor 우회 프록시. KT 회선에서 TCP 443이 차단된 경우에만 설정. 형식: `socks5h://127.0.0.1:9150`. 미설정 시 직접 연결 |
 
 **주의:** `.env` 파일에서 인라인 주석(`KEY=value  # comment`)을 사용하면 `start_crawler.bat` 파서가 주석 텍스트까지 값에 포함시킵니다. 주석은 반드시 별도 줄에 작성하세요.
 
+**주의 2:** `TELEGRAM_PROXY`와 `TOR_PROXY`를 동시에 켜둔 채 텔레그램 봇이 백그라운드로 계속 폴링하면, 실제 Tor Browser를 새로 띄울 때 9150 포트 점유 경쟁이 발생해 Tor Browser 연결이 실패할 수 있습니다. `api.telegram.org`가 직접 연결로 막힘 없이 열리는지 먼저 확인(`Test-NetConnection api.telegram.org -Port 443`)한 뒤 필요한 경우에만 켜세요. (2026-06-21 직접 연결 테스트 결과 KT 차단 해제 확인 → 기본값 비활성으로 전환)
+
 ```env
-# Tor Browser 9150
+# Tor Browser 9150 — YouTube 자막 수집용, KT 차단 시 필수
 TOR_PROXY=socks5h://127.0.0.1:9150
-# api.telegram.org KT 차단 우회
-TELEGRAM_PROXY=socks5h://127.0.0.1:9150
+# api.telegram.org KT 차단 우회 — 직접 연결이 막힐 때만 주석 해제
+# TELEGRAM_PROXY=socks5h://127.0.0.1:9150
 ```
 
 SOCKS5 프록시 지원은 `socksio` 패키지가 필요합니다 (`pip install socksio`).
