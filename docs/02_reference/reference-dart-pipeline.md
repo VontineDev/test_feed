@@ -107,15 +107,15 @@ class DartClient:
 
 `corpCode.zip` 전체(~5만 건)를 `dart_companies`에 upsert. 최초 1회 실행 필수. 1000건 단위 배치.
 
-#### `sync_disclosures(pool, corp_codes, bgn_de=None, end_de=None) -> int`
+#### `sync_disclosures(pool, corp_codes, bgn_de=None, end_de=None, api_key=None) -> int`
 
 `bgn_de`/`end_de` 미지정 시 전일 하루치. `corp_codes` 기업별 A·B 공시 타입 각각 조회. FK 위반 방지를 위해 `_ensure_corp()`로 `dart_companies`에 corp_code 자동 시드.
 
-#### `sync_xbrl(pool, corp_codes, bsns_year=None) -> int`
+#### `sync_xbrl(pool, corp_codes, bsns_year=None, api_key=None) -> int`
 
 연결(CFS) + 개별(OFS) 재무제표 모두 수집. `bsns_year` 미지정 시 전년도.
 
-#### `sync_segments(pool, corp_codes, bsns_year=None, force=False) -> int`
+#### `sync_segments(pool, corp_codes, bsns_year=None, api_key=None, force=False) -> int`
 
 `parse_ok=TRUE` 레코드가 2개 이상이면 건너뜀 (force=False). `II-2`(주요제품/서비스), `II-4`(매출현황) 절 Ollama 파싱. `_MAX_SECTION_CHARS = 6000`.
 
@@ -217,7 +217,7 @@ Pass 2 추출 후 Ollama에 전달하기 전에 rev_text에 3가지 전처리를
 
 rev_text에 "매출액", "영업수익", "이자수익", "총영업이익" 등 매출 지표가 없으면 금융사 전용 앵커(`영업수익`, `총영업이익`, `이자이익` 등)로 재탐색한다. Ollama가 revenue를 빈 값으로 반환하면 regex로 `매출액(영업수익)`, `총영업이익`, `순영업이익` 패턴을 직접 추출한다.
 
-#### `extract_all(pool, model, force, dart_dir) -> int`
+#### `extract_all(pool, model=DEFAULT_MODEL, force=False, dart_dir=DART_DIR, corp_filter=None) -> int`
 
 - 단일 `httpx.AsyncClient` 공유
 - Ollama 미응답 시 전체 중단
@@ -310,4 +310,4 @@ python scripts/export_dart_md.py
 
 - [DART 파이프라인 설정 방법](howto-dart-setup.md)
 - [DART 설계 설명](explanation-dart-design.md)
-- [스케줄러 레퍼런스](reference-scheduler.md) — `daily_dart_disclosures`, `monthly_dart_xbrl`, `annual_dart_extractor` 잡
+- [스케줄러 레퍼런스](reference-scheduler.md) — `daily_dart_disclosures`, `monthly_dart_xbrl`, `dart_extractions_spring`/`autumn`/`winter` 잡

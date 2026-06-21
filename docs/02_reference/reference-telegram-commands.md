@@ -15,10 +15,9 @@
 - 업타임 (시:분)
 - 누적 수집 URL 건수
 - 최근 24시간 수집 기사 수
-- 최근 24시간 발생 신호 수 (BUY / SELL / WATCH)
-- DB 연결 여부
-- 현재 활성 백엔드 (Ollama / LM Studio)
-- KOSPI / KOSDAQ 현재가 + 등락률 (KRX 직접 조회)
+- 최근 24시간 발생 신호 수 (총건수만 — BUY/SELL/WATCH 구분 없음)
+- 피드 목록 (Reuters + Investing + CNBC)
+- KOSPI / KOSDAQ 등락률 (`krx_openapi.py` 직접 호출 — 대시보드 캐시 독립적, 조회 실패 시 라인 생략)
 
 ### `/today`
 
@@ -73,7 +72,7 @@
 /backtest stage    2025-06-01 2026-01-01 --market KOSDAQ
 /backtest cross    2025-01-01 2026-01-01 --max 50
 /backtest stage2   2025-01-01 2026-01-01
-/backtest ichimoku 2025-01-01 2026-01-01 --hold-weeks 8
+/backtest ichimoku 2025-01-01 2026-01-01 --tp1 0.25 --trail 0.10 --stop 0.10
 ```
 
 **모드:**
@@ -108,8 +107,8 @@ DB 연결(DSN) 필수. HTML 리포트 `reports/backtest/compose_*.html` 자동 �
 | 옵션 | 설명 |
 |------|------|
 | `--market KOSPI\|KOSDAQ\|ALL` | 대상 시장 (기본: ALL) |
-| `--max N` | 최대 신호 수 제한 |
-| `--hold-weeks N` | 보유 기간 (주). 기본: 1/4/13주 표준 기간 |
+| `--max N` | 최대 티커 수 (기본 200) |
+| `--tx-cost F` | 왕복 거래비용 (기본 ~0.0021 = 0.21%) |
 | `--tp1 <비율>` | 1차 익절 가격 비율 (예: `0.07` = +7%) |
 | `--tp1-ratio <비율>` | 1차 익절 시 청산 비율 (예: `0.5` = 50%) |
 | `--trail <비율>` | 트레일링 스탑 비율 (예: `0.05` = -5%) |
@@ -202,7 +201,7 @@ DB 연결(DSN) 필수. HTML 리포트 `reports/backtest/compose_*.html` 자동 �
 현재 오픈 포지션 현황을 표시합니다.
 
 **출력 항목:**
-- 모델별 포지션 (Stage / KOSDAQ / Cross / Ichimoku)
+- 모델별 포지션 (stage / kosdaq / cross / ichimoku / compose-funnel1 / compose-and1 / compose-score1)
 - 진입가, 현재가, 미실현 수익률
 - 슬리피지 (이론가 대비 실제 체결가 차이)
 
@@ -294,13 +293,12 @@ KRX 수급 데이터를 즉시 수집합니다 (`daily_flow_sync_job`).
 | 매일 17:00 | Stage 1→2 전환 감지 시 별도 알림 |
 | 매일 17:00 | 랠리 소멸 경고 (3거래일 연속 vol_ratio < 0.6) |
 | 매주 일요일 20:30 | 주봉 스크리너 결과 — 전 종목 Ichimoku 스크리닝 |
-| 매주 월요일 09:00 | 주간 백테스트 리포트 |
 
 ---
 
 ## 관련 문서
 
-- [howto-watchlist.md](howto-watchlist.md) — 워치리스트 설정 가이드
-- [howto-screener.md](howto-screener.md) — 스크리너 설정 가이드
-- [HowToBacktest.md](HowToBacktest.md) — 백테스트 상세 가이드
+- [howto-watchlist.md](../01_howto/howto-watchlist.md) — 워치리스트 설정 가이드
+- [howto-screener.md](../01_howto/howto-screener.md) — 스크리너 설정 가이드
+- [howto-backtest.md](../01_howto/howto-backtest.md) — 백테스트 상세 가이드
 - [reference-env-vars.md](reference-env-vars.md) — 환경변수 레퍼런스

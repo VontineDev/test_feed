@@ -8,8 +8,9 @@ KRX(한국거래소) 데이터를 수집하는 4개 모듈의 완전한 기술 �
 |------|------|-------------|
 | `krx_openapi.py` | OHLCV, 종목기본정보, 지수 수집 | KRX OpenAPI (openapi.krx.co.kr) |
 | `krx_sync.py` | 전 종목 리스트 → `krx_listings` 동기화 | KRX OpenAPI |
-| `krx_flow_sync.py` | 외국인·기관 순매수 → `daily_flow` | data.krx.co.kr (직접 크롤) 또는 pykrx |
-| `krx_aftermarket_sync.py` | 시간외 단일가 스냅샷 → `aftermarket_snap` | KRX BLD API (data.krx.co.kr) |
+| `krx_flow_sync.py` | 외국인·기관·개인 순매수 → `daily_flow` | data.krx.co.kr (직접 크롤) 또는 pykrx |
+| `data/kiwoom_aftermarket_sync.py` | 시간외 단일가 스냅샷 → `aftermarket_snap` (**스케줄러가 실제로 호출하는 모듈**) | 키움 REST API ka10032 |
+| `data/krx_aftermarket_sync.py` | 위와 동일 테이블, 과거 날짜 backfill 전용 (키움 REST는 당일 데이터만 제공) | KRX BLD API (data.krx.co.kr) |
 
 ---
 
@@ -90,11 +91,13 @@ tickers = client.get_all_tickers("20260529")
 
 | 파일 | 함수/컨텍스트 | 사용 메서드 | 목적 |
 |------|--------------|------------|------|
-| `data/krx_sync.py:110` | `sync_krx_listings()` | `get_kospi_tickers`, `get_kosdaq_tickers` | `krx_listings` 테이블 upsert |
-| `core/ohlcv_cache.py:249` | `fill_daily_ohlcv_from_krx()` | `get_daily_ohlcv_all`, `get_kospi_index_ohlcv` | `daily_ohlcv` 캐시 채우기 (백테스트용) |
-| `analysis/chart_screener.py:133` | `get_all_tickers()` | `get_all_tickers` | 스크리너 종목 목록 조회 (1순위, FDR fallback) |
-| `dashboard/backend/main.py:2057` | `_fetch_krx()` 내부 | `get_kospi_index_ohlcv`, `get_kosdaq_index_ohlcv` | 대시보드 시장 현황 패널 |
-| `telegram/telegram_bot.py:157` | `/status` 명령 처리 | `get_kospi_index_ohlcv`, `get_kosdaq_index_ohlcv` | 텔레그램 상태 메시지 코스피·코스닥 등락률 |
+| `data/krx_sync.py:103` | `sync_krx_listings()` | `get_kospi_tickers`, `get_kosdaq_tickers` | `krx_listings` 테이블 upsert |
+| `core/ohlcv_cache.py:239` | `fill_daily_from_krx()` | `get_daily_ohlcv_all`, `get_kospi_index_ohlcv` | `daily_ohlcv` 캐시 채우기 (백테스트용) |
+| `analysis/chart_screener.py:118` | `get_all_tickers()` | `get_all_tickers` | 스크리너 종목 목록 조회 (1순위, FDR fallback) |
+| `dashboard/backend/main.py:2546` | `_fetch_krx()` 내부 | `get_kospi_index_ohlcv`, `get_kosdaq_index_ohlcv` | 대시보드 시장 현황 패널 |
+| `telegram/telegram_bot.py:165` | `/status` 명령 처리 | `get_kospi_index_ohlcv`, `get_kosdaq_index_ohlcv` | 텔레그램 상태 메시지 코스피·코스닥 등락률 |
+
+(라인 번호는 코드가 바뀌면 드리프트되는 참고값입니다 — 정확한 위치는 함수명으로 검색하세요.)
 
 ---
 
@@ -125,7 +128,11 @@ KOSPI + KOSDAQ 전 종목 upsert. `isin_code` PK 기준. `yfinance_symbol` 자�
 | `name_en` | TEXT | 영문명 |
 | `listed_at` | DATE | 상장일 |
 | `market` | TEXT | KOSPI / KOSDAQ |
+| `security_type` | TEXT | 증권 구분 |
 | `sector` | TEXT | 업종 |
+| `stock_type` | TEXT | 보통주/우선주 등 |
+| `par_value` | TEXT | 액면가 |
+| `listed_shares` | BIGINT | 상장주식수 (`ohlcv_cache.load_listed_shares()`가 사용 — 유통주식수 근사치) |
 | `yfinance_symbol` | TEXT | yfinance용 심볼 (005930.KS) |
 | `updated_at` | TIMESTAMPTZ | |
 
@@ -160,8 +167,14 @@ python data/krx_flow_sync.py --csv /path/to/data.csv --backend csv
 # 응답 구조 확인 (첫 실행 권장)
 python data/krx_flow_sync.py --probe 005930
 
+# 로그인 응답 원문 확인 (KRX_ID/KRX_PW 진단, DB 불필요)
+python data/krx_flow_sync.py --probe-login
+
 # 증분 모드 (스케줄러 매일 18:00 KST)
 python data/krx_flow_sync.py --incremental
+
+# 이미 저장된 날짜도 덮어쓰기 (personal_net 등 신규 필드 백필용)
+python data/krx_flow_sync.py --start 2025-01-01 --end 2026-05-03 --force
 
 # 시장/티커 수 제한 (테스트)
 python data/krx_flow_sync.py --start 2025-01-01 --end 2026-05-03 --market KOSPI --max 50
@@ -169,7 +182,7 @@ python data/krx_flow_sync.py --start 2025-01-01 --end 2026-05-03 --market KOSPI 
 
 ### CSV 형식
 
-컬럼: `date, ticker, foreign_net, inst_net`
+컬럼: `date, ticker, foreign_net, inst_net` (`personal_net`은 CSV 백엔드에서 지원하지 않음 — krx-direct/pykrx 백엔드만 채움)
 
 ```csv
 date,ticker,foreign_net,inst_net
@@ -187,50 +200,85 @@ KRX 다운로드 CSV(한국어 헤더) 자동 감지:
 
 | 컬럼 | 타입 | 설명 |
 |------|------|------|
-| PK | (trade_date, ticker) | |
+| PK | (ticker, trade_date) | |
 | `foreign_net` | BIGINT | 외국인 순매수 (주) |
 | `inst_net` | BIGINT | 기관 순매수 (주) |
-| `updated_at` | TIMESTAMPTZ | |
+| `foreign_streak` | SMALLINT | 외국인 연속 순매수일 (음수 = 순매도) |
+| `inst_streak` | SMALLINT | 기관 연속 순매수일 (음수 = 순매도) |
+| `personal_net` | BIGINT | 개인 순매수 (주). 음수 = 순매도 |
+| `personal_streak` | SMALLINT | 개인 연속 순매수일 |
+| `created_at` | TIMESTAMPTZ | |
 
 ---
 
-## krx_aftermarket_sync.py
+## data/kiwoom_aftermarket_sync.py (스케줄러가 실제로 호출하는 모듈)
 
-시간외 단일가 스냅샷 수집 (data.krx.co.kr BLD API).
+시간외 단일가 스냅샷 수집 (키움 REST API ka10032). `jobs/infra_jobs.py:daily_aftermarket_sync_job()`이 서브프로세스로 `--incremental` 실행 (평일 16:05 KST).
 
-**주의**: KRX BLD API는 당일 실시간 데이터만 제공. 과거 날짜 backfill은 이 모듈로 불가능.
+**주의**: 키움 REST API는 당일 실시간 데이터만 제공. 과거 날짜 backfill은 아래 `krx_aftermarket_sync.py`를 사용.
 
 ### CLI
 
 ```bash
 # 당일 수집 (15:40~16:00 사이 실행 권장)
-python data/krx_aftermarket_sync.py --today
+python data/kiwoom_aftermarket_sync.py --today
 
 # 날짜 override (데이터는 당일, 적재 날짜만 변경)
-python data/krx_aftermarket_sync.py --today --trade-date 2026-05-09
+python data/kiwoom_aftermarket_sync.py --today --trade-date 2026-05-09
 
 # 시장 필터
-python data/krx_aftermarket_sync.py --today --market KOSPI
+python data/kiwoom_aftermarket_sync.py --today --market KOSPI
 
-# 응답 구조 확인
-python data/krx_aftermarket_sync.py --probe
+# 응답 구조 확인 (DB 저장 없음)
+python data/kiwoom_aftermarket_sync.py --probe
+
+# mockapi.kiwoom.com 사용 (장외 테스트)
+python data/kiwoom_aftermarket_sync.py --today --mock
 
 # 증분 (어제 날짜로 당일 데이터 적재 — 스케줄러 16:05 KST 실행)
-python data/krx_aftermarket_sync.py --incremental
+python data/kiwoom_aftermarket_sync.py --incremental
+
+# 이미 수집된 날짜도 재수집
+python data/kiwoom_aftermarket_sync.py --today --force
 ```
 
-### DB 테이블: `aftermarket_snap`
+## data/krx_aftermarket_sync.py (과거 날짜 backfill 전용)
+
+동일 `aftermarket_snap` 테이블을 채우지만 KRX BLD API(data.krx.co.kr)를 사용 — 날짜 범위 조회가 가능해 과거 backfill에만 쓴다. 스케줄러에는 연결돼 있지 않음 (수동 실행).
+
+### CLI
+
+```bash
+# 응답 구조 확인 (BLD/컬럼명 검증)
+python data/krx_aftermarket_sync.py --probe 2026-05-09
+
+# 단일 날짜 수집
+python data/krx_aftermarket_sync.py --date 2026-05-09
+
+# 날짜 범위 backfill
+python data/krx_aftermarket_sync.py --start 2026-01-01 --end 2026-05-09
+
+# 전일 데이터만 수집 (스케줄러 미연결 — 수동 실행 시에만 의미 있음)
+python data/krx_aftermarket_sync.py --incremental
+
+# 시장 필터 + 종목 수 제한 + 요청 간 딜레이
+python data/krx_aftermarket_sync.py --start 2026-01-01 --end 2026-05-09 --market KOSPI --max 50 --delay 2.0
+```
+
+### DB 테이블: `aftermarket_snap` (`data/kiwoom_aftermarket_sync.py:104-121` 기준 — 실제 운영 스키마)
 
 | 컬럼 | 타입 | 설명 |
 |------|------|------|
 | PK | (trade_date, ticker) | |
-| `reg_close` | NUMERIC | 정규장 종가 |
-| `after_close` | NUMERIC | 시간외 체결가 |
+| `reg_close` | NUMERIC(12,0) | 정규장 종가 |
+| `after_close` | NUMERIC(12,0) | 시간외 체결가 |
 | `after_volume` | BIGINT | 시간외 누적 거래량 |
 | `after_value` | BIGINT | 시간외 누적 거래대금 (원) |
-| `after_chg_pct` | NUMERIC | 시간외 등락률 (%) |
+| `reg_value` | BIGINT | 정규장 거래대금 (`close × volume`으로 계산, API 미제공) |
+| `after_chg_pct` | NUMERIC(6,2) | 시간외 등락률 (%) |
+| `fetched_at` | TIMESTAMPTZ | |
 
-`after_value`는 `acc_trde_prica × 10,000`원 환산. API 응답 단위가 만원이므로 `_VALUE_UNIT = 10_000` 상수 적용.
+`after_value`는 `acc_trde_prica × _VALUE_UNIT` 환산. ka10032 응답의 `acc_trde_prica` 단위는 백만원으로 추정되어 `_VALUE_UNIT = 1_000_000`(`data/kiwoom_aftermarket_sync.py:92`) 적용 — 실제 값이 다르면 이 상수를 조정해야 한다고 코드 주석에 명시되어 있음.
 
 ---
 
@@ -238,7 +286,7 @@ python data/krx_aftermarket_sync.py --incremental
 
 | 잡 ID | 실행 시각 (KST) | 내용 |
 |-------|-----------------|------|
-| `krx_daily_refresh` | 평일 20:00 | krx_listings 갱신 (종목 상장/폐지 반영) |
+| `krx_daily_refresh` | 매일 20:00 (요일 제한 없음) | krx_listings 갱신 (종목 상장/폐지 반영) |
 | `daily_aftermarket_sync` | 평일 16:05 | 시간외 단일가 스냅샷 |
 | `daily_flow_sync` | 평일 18:00 | 외국인·기관 순매수 증분 sync |
 
