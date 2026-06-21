@@ -41,7 +41,7 @@ python data/krx_flow_sync.py --start 2026-01-01 --end 2026-05-31 --market KOSPI 
 
 ### 4단계: 스케줄러 자동 증분
 
-`run_scheduler.py` 실행 후 매일 18:00 KST에 전일 데이터가 자동 적재됩니다. 별도 작업 불필요.
+`run_scheduler.py` 실행 후 평일 18:00 KST(장 마감 + KRX 게시 여유 확보)에 전일 데이터가 자동 적재됩니다. 별도 작업 불필요.
 
 수동으로 증분 실행하려면:
 
@@ -79,6 +79,16 @@ KRX 다운로드 CSV (한국어 헤더)를 자동으로 감지합니다:
 ```
 date,ticker,foreign_net,inst_net
 2026-05-29,005930.KS,123456,-78900
+```
+
+---
+
+## 방법 C: pykrx 백엔드 (대안)
+
+`pip install pykrx` 설치 후 `--backend pykrx`를 지정하면 KRX 직접 크롤 대신 pykrx 라이브러리로 수급 데이터를 가져옵니다. 미설치 상태로 실행하면 에러로 종료됩니다.
+
+```bash
+python data/krx_flow_sync.py --start 2025-01-01 --backend pykrx
 ```
 
 ---

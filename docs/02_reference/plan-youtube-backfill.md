@@ -74,15 +74,16 @@
 | t-stat | +0.69 | > 1.65 |
 | p-value | 0.4889 | — |
 
-**판정: 불합격 (IC ≈ 0)** — 아래 "결과별 대응"의 "IC ≈ 0 → 채널 교체 또는 전처리 개선 후 v2 재검증" 경로로 진행 필요. `attention_score`를 `effective_confidence`에 편입하지 않음.
+**판정: [조건부]** (`scripts/youtube_backtest.py:_verdict()` 기준 — `ic > 0.01`이면 t-stat 무관하게 조건부) — rolling window·가중치 조정 후 v2 재검증 필요. `attention_score`를 아직 `effective_confidence`에 편입하지 않음.
 
 Direction별 ret_5d 평균: buy +2.47%(n=641), neutral +3.60%(n=1,878), sell +1.58%(n=68) — buy가 neutral보다 낮아 현재 신호 추출 방식이 예측력을 갖는다고 보기 어렵다.
 
-### 결과별 대응 (참고)
+### 결과별 대응 (`_verdict()` 4단계 판정, 참고)
 
-- 합격 → `attention_score`를 `effective_confidence`에 낮은 가중치로 편입
-- IC 음수 → 역지표(청산 경계 신호)로 재설계
-- IC ≈ 0 → 채널 교체 또는 전처리 개선 후 v2 재검증 ← **현재 해당**
+- `[합격]` IC > 0.05 AND t-stat > 1.65 → `attention_score`를 `effective_confidence`에 낮은 가중치로 편입
+- `[조건부]` IC > 0.01 → rolling window·가중치 조정 후 v2 재검증 ← **현재 해당**
+- `[역지표 후보]` IC < 0 → 청산/경계 신호로 재설계 검토
+- `[불합격]` 그 외(0 ≤ IC ≤ 0.01) → 채널 교체 또는 전처리 개선 필요
 
 ---
 

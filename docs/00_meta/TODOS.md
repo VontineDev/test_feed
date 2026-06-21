@@ -4,11 +4,11 @@ Items deferred from code review and planning sessions.
 
 ---
 
-## P1: YouTube 내러티브 — 블라인드 백테스트 실행 (분산 백필 완료 후) — ✅ 완료, 불합격
+## P1: YouTube 내러티브 — 블라인드 백테스트 실행 (분산 백필 완료 후) — ✅ 완료, [조건부]
 
 **What:** `python scripts/youtube_backtest.py --ret ret_5d` 실행.
 
-**결과:** 분산 백필 완전 소진(`youtube_backfill_queue` 964 `ok` / 8 `no_transcript`, pending 0). 백테스트 실행 결과(n=2,587) — **Spearman IC +0.0136, t-stat +0.69, p=0.4889 → 불합격** (합격 기준 IC>0.05 AND t-stat>1.65 미달). "IC ≈ 0" 경로 — 채널 교체 또는 전처리 개선 후 v2 재검증 필요. `attention_score`는 `effective_confidence`에 편입하지 않음.
+**결과:** 분산 백필 완전 소진(`youtube_backfill_queue` 964 `ok` / 8 `no_transcript`, pending 0). 백테스트 실행 결과(n=2,587) — **Spearman IC +0.0136, t-stat +0.69, p=0.4889 → [조건부]** (`_verdict()` 기준 IC>0.01이면 t-stat 무관하게 조건부 — 합격 기준 IC>0.05 AND t-stat>1.65에는 미달). rolling window·가중치 조정 후 v2 재검증 필요. `attention_score`는 아직 `effective_confidence`에 편입하지 않음.
 
 자세한 내용은 [백필 계획](plan-youtube-backfill.md) 참고.
 

@@ -142,19 +142,20 @@ data: [{"id": 123, "direction": "BUY", "strength": 4, ...}]
 
 ### POST /api/scheduler/trigger
 
-스케줄러 잡을 수동으로 트리거합니다.
+스케줄러 잡을 수동으로 트리거합니다. **관리자 권한 필요** (`request.state.role == "admin"`, 아니면 403).
 
 **요청:**
 ```json
-{"job_name": "stage"}
+{"job": "stage"}
 ```
 
-`job_name` 허용값: `stage`, `screener`, `paper_sample`
+`job` 허용값(`_VALID_JOBS`): `stage`, `screener`, `paper_sample`, `dart_screened`, `youtube`, `flow`
 
 **응답:**
 ```json
-{"ok": true, "job_name": "stage", "trigger_id": 7}
+{"status": "queued", "job": "stage", "id": 7}
 ```
+이미 대기/실행 중인 동일 잡이 있으면 `{"status": "already_queued", "job": "stage"}`.
 
 ---
 
@@ -603,8 +604,9 @@ DART 최신 보고서 기준 재무 요약(매출·영업이익·사업부문)�
 | 09:05 | `youtube_narrative_sync_job` | `youtube_mention_raw` | 삼프로TV 전일 영상 → LLM 종목 언급 추출 |
 | 09:35 | `youtube_attention_score_job` | `youtube_attention_scores` | 5영업일 롤링 attention_score 집계 |
 | 15:40 | `youtube_forward_return_job` | `youtube_mention_forward_returns` | 언급 종목 +1d/+5d/+20d 수익률 채우기 |
-| 16:05 | `daily_aftermarket_sync_job` | `aftermarket_snap` | NXT 시간외 단일가 종목 수집 (`--incremental`) |
-| 16:10 | `daily_market_snap_job` | `daily_market_snap` | ka10032 top100 최종 스냅샷 저장 |
+| 16:05 | `daily_aftermarket_sync_job` | `aftermarket_snap` | NXT 시간외 단일가 종목 수집 (`--incremental`), `reg_value` 동시 갱신 |
+| 16:10 | `daily_market_snap_job` (id: `daily_market_snap`) | `daily_market_snap` | NXT 종료(16:00) 후 10분 — 히트맵/Top 장마감 즉시 반영용 1차 스냅샷 |
+| 20:10 | `daily_market_snap_job` (id: `daily_market_snap_final`) | `daily_market_snap` | 완전한 당일 최종값으로 upsert (동일 함수, 잡 ID만 다름) |
 
 ---
 
@@ -645,10 +647,11 @@ attention_score = SUM(sentiment_weight) / distinct_video_count
 
 합격 기준: **IC(ret_5d) > 0.05 AND t-stat > 1.65 AND 샘플 ≥ 100**
 
-실행 (2026-06-05 이후, ret_5d 확보 시):
 ```bash
 python scripts/youtube_backtest.py --ret ret_5d
 ```
+
+**진행 상태**: 분산 백필 완료 후 실행됨 — `[조건부]` 판정(IC +0.0136, t-stat +0.69, n=2,587). 합격 기준 미달로 `attention_score`는 아직 `effective_confidence`에 편입하지 않음. 결과 상세: [백필 계획](../02_reference/plan-youtube-backfill.md), 판정 기준: [백테스트 실행 방법](howto-youtube-run-backtest.md).
 
 상세 설계: [유튜브 내러티브 스크리닝 설계 문서](explanation-youtube-narrative-design.md)
 
@@ -667,7 +670,7 @@ npm run dev
 # → http://localhost:5173
 ```
 
-개발 중에는 Vite(5173)와 FastAPI(8000)가 분리됩니다. CORS 설정(`main.py:138`)이 5173을 허용합니다.
+개발 중에는 Vite(5173)와 FastAPI(8000)가 분리됩니다. CORS 설정(`main.py:388`)이 5173을 허용합니다.
 
 ---
 
@@ -685,7 +688,7 @@ cd dashboard/backend
 uvicorn main:app --port 8000
 ```
 
-빌드된 파일이 `dist/`에 위치하면 FastAPI가 `StaticFiles`로 서빙합니다(`main.py:1151-1153`).  
+빌드된 파일이 `dist/`에 위치하면 FastAPI가 `StaticFiles`로 서빙합니다(`main.py:3213`).  
 새 빌드 후 브라우저에서 `Ctrl+Shift+R` (강제 새로고침) 필요.
 
 ---
@@ -694,9 +697,15 @@ uvicorn main:app --port 8000
 
 **외부 접속 (Caddy경유):** Caddy basicauth가 브라우저 인증 다이얼로그를 처리합니다. 한 번 인증하면 세션 동안 모든 API 호출에 자동 포함됩니다.
 
-**내부 접속 (localhost:8000 직접):** FastAPI `_BasicAuthMiddleware`가 `127.0.0.1` / `::1` 접속을 인증 없이 통과시킵니다(`main.py:149`). 개발 환경에서는 인증 없이 바로 접근할 수 있습니다.
+**FastAPI `_BasicAuthMiddleware` (`dashboard/backend/main.py:394`):** 3단계 역할 기반 Basic Auth — localhost 우회 로직은 없으며, 환경변수가 하나라도 설정되면 `127.0.0.1` 포함 모든 요청에 인증을 요구합니다.
 
-`DASHBOARD_USER` / `DASHBOARD_PASSWORD` 환경변수가 없으면 FastAPI 인증 자체가 비활성화됩니다.
+| 환경변수 | 역할 | 권한 |
+|---------|------|------|
+| `ADMIN_USER` / `ADMIN_PASSWORD` | `admin` | 스케줄러 트리거 + 포트폴리오 전체 |
+| `SPECIAL_USER` / `SPECIAL_PASSWORD` | `special` | 포트폴리오 조회 + 읽기 |
+| `DASHBOARD_USER` / `DASHBOARD_PASSWORD` | `user` (단, `ADMIN_USER` 미설정 시 `admin`으로 간주 — 하위 호환) | 읽기 전용 |
+
+세 변수 모두 미설정이면 인증 자체가 비활성화되고 모든 요청이 `role=admin`으로 통과합니다(로컬 개발 환경 기본값).
 
 ---
 

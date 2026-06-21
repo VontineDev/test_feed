@@ -7,7 +7,7 @@ Stage 1 진입 종목을 14캘린더일 동안 매일 추적합니다. 거래대
 ## 동작 원리
 
 ```
-매일 17:00 KST
+평일 17:00 KST
     ↓
 Stage 1 진입 후 14일 이내 종목 조회
     ↓
@@ -138,8 +138,8 @@ Telegram 발송 없이 로그만 확인하려면 임시로 `TELEGRAM_TOKEN`을 �
 | `watchlist_vol_log` | 일별 vol_ratio 이력 — 전일 대비 delta, 랠리 소멸 감지에 사용 |
 
 ```sql
--- 특정 종목 vol_ratio 이력 조회
-SELECT trade_date, vol_ratio, s1_vol
+-- 특정 종목 vol_ratio 이력 조회 (s1_vol 컬럼은 구버전 호환용으로 항상 NULL — s1_txamt 사용)
+SELECT trade_date, vol_ratio, s1_txamt
 FROM watchlist_vol_log
 WHERE ticker = '005930.KS'
 ORDER BY trade_date DESC
