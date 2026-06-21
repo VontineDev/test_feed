@@ -8,13 +8,10 @@ KOSPI + KOSDAQ 전 종목(~2770개)에 Ichimoku + 이동평균선 7조건을 적
 
 - PostgreSQL 연결 (`DB_*` 또는 `DATABASE_URL`)
 - yfinance 설치 (`pip install -r requirements.txt`)
-- KRX 종목 DB 초기화 (최초 1회):
-
-```bash
-python krx_sync.py
-```
-
-`krx_sync.py`는 KRX 전 종목 이름·코드·시장 구분을 `krx_listings` 테이블에 저장합니다. 이후 매주 월요일 자동 갱신됩니다.
+- KRX 종목 DB 초기화: `data/krx_sync.py`의 `sync_krx_listings()`가 KRX 전 종목 이름·코드·시장 구분을 `krx_listings` 테이블에 저장합니다. 별도 CLI 진입점은 없으며 다음 경로로 실행됩니다:
+  - `run_scheduler.py` 시작 시 자동 1회 실행
+  - 매일 20:00 KST 스케줄러 잡(`krx_daily_refresh`)으로 자동 갱신
+  - 즉시 1회 실행하려면: `python run_scheduler.py --once stage` (스테이지 분류기 실행과 함께 KRX 동기화도 수행)
 
 ---
 
@@ -54,10 +51,9 @@ Enhanced 종목은 구름 돌파에 더해 Ichimoku 내부 구조까지 강세�
 ```bash
 # 텔레그램 명령어
 /run_screener
-
-# 또는 CLI
-python run_scheduler.py --once screener
 ```
+
+`run_scheduler.py --once`는 `watchlist`와 `stage`만 지원하며 `screener`는 지원하지 않습니다. 즉시 실행은 텔레그램 명령어 또는 대시보드 트리거(`scheduler_triggers` 테이블에 `job_name='screener'` 행 삽입)로만 가능합니다.
 
 ### 결과 조회
 
@@ -131,18 +127,6 @@ strict 모드에서는 ma_120w가 NaN인 종목이 조건 G에서 탈락합니�
 -- strict 모드 전환 전후 비교 (직접 재실행 후 확인)
 SELECT week_of, COUNT(*) FROM chart_signals GROUP BY week_of ORDER BY week_of;
 ```
-
----
-
-## HTML 리포트 생성
-
-스크리닝 결과를 HTML 파일로 내보냅니다.
-
-```bash
-python generate_html_report.py
-```
-
-`reports/` 디렉터리에 `screener_YYYYMMDD.html`이 생성됩니다. 브라우저에서 열면 섹터별 그룹, 스파크라인(최근 12주 종가), Enhanced 배지를 확인할 수 있습니다.
 
 ---
 

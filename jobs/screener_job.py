@@ -1,7 +1,7 @@
 """주봉 차트 스크리너 잡.
 
 weekly_screener_job(db_pool) -> set[str]
-  전 종목 Ichimoku 스크리닝 → DB 저장 → Telegram 전송 → HTML 리포트.
+  전 종목 Ichimoku 스크리닝 → DB 저장 → Telegram 전송.
   반환값: 새 screener_tickers (호출자가 전역 캐시 갱신)
 """
 
@@ -31,19 +31,5 @@ async def weekly_screener_job(db_pool) -> set[str]:
     except Exception as e:
         logger.warning("[차트스크리너] 실행 실패: %s", e)
         return set()
-
-    try:
-        from reports.generate_html_report import generate_html
-        from pathlib import Path as _Path
-        from datetime import datetime as _dt
-        from zoneinfo import ZoneInfo as _ZI
-        html_str = generate_html(results)
-        _html_dir = _Path("reports/screener")
-        _html_dir.mkdir(parents=True, exist_ok=True)
-        _html_path = _html_dir / f"screener_{_dt.now(_ZI('Asia/Seoul')).strftime('%Y%m%d_%H%M')}.html"
-        _html_path.write_text(html_str, encoding="utf-8")
-        logger.info("[차트스크리너] HTML 리포트: %s", _html_path)
-    except Exception as _html_e:
-        logger.warning("[차트스크리너] HTML 생성 실패 (비중요): %s", _html_e)
 
     return new_tickers

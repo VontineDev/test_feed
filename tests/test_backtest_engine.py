@@ -1078,7 +1078,7 @@ class TestComputeSellSignalsAndS2:
         sig = self._make_sig("T.KS", s1_date, s1_price, mode="stage")
 
         # Case A: 외인 순매도 → S3 차단
-        flow_blocked = {("T.KS", s3_day): (-1_000, 500)}
+        flow_blocked = {("T.KS", s3_day): (-1_000, 500, None)}
         _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0,
                                      flow_lookup=flow_blocked)
         assert sig.s2_date is not None
@@ -1143,7 +1143,7 @@ class TestComputeSellSignalsAndS2:
         sig = self._make_sig("T.KS", s1_date, s1_price, mode="stage")
 
         # 외인+기관 모두 순매수
-        flow_ok = {("T.KS", s3_day): (5_000, 3_000)}
+        flow_ok = {("T.KS", s3_day): (5_000, 3_000, None)}
         _compute_sell_signals_and_s2([sig], {"T.KS": df}, tx_cost_rt=0.0,
                                      flow_lookup=flow_ok)
         assert sig.s2_date is not None

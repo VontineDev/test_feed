@@ -306,8 +306,9 @@ def fill_daily_from_krx(
 
 # ── 수급 데이터 로드 ──────────────────────────────────────────
 
-FlowKey   = tuple[str, date]                         # (yfinance_symbol, trade_date)
-FlowValue = tuple[Optional[int], Optional[int]]      # (foreign_net, inst_net)
+FlowKey    = tuple[str, date]                                              # (yfinance_symbol, trade_date)
+FlowValue  = tuple[Optional[int], Optional[int], Optional[int]]            # (foreign_net, inst_net, personal_net)
+StreakValue = tuple[Optional[int], Optional[int]]                           # (foreign_streak, inst_streak)
 
 
 def load_flow_data(
@@ -318,7 +319,7 @@ def load_flow_data(
 ) -> dict[FlowKey, FlowValue]:
     """daily_flow 테이블에서 수급 데이터 로드.
 
-    반환: {(ticker, trade_date): (foreign_net, inst_net)}
+    반환: {(ticker, trade_date): (foreign_net, inst_net, personal_net)}
     ticker = yfinance 심볼 (005930.KS / 035720.KQ).
     값이 없는 날짜는 dict에 포함되지 않으므로 호출자가 .get()으로 확인.
     """
@@ -330,7 +331,37 @@ def load_flow_data(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT ticker, trade_date, foreign_net, inst_net
+                SELECT ticker, trade_date, foreign_net, inst_net, personal_net
+                FROM daily_flow
+                WHERE ticker = ANY(%s)
+                  AND trade_date BETWEEN %s AND %s
+                """,
+                (tickers, start, end),
+            )
+            return {(row[0], row[1]): (row[2], row[3], row[4]) for row in cur.fetchall()}
+    finally:
+        conn.close()
+
+
+def load_flow_streaks(
+    dsn: str,
+    tickers: list[str],
+    start: date,
+    end: date,
+) -> dict[FlowKey, StreakValue]:
+    """daily_flow에서 수급 연속 streak 로드.
+
+    반환: {(ticker, trade_date): (foreign_streak, inst_streak)}
+    """
+    if not tickers:
+        return {}
+
+    conn = _connect(dsn)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT ticker, trade_date, foreign_streak, inst_streak
                 FROM daily_flow
                 WHERE ticker = ANY(%s)
                   AND trade_date BETWEEN %s AND %s
@@ -338,6 +369,27 @@ def load_flow_data(
                 (tickers, start, end),
             )
             return {(row[0], row[1]): (row[2], row[3]) for row in cur.fetchall()}
+    finally:
+        conn.close()
+
+
+def load_listed_shares(dsn: str) -> dict[str, int]:
+    """krx_listings에서 상장주식수 로드.
+
+    반환: {yfinance_symbol: listed_shares}
+    상장주식수는 유통주식수의 근사치 (유상증자/분할 시에만 변동 → 주 1회 sync로 충분).
+    """
+    conn = _connect(dsn)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT yfinance_symbol, listed_shares
+                FROM krx_listings
+                WHERE listed_shares IS NOT NULL AND listed_shares > 0
+                """
+            )
+            return {row[0]: int(row[1]) for row in cur.fetchall()}
     finally:
         conn.close()
 

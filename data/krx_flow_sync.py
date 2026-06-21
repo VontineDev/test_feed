@@ -94,6 +94,8 @@ class FlowRecord:
     inst_net: Optional[int]      # 기관 순매수 (주). 음수 = 순매도
     foreign_streak: Optional[int] = None
     inst_streak: Optional[int] = None
+    personal_net: Optional[int] = None     # 개인 순매수 (주). 음수 = 순매도
+    personal_streak: Optional[int] = None  # 개인 연속 순매수일
 
 
 # ── 스트릭 계산 ────────────────────────────────────────────────
@@ -175,8 +177,9 @@ class _KrxDirectFetcher:
 
     # isuCd 기반 쿼리의 TRDVAL 컬럼 인덱스 (실증 확인: 2026-04 tariff shock 기준)
     # TRDVAL1=외국인합계, TRDVAL2=기관합계, TRDVAL3=기타법인, TRDVAL4=개인
-    _FOREIGN_COL = "TRDVAL1"
-    _INST_COL    = "TRDVAL2"
+    _FOREIGN_COL   = "TRDVAL1"
+    _INST_COL      = "TRDVAL2"
+    _PERSONAL_COL  = "TRDVAL4"
     # KRX API 날짜 범위 상한 (초과 시 400). 30일은 OK, 실제 상한 미확인 → 보수적 90일.
     _CHUNK_DAYS  = 90
 
@@ -320,6 +323,7 @@ class _KrxDirectFetcher:
         end: date,
         prev_f_streak: Optional[int],
         prev_i_streak: Optional[int],
+        prev_p_streak: Optional[int] = None,
         rate_delay: float = 0.5,
     ) -> list[FlowRecord]:
         """단일 종목 수급 FlowRecord 목록 반환.
@@ -348,6 +352,7 @@ class _KrxDirectFetcher:
         records: list[FlowRecord] = []
         f_streak = prev_f_streak
         i_streak = prev_i_streak
+        p_streak = prev_p_streak
 
         for row in sorted(all_rows, key=lambda r: r.get("TRD_DD", "")):
             raw_date = (row.get("TRD_DD") or row.get("TDD_STR_DD") or row.get("BAS_DD") or "")
@@ -363,8 +368,10 @@ class _KrxDirectFetcher:
 
             f_net = _parse_int(row.get(self._FOREIGN_COL, ""))
             i_net = _parse_int(row.get(self._INST_COL, ""))
+            p_net = _parse_int(row.get(self._PERSONAL_COL, ""))
             f_streak = _next_streak(f_streak, f_net)
             i_streak = _next_streak(i_streak, i_net)
+            p_streak = _next_streak(p_streak, p_net)
 
             records.append(FlowRecord(
                 ticker=yf_symbol,
@@ -373,6 +380,8 @@ class _KrxDirectFetcher:
                 inst_net=i_net,
                 foreign_streak=f_streak,
                 inst_streak=i_streak,
+                personal_net=p_net,
+                personal_streak=p_streak,
             ))
 
         # 마지막 청크 이후 딜레이
@@ -461,8 +470,8 @@ def _fetch_pykrx(
         return None
 
 
-def _extract_nets(row: "pd.Series") -> tuple[Optional[int], Optional[int]]:
-    """DataFrame 행에서 외국인/기관 순매수(주) 추출.
+def _extract_nets(row: "pd.Series") -> tuple[Optional[int], Optional[int], Optional[int]]:
+    """DataFrame 행에서 외국인/기관/개인 순매수(주) 추출.
 
     컬럼명이 한글로 있으면 직접 접근, KeyError 시 위치 기반 접근.
     pykrx 표준 컬럼 순서:
@@ -483,9 +492,10 @@ def _extract_nets(row: "pd.Series") -> tuple[Optional[int], Optional[int]]:
             return None
         return int(v)
 
-    inst    = _get("기관합계",   7)
-    foreign = _get("외국인합계", 8)
-    return foreign, inst
+    inst     = _get("기관합계",   7)
+    foreign  = _get("외국인합계", 8)
+    personal = _get("개인",       10)
+    return foreign, inst, personal
 
 
 def fetch_pykrx_records(
@@ -494,6 +504,7 @@ def fetch_pykrx_records(
     end: date,
     prev_f_streak: Optional[int],
     prev_i_streak: Optional[int],
+    prev_p_streak: Optional[int] = None,
 ) -> list[FlowRecord]:
     """단일 종목 수급 레코드 목록 반환 (스트릭 포함)."""
     import pandas as pd
@@ -506,6 +517,7 @@ def fetch_pykrx_records(
     records: list[FlowRecord] = []
     f_streak = prev_f_streak
     i_streak = prev_i_streak
+    p_streak = prev_p_streak
 
     for ts, row in df.iterrows():
         if isinstance(ts, str):
@@ -519,9 +531,10 @@ def fetch_pykrx_records(
         if not (start <= d <= end):
             continue
 
-        foreign_net, inst_net = _extract_nets(row)
+        foreign_net, inst_net, personal_net = _extract_nets(row)
         f_streak = _next_streak(f_streak, foreign_net)
         i_streak = _next_streak(i_streak, inst_net)
+        p_streak = _next_streak(p_streak, personal_net)
 
         records.append(FlowRecord(
             ticker=yf_symbol,
@@ -530,6 +543,8 @@ def fetch_pykrx_records(
             inst_net=inst_net,
             foreign_streak=f_streak,
             inst_streak=i_streak,
+            personal_net=personal_net,
+            personal_streak=p_streak,
         ))
 
     return records
@@ -605,13 +620,16 @@ def _compute_streaks(records: list[FlowRecord]) -> list[FlowRecord]:
     """레코드 목록에서 종목별 스트릭 계산 (날짜 오름차순 전제)."""
     f_streaks: dict[str, Optional[int]] = defaultdict(lambda: None)
     i_streaks: dict[str, Optional[int]] = defaultdict(lambda: None)
+    p_streaks: dict[str, Optional[int]] = defaultdict(lambda: None)
 
     records.sort(key=lambda r: (r.ticker, r.trade_date))
     for rec in records:
-        rec.foreign_streak = _next_streak(f_streaks[rec.ticker], rec.foreign_net)
-        rec.inst_streak    = _next_streak(i_streaks[rec.ticker], rec.inst_net)
+        rec.foreign_streak  = _next_streak(f_streaks[rec.ticker], rec.foreign_net)
+        rec.inst_streak     = _next_streak(i_streaks[rec.ticker], rec.inst_net)
+        rec.personal_streak = _next_streak(p_streaks[rec.ticker], rec.personal_net)
         f_streaks[rec.ticker] = rec.foreign_streak
         i_streaks[rec.ticker] = rec.inst_streak
+        p_streaks[rec.ticker] = rec.personal_streak
 
     return records
 
@@ -633,6 +651,8 @@ async def _save_batch(pool, records: list[FlowRecord]) -> int:
                 inst_net=rec.inst_net,
                 foreign_streak=rec.foreign_streak,
                 inst_streak=rec.inst_streak,
+                personal_net=rec.personal_net,
+                personal_streak=rec.personal_streak,
             )
             saved += 1
         except Exception as e:
@@ -724,6 +744,7 @@ async def run_pykrx(
     end: date,
     market: str,
     max_tickers: int,
+    force: bool = False,
 ) -> None:
     """pykrx 백엔드: 전 종목 순차 수집 후 저장."""
     from analysis.chart_screener import get_all_tickers
@@ -734,19 +755,20 @@ async def run_pykrx(
 
     total_saved = 0
     for i, (yf_sym, name) in enumerate(tickers, 1):
-        # 이미 저장된 날짜 확인 (증분)
-        existing = await _get_existing_dates(pool, yf_sym, start, end)
-        if _already_loaded(existing, start, end):
-            logger.debug("[flow] %s 이미 저장됨, 건너뜀", yf_sym)
-            continue
+        # 이미 저장된 날짜 확인 (증분, --force 시 건너뜀)
+        if not force:
+            existing = await _get_existing_dates(pool, yf_sym, start, end)
+            if _already_loaded(existing, start, end):
+                logger.debug("[flow] %s 이미 저장됨, 건너뜀", yf_sym)
+                continue
 
         # 전일 스트릭 로드
-        prev_f, prev_i = await get_prev_streak(pool, yf_sym, start)
+        prev_f, prev_i, prev_p = await get_prev_streak(pool, yf_sym, start)
 
         # pykrx 수집 (동기 → executor)
         loop = asyncio.get_running_loop()
         records = await loop.run_in_executor(
-            None, fetch_pykrx_records, yf_sym, start, end, prev_f, prev_i
+            None, fetch_pykrx_records, yf_sym, start, end, prev_f, prev_i, prev_p
         )
 
         if not records:
@@ -772,6 +794,7 @@ async def run_krx_direct(
     krx_pw: Optional[str],
     krx_session: Optional[str] = None,
     krx_visitor: Optional[str] = None,
+    force: bool = False,
 ) -> None:
     """krx-direct 백엔드: pykrx 없이 data.krx.co.kr 직접 호출."""
     from analysis.chart_screener import get_all_tickers
@@ -785,18 +808,19 @@ async def run_krx_direct(
     total_saved = 0
     consecutive_empty = 0
     for i, (yf_sym, _name) in enumerate(tickers, 1):
-        existing = await _get_existing_dates(pool, yf_sym, start, end)
-        if _already_loaded(existing, start, end):
-            logger.debug("[flow] %s 이미 저장됨, 건너뜀", yf_sym)
-            continue
+        if not force:
+            existing = await _get_existing_dates(pool, yf_sym, start, end)
+            if _already_loaded(existing, start, end):
+                logger.debug("[flow] %s 이미 저장됨, 건너뜀", yf_sym)
+                continue
 
-        prev_f, prev_i = await get_prev_streak(pool, yf_sym, start)
+        prev_f, prev_i, prev_p = await get_prev_streak(pool, yf_sym, start)
 
         loop = asyncio.get_running_loop()
         records = await loop.run_in_executor(
             None,
-            lambda sym=yf_sym, pf=prev_f, pi=prev_i: fetcher.fetch_records(
-                sym, start, end, pf, pi
+            lambda sym=yf_sym, pf=prev_f, pi=prev_i, pp=prev_p: fetcher.fetch_records(
+                sym, start, end, pf, pi, pp
             ),
         )
 
@@ -907,6 +931,8 @@ def _parse_args() -> argparse.Namespace:
                         help="응답 구조 확인용 단일 종목 테스트 (예: --probe 005930)")
     parser.add_argument("--probe-login", action="store_true",
                         help="로그인 응답 원문 출력 (KRX_ID/KRX_PW 진단용, DB 불필요)")
+    parser.add_argument("--force", action="store_true",
+                        help="이미 저장된 날짜도 덮어쓰기 (personal_net 백필용)")
     return parser.parse_args()
 
 
@@ -964,11 +990,12 @@ async def main() -> None:
                 logger.warning(
                     "KRX_ID/KRX_PW 미설정 — 인증 없이 시도합니다. 실패 시 .env 확인."
                 )
-            await run_pykrx(pool, start, end, args.market, args.max)
+            await run_pykrx(pool, start, end, args.market, args.max, force=args.force)
 
         else:  # krx-direct (기본)
             await run_krx_direct(
-                pool, start, end, args.market, args.max, krx_id, krx_pw, krx_session, krx_visitor
+                pool, start, end, args.market, args.max, krx_id, krx_pw, krx_session, krx_visitor,
+                force=args.force,
             )
     finally:
         await pool.close()
