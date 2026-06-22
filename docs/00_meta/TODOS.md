@@ -4,15 +4,15 @@ Items deferred from code review and planning sessions.
 
 ---
 
-## 완료: personal_net 결손 — 주간 krx-direct 캐치업 잡 도입 (2026-06-22)
+## 완료: personal_net 결손 — daily_flow_sync_job을 krx-direct로 되돌림 (2026-06-22)
 
-**배경:** `daily_flow_sync_job`이 평일 `--backend kiwoom`(ka10045)으로 운영되는데, 이 TR은 개인 순매수를 주지 않아 `personal_net=NULL` 행이 쌓임 — `classify_stage_v15`(Stage2 "개인 출회" 게이트)가 조용히 무력화되는 문제였음(크래시 없음, 정확도만 저하).
+**배경:** `daily_flow_sync_job`이 평일 `--backend kiwoom`(ka10045)으로 운영되며 `personal_net=NULL` 행이 쌓이는 문제 발생 — `classify_stage_v15`(Stage2 "개인 출회" 게이트)가 조용히 무력화됨(크래시 없음, 정확도만 저하). 같은 날 주간 krx-direct 캐치업 잡으로 임시 대응했었으나, "Kiwoom으로 개인 순매수를 구할 방법이 있는지" 점검 결과 **구조적으로 불가능**함을 확인:
+- 키움 REST API의 모든 TR(`ka10045`, `ka10032`, `ka10087`, `ka10098`, `ka10001`, `kt00018` 등)에 투자자 유형별(개인/기관/외국인) 분류 데이터는 `ka10045` 하나뿐이고, 이마저도 기관/외국인만 제공(`tests/test_krx_flow_sync.py:447`에 이미 테스트로 고정됨).
+- 이유: 개인/기관/외국인 분류는 거래소(KRX)가 전 증권사 체결을 모아 투자자 유형코드로 집계하는 데이터라, 단일 증권사 API(키움)는 원천적으로 시장 전체 개인 순매수를 알 수 없음.
 
-**해결:** `jobs/infra_jobs.py`에 `weekly_flow_personal_backfill_job()` 추가 — 일요일 19:00 KST(`run_scheduler.py` cron)에 지난 7일을 `krx_flow_sync.py --backend krx-direct --force`로 재수집해 `personal_net`을 메움. `foreign_net`/`inst_net`도 krx-direct 값으로 같이 덮어씀(공식 원천이므로 의도된 동작). 대시보드 수동 트리거(`flow_personal_backfill`)와 `--once flow_personal_backfill` CLI도 추가.
+**최종 결정:** `daily_flow_sync_job`을 다시 `--backend krx-direct`로 되돌림 — `personal_net`을 매일 정확히 채움. 이에 따라 임시로 추가했던 주간 캐치업 잡(`weekly_flow_personal_backfill_job` + 관련 cron/트리거)은 중복이 되어 제거함.
 
-**검증:** 10종목·5거래일(2026-06-15~19) 대상 실행 — 45건 저장, `personal_net` 정상 채워짐 확인(`SELECT ... WHERE trade_date BETWEEN ...`로 직접 확인).
-
-**남은 리스크:** `KRX_SESSION` 쿠키가 만료되면 이 주간 잡만 조용히 실패(로그만 남김, 평일 kiwoom 잡은 영향 없음) — 결손이 다시 누적될 수 있으니 실패 로그(`[flow-personal-backfill] 비정상 종료`)를 주기적으로 확인할 것.
+**되돌린 리스크(원래부터 있던 것):** `KRX_SESSION` 쿠키가 만료되면 `daily_flow_sync_job` 자체가 실패함(`[flow-sync] 비정상 종료 — KRX_SESSION 만료 의심` 로그) — `.env`의 `KRX_SESSION`을 브라우저에서 주기적으로 갱신해야 함. kiwoom 백엔드(`--backend kiwoom`)는 `krx_flow_sync.py`에 코드 자체는 남아있어, 쿠키 만료 시 기관/외국인만이라도 임시로 채우는 수동 폴백으로 쓸 수 있음.
 
 ---
 

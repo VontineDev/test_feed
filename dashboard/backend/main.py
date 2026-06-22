@@ -989,7 +989,7 @@ async def signals_stream(request: Request):
 
 
 # ── POST /api/scheduler/trigger ───────────────────────────────
-_VALID_JOBS = {"stage", "screener", "paper_sample", "dart_screened", "youtube", "flow", "flow_personal_backfill"}
+_VALID_JOBS = {"stage", "screener", "paper_sample", "dart_screened", "youtube", "flow"}
 
 
 class TriggerBody(BaseModel):

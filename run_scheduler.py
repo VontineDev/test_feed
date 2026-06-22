@@ -554,11 +554,6 @@ async def _daily_flow_sync_job():
     await daily_flow_sync_job()
 
 
-async def _weekly_flow_personal_backfill_job():
-    from jobs.infra_jobs import weekly_flow_personal_backfill_job
-    await weekly_flow_personal_backfill_job()
-
-
 async def _daily_ohlcv_warm_job():
     from jobs.infra_jobs import daily_ohlcv_warm_job
     await daily_ohlcv_warm_job()
@@ -674,8 +669,6 @@ async def _trigger_watcher_job():
                 await _youtube_attention_score_job()
             elif job_name == "flow":
                 await _daily_flow_sync_job()
-            elif job_name == "flow_personal_backfill":
-                await _weekly_flow_personal_backfill_job()
             else:
                 logger.warning("[trigger] 알 수 없는 잡: %s", job_name)
         finally:
@@ -917,18 +910,6 @@ async def main(interval: int, enable_summary: bool) -> None:
         misfire_grace_time=3600,
         replace_existing=True,
     )
-    # ── 주간 personal_net 캐치업: 일요일 19:00 KST (10:00 UTC) ───────
-    # daily_flow_sync(평일, --backend kiwoom)는 ka10045 특성상 personal_net을
-    # 채우지 못함(TODOS.md P2). krx-direct --force로 지난 7일을 재수집해 메꿈.
-    scheduler.add_job(
-        _weekly_flow_personal_backfill_job,
-        CronTrigger(day_of_week="sun", hour=10, minute=0, timezone="UTC"),  # = 19:00 KST
-        id="weekly_flow_personal_backfill",
-        max_instances=1,
-        misfire_grace_time=7200,
-        replace_existing=True,
-    )
-
     if _paper_trader:
         scheduler.add_job(
             _paper_exit_checker_job,
@@ -1128,7 +1109,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--once", type=str, default=None, metavar="JOB",
-        help="즉시 실행 후 종료 (watchlist | stage | flow_personal_backfill)"
+        help="즉시 실행 후 종료 (watchlist | stage)"
     )
     args = parser.parse_args()
 
@@ -1136,7 +1117,5 @@ if __name__ == "__main__":
         asyncio.run(_run_once_watchlist())
     elif args.once == "stage":
         asyncio.run(_run_once_stage())
-    elif args.once == "flow_personal_backfill":
-        asyncio.run(_weekly_flow_personal_backfill_job())
     else:
         asyncio.run(main(args.interval, enable_summary=not args.no_summary))

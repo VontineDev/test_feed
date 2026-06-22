@@ -249,13 +249,20 @@ async def daily_ohlcv_warm_job() -> None:
 
 
 async def daily_flow_sync_job() -> None:
-    logger.info("[flow-sync] krx_flow_sync --incremental --backend kiwoom 시작")
+    """평일 18:00 KST — krx-direct(data.krx.co.kr)로 전일 수급 증분 적재.
+
+    kiwoom 백엔드(ka10045)는 기관/외국인만 제공하고 personal_net을 주지 않아
+    classify_stage_v15의 Stage2 "개인 출회" 게이트가 무력화되는 문제가 있었음
+    (TODOS.md 기록 참고) — krx-direct로 되돌려 개인 순매수까지 정확히 채움.
+    KRX_SESSION 쿠키가 만료되면 이 잡이 실패하므로 .env 갱신이 필요할 수 있다.
+    """
+    logger.info("[flow-sync] krx_flow_sync --incremental --backend krx-direct 시작")
     try:
         _root   = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
         _script = os.path.join(_root, "data", "krx_flow_sync.py")
         _env    = {**os.environ, "PYTHONPATH": _root}
         proc = await asyncio.create_subprocess_exec(
-            sys.executable, _script, "--incremental", "--backend", "kiwoom",
+            sys.executable, _script, "--incremental", "--backend", "krx-direct",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=_env,
@@ -264,56 +271,10 @@ async def daily_flow_sync_job() -> None:
         if proc.returncode == 0:
             logger.info("[flow-sync] 완료 (exit=0)")
         else:
-            logger.warning("[flow-sync] 비정상 종료 (exit=%d)", proc.returncode)
+            logger.warning("[flow-sync] 비정상 종료 (exit=%d) — KRX_SESSION 만료 의심", proc.returncode)
         if out:
             for line in out.decode("utf-8", errors="replace").splitlines():
                 if line.strip():
                     logger.debug("[flow-sync] %s", line)
     except Exception as e:
         logger.warning("[flow-sync] 실행 실패: %s", e)
-
-
-async def weekly_flow_personal_backfill_job() -> None:
-    """일요일 19:00 KST — 지난 한 주를 krx-direct로 재수집해 personal_net 채움.
-
-    daily_flow_sync_job(평일 18:00, --backend kiwoom)은 ka10045 특성상
-    personal_net을 채우지 못한다(TODOS.md P2). data.krx.co.kr은 개인 순매수까지
-    제공하므로, 주 1회 krx-direct --force로 지난 7일을 다시 적재해 메꾼다.
-    foreign_net/inst_net도 krx-direct 값으로 같이 덮어쓴다 — 공식 원천이라
-    kiwoom과 값이 다르더라도 더 신뢰할 수 있는 쪽으로 수렴시키는 것이 의도.
-    KRX_SESSION 쿠키가 만료되면 이 잡만 조용히 실패하고(로그만 남김),
-    다음 평일 daily_flow_sync_job(kiwoom)은 영향받지 않는다.
-    """
-    from datetime import date, timedelta
-    today = date.today()
-    end = today - timedelta(days=1)          # 토요일 (직전 거래일 근처)
-    start = end - timedelta(days=6)           # 지난 월요일부터 7일 범위
-    logger.info("[flow-personal-backfill] krx_flow_sync --backend krx-direct --force %s~%s 시작",
-                start, end)
-    try:
-        _root   = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
-        _script = os.path.join(_root, "data", "krx_flow_sync.py")
-        _env    = {**os.environ, "PYTHONPATH": _root}
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable, _script,
-            "--backend", "krx-direct",
-            "--start", start.isoformat(), "--end", end.isoformat(),
-            "--force",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            env=_env,
-        )
-        out, _ = await proc.communicate()
-        if proc.returncode == 0:
-            logger.info("[flow-personal-backfill] 완료 (exit=0)")
-        else:
-            logger.warning(
-                "[flow-personal-backfill] 비정상 종료 (exit=%d) — KRX_SESSION 만료 의심, "
-                "다음 주 재시도", proc.returncode,
-            )
-        if out:
-            for line in out.decode("utf-8", errors="replace").splitlines():
-                if line.strip():
-                    logger.debug("[flow-personal-backfill] %s", line)
-    except Exception as e:
-        logger.warning("[flow-personal-backfill] 실행 실패: %s", e)
