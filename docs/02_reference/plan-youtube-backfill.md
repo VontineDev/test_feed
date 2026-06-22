@@ -58,7 +58,7 @@
 
 총 6,651건. 분산 백필이 완전히 소진되어 1~5월 전 구간이 채워졌다.
 
-> `schtasks "YTBackfillBatch"`는 여전히 등록되어 매일 11/14/17시에 실행 중이나, 큐가 비어 있어 매번 0건 처리하는 no-op 상태다. 더 이상 필요 없다면 `schtasks /delete /tn YTBackfillBatch`로 제거 검토.
+> `schtasks "YTBackfillBatch"`는 큐 소진 후 no-op 상태였다가 2026-06-22 제거됨.
 
 > `SELECT status, COUNT(*) FROM youtube_backfill_queue GROUP BY status;` 로 진행 상황 확인 후 갱신.
 
