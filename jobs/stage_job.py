@@ -17,12 +17,13 @@ import yfinance as yf
 
 from analysis.chart_screener import get_all_tickers
 from analysis.stage_classifier import (
-    classify_stage, check_peakout,
+    classify_stage_v15, check_peakout,
     compute_foreign_chg_pct, compute_flow_score,
 )
 from core.db import (
     load_chart_signals_latest,
     get_stage1_history,
+    get_stage2_history,
     save_stage_classifications,
     get_active_stage_tickers,
 )
@@ -132,13 +133,15 @@ async def daily_stage_job(db_pool) -> set[str]:
     except Exception as e:
         logger.warning("[3단계] listed_shares 로드 실패: %s", e)
 
-    # 4. s1_history 배치 조회
+    # 4. s1_history / s2_history 배치 조회
     all_ticker_list = [t for t, _, _ in all_tickers]
     since_14d = today - timedelta(days=14)
     s1_history = await get_stage1_history(db_pool, all_ticker_list, since_14d)
-    logger.info("[3단계] s1_history: %d종목 이력", len(s1_history))
+    s2_history = await get_stage2_history(db_pool, all_ticker_list, since_14d)
+    logger.info("[3단계] s1_history: %d종목 이력, s2_history: %d종목 이력",
+                len(s1_history), len(s2_history))
 
-    # 5. classify_stage() 병렬 실행
+    # 5. classify_stage_v15() 병렬 실행
     market_map = {t: ("KOSDAQ" if s.endswith(".KQ") else "KOSPI") for t, _, s in all_tickers}
 
     def _classify_one(ticker: str) -> tuple[str, Optional[int], bool]:
@@ -147,7 +150,9 @@ async def daily_stage_job(db_pool) -> set[str]:
         if price_df is None:
             return ticker, None, False
         market = market_map.get(ticker, "KOSPI")
-        stage = classify_stage(ticker, price_df, flow_df, s1_history, market)
+        stage = classify_stage_v15(
+            ticker, price_df, flow_df, s1_history, s2_history, market, listed_shares_map
+        )
         peakout = check_peakout(ticker, flow_df, price_df) if stage == 3 else False
         return ticker, stage, peakout
 

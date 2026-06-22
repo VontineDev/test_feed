@@ -3,7 +3,7 @@ stage_backfill.py — stage_classifications 과거 이력 백필
 
 라이브 daily_stage_job은 매일 classified_date=today 만 적재하므로 과거 history가
 없다(현재 ~5주치). 조합 백테스트(JOIN 경로)는 (ticker, ISO주) 단위 신호 시계열이
-필요하므로, 라이브와 **동일한** analysis.stage_classifier.classify_stage 를 과거
+필요하므로, 라이브와 **동일한** analysis.stage_classifier.classify_stage_v15 를 과거
 주차마다 재실행해 stage_classifications 에 upsert 한다 (single source of truth).
 
 설계 (plan-eng-review 2026-06-14, T1):
@@ -23,9 +23,10 @@ stage_backfill.py — stage_classifications 과거 이력 백필
     daily_flow     ──► flow_map[ticker]   (1 bulk query)
          │
          ▼  for ISO주 W in [start..end] 시간순:
-    get_stage1_history(친구 14d) ─► s1_history  (직전 백필분 포함)
+    get_stage1_history/get_stage2_history(직전 14d) ─► s1_history/s2_history (직전 백필분 포함)
     각 종목: price/flow 를 W금요일까지 슬라이스
-             classify_stage(ticker, price_slice, flow_slice, s1_history, market)
+             classify_stage_v15(ticker, price_slice, flow_slice, s1_history,
+                                 s2_history, market, listed_shares)
              check_peakout(...) if stage==3
          │
          ▼
@@ -68,8 +69,13 @@ load_dotenv(os.path.join(ROOT, ".env"))
 import asyncpg
 
 from analysis.chart_screener import get_all_tickers
-from analysis.stage_classifier import classify_stage, check_peakout
-from core.db import save_stage_classifications, get_stage1_history
+from analysis.stage_classifier import (
+    classify_stage_v15, check_peakout,
+    compute_foreign_chg_pct, compute_flow_score,
+)
+from core.db import (
+    save_stage_classifications, get_stage1_history, get_stage2_history,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -170,14 +176,15 @@ async def load_flow_range(
 ) -> dict[str, pd.DataFrame]:
     """daily_flow 를 윈도우 전체에 대해 1회 bulk 로드 → 종목별 DataFrame.
 
-    columns: foreign_net, inst_net, foreign_streak, inst_streak (DatetimeIndex).
+    columns: foreign_net, inst_net, foreign_streak, inst_streak, personal_net
+    (DatetimeIndex). personal_net은 classify_stage_v15(Stage1/2 개인 수급 조건)용.
     """
     flow_map: dict[str, list[dict]] = {}
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
             SELECT ticker, trade_date, foreign_net, inst_net,
-                   foreign_streak, inst_streak
+                   foreign_streak, inst_streak, personal_net
             FROM   daily_flow
             WHERE  trade_date >= $1 AND trade_date <= $2
             ORDER  BY trade_date ASC
@@ -196,6 +203,20 @@ async def load_flow_range(
     return out
 
 
+async def load_listed_shares(pool: asyncpg.Pool) -> dict[str, int]:
+    """krx_listings 에서 yfinance_symbol → listed_shares 1회 bulk 로드.
+
+    classify_stage_v15의 유통주식수 0.2% 수급 조건(Stage1/3)에 사용.
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT yfinance_symbol, listed_shares FROM krx_listings WHERE listed_shares IS NOT NULL"
+        )
+    out = {r["yfinance_symbol"]: r["listed_shares"] for r in rows}
+    logger.info("[stage백필] listed_shares 로드: %d종목", len(out))
+    return out
+
+
 # ── 슬라이스 헬퍼 ─────────────────────────────────────────────
 def slice_until(df: pd.DataFrame, as_of: date) -> pd.DataFrame:
     """index 날짜가 as_of(포함) 이하인 행만 반환. tz 유무 모두 처리."""
@@ -206,7 +227,15 @@ def slice_until(df: pd.DataFrame, as_of: date) -> pd.DataFrame:
     return df[idx < cutoff]
 
 
-def build_row(ticker: str, stage: int, peakout: bool, price_slice: pd.DataFrame, friday: date) -> dict:
+def build_row(
+    ticker: str,
+    stage: int,
+    peakout: bool,
+    price_slice: pd.DataFrame,
+    friday: date,
+    flow_slice: Optional[pd.DataFrame] = None,
+    listed_shares: Optional[int] = None,
+) -> dict:
     """classify 결과 → save_stage_classifications upsert 행 (live job과 동일 매핑)."""
     s1_high = s1_vol = s1_txamt = None
     if stage == 1 and not price_slice.empty:
@@ -216,15 +245,18 @@ def build_row(ticker: str, stage: int, peakout: bool, price_slice: pd.DataFrame,
         _close   = float(last.get("Close") or 0)
         s1_vol   = _vol or None
         s1_txamt = int(_vol * _close) or None
+    flow_for_score = flow_slice if flow_slice is not None else pd.DataFrame()
     return {
-        "ticker":          ticker,
-        "classified_date": friday,
-        "stage":           stage,
-        "s1_entry_date":   friday if stage == 1 else None,
-        "s1_high":         s1_high,
-        "s1_volume":       s1_vol,
-        "s1_txamt":        s1_txamt,
-        "peakout_flag":    peakout,
+        "ticker":               ticker,
+        "classified_date":      friday,
+        "stage":                stage,
+        "s1_entry_date":        friday if stage == 1 else None,
+        "s1_high":              s1_high,
+        "s1_volume":            s1_vol,
+        "s1_txamt":             s1_txamt,
+        "peakout_flag":         peakout,
+        "foreign_chg_14d_pct":  compute_foreign_chg_pct(flow_for_score, listed_shares),
+        "flow_score":           compute_flow_score(flow_for_score, price_slice),
     }
 
 
@@ -235,6 +267,8 @@ def classify_week(
     price_map: dict[str, pd.DataFrame],
     flow_map: dict[str, pd.DataFrame],
     s1_history: dict[str, list[dict]],
+    s2_history: dict[str, list[dict]],
+    listed_shares: dict[str, int],
     workers: int,
 ) -> list[dict]:
     """friday 시점으로 전 종목 분류 → upsert 행 목록 (stage 미탐지는 제외)."""
@@ -251,7 +285,9 @@ def classify_week(
         flow_slice = slice_until(flow_full, friday) if flow_full is not None else pd.DataFrame()
         market = market_map.get(ticker, "KOSPI")
         try:
-            stage = classify_stage(ticker, price_slice, flow_slice, s1_history, market)
+            stage = classify_stage_v15(
+                ticker, price_slice, flow_slice, s1_history, s2_history, market, listed_shares
+            )
         except Exception as e:
             logger.debug("[stage백필] %s classify 오류: %s", ticker, e)
             return None
@@ -263,7 +299,10 @@ def classify_week(
                 peakout = check_peakout(ticker, flow_slice, price_slice)
             except Exception:
                 peakout = False
-        return build_row(ticker, stage, peakout, price_slice, friday)
+        return build_row(
+            ticker, stage, peakout, price_slice, friday,
+            flow_slice=flow_slice, listed_shares=listed_shares.get(ticker),
+        )
 
     rows: list[dict] = []
     with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -341,12 +380,16 @@ async def main(args: argparse.Namespace) -> None:
         await pool.close()
         return
     flow_map = await load_flow_range(pool, fetch_start, end)
+    listed_shares = await load_listed_shares(pool)
 
     total_saved = 0
-    for friday in fridays:  # 시간순 — s1_history가 직전 주 결과를 본다
+    for friday in fridays:  # 시간순 — s1_history/s2_history가 직전 주 결과를 본다
         since = friday - timedelta(days=_S1_HISTORY_DAYS)
         s1_history = await get_stage1_history(pool, ticker_syms, since)
-        rows = classify_week(tickers, friday, price_map, flow_map, s1_history, args.workers)
+        s2_history = await get_stage2_history(pool, ticker_syms, since)
+        rows = classify_week(
+            tickers, friday, price_map, flow_map, s1_history, s2_history, listed_shares, args.workers
+        )
         if rows:
             saved = await save_stage_classifications(pool, rows)
             total_saved += saved

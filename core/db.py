@@ -1082,6 +1082,46 @@ async def get_stage1_history(
         raise
 
 
+async def get_stage2_history(
+    pool: asyncpg.Pool,
+    tickers: list[str],
+    since_date: "datetime | date",
+) -> dict[str, list[dict]]:
+    """
+    stage_classifications WHERE stage=2 에서 Stage 2 이력 반환.
+
+    classify_stage_v15(_check_stage3_v12)의 Stage 3 전제 조건(직전 Stage 2 발동)
+    체크에 사용. 존재 여부만 보므로 classified_date만 반환.
+
+    반환: {ticker: [{classified_date}, ...]}
+    """
+    if not tickers:
+        return {}
+    if hasattr(since_date, "date"):
+        since_date = since_date.date()
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT ticker, classified_date
+                FROM   stage_classifications
+                WHERE  ticker = ANY($1)
+                  AND  stage  = 2
+                  AND  classified_date >= $2
+                ORDER  BY classified_date DESC
+                """,
+                tickers,
+                since_date,
+            )
+        result: dict[str, list[dict]] = {}
+        for r in rows:
+            result.setdefault(r["ticker"], []).append(dict(r))
+        return result
+    except Exception as e:
+        logger.error("[stage] get_stage2_history 실패: %s", e)
+        raise
+
+
 async def save_stage_classifications(
     pool: asyncpg.Pool,
     rows: list[dict],

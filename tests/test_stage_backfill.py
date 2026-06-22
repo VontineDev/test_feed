@@ -147,5 +147,38 @@ class TestBuildRow:
         assert row["s1_volume"] is None
 
 
+class TestBuildRowFlowScoring:
+    """build_row의 foreign_chg_14d_pct/flow_score 계산 (classify_stage_v15 wiring)."""
+
+    def _price(self):
+        return pd.DataFrame(
+            {"High": [100.0, 110.0], "Close": [95.0, 105.0], "Volume": [1000, 2000]},
+            index=pd.to_datetime(["2026-04-23", "2026-04-24"]),
+        )
+
+    def test_no_flow_slice_defaults_to_zero_score_and_none_pct(self):
+        row = build_row("005930.KS", 1, False, self._price(), date(2026, 4, 24))
+        assert row["flow_score"] == 0.0
+        assert row["foreign_chg_14d_pct"] is None
+
+    def test_flow_slice_computes_score_and_pct(self):
+        idx = pd.date_range("2026-04-10", periods=14, freq="D")
+        flow = pd.DataFrame(
+            {
+                "foreign_net": [1000] * 14,
+                "foreign_streak": [3] * 14,
+                "inst_streak": [3] * 14,
+            },
+            index=idx,
+        )
+        row = build_row(
+            "005930.KS", 1, False, self._price(), date(2026, 4, 24),
+            flow_slice=flow, listed_shares=1_000_000,
+        )
+        # f_streak>=3 AND i_streak>=3 → base score 1.0 (no txamt bonus check here)
+        assert row["flow_score"] == 1.0
+        assert row["foreign_chg_14d_pct"] == 14 * 1000 / 1_000_000
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
