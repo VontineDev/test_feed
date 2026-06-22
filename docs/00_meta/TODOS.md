@@ -4,17 +4,15 @@ Items deferred from code review and planning sessions.
 
 ---
 
-## P2: stage_classifier v1.5 전환 완료 — personal_net 백필 아직 미착수
+## 완료: personal_net 결손 — 주간 krx-direct 캐치업 잡 도입 (2026-06-22)
 
-**상태 (2026-06-22):** `jobs/stage_job.py`·`jobs/stage_backfill.py`가 `classify_stage_v15`로 전환 완료 (howto-stage-classifier.md/stage-screening-framework.md 보완 작업의 일환). 이 TODO가 예고했던 조건이 그대로 발생: Stage 2 게이트(`_check_stage2_v13` 상속)의 `personal_net ≤ 0` 하드 게이트가, `daily_flow_sync_job`이 같은 날(2026-06-22) `--backend kiwoom`(ka10045)으로 전환되며 생긴 `personal_net=NULL` 행에서 **항상 통과(무력화)** 로 동작 중. 크래시 없음 — `if personal_net is not None and ...` 가드로 graceful degrade — 하지만 Stage 2 정확도가 그만큼 낮아진 상태로 라이브 운영 중.
+**배경:** `daily_flow_sync_job`이 평일 `--backend kiwoom`(ka10045)으로 운영되는데, 이 TR은 개인 순매수를 주지 않아 `personal_net=NULL` 행이 쌓임 — `classify_stage_v15`(Stage2 "개인 출회" 게이트)가 조용히 무력화되는 문제였음(크래시 없음, 정확도만 저하).
 
-**What:** kiwoom 백엔드(ka10045)는 기관/외국인만 제공하고 개인 순매수는 주지 않는다.
+**해결:** `jobs/infra_jobs.py`에 `weekly_flow_personal_backfill_job()` 추가 — 일요일 19:00 KST(`run_scheduler.py` cron)에 지난 7일을 `krx_flow_sync.py --backend krx-direct --force`로 재수집해 `personal_net`을 메움. `foreign_net`/`inst_net`도 krx-direct 값으로 같이 덮어씀(공식 원천이므로 의도된 동작). 대시보드 수동 트리거(`flow_personal_backfill`)와 `--once flow_personal_backfill` CLI도 추가.
 
-**How to apply:** `krx_flow_sync.py --backend krx-direct`(또는 KRX_SESSION 쿠키 갱신)로 2026-06-22 이후 기간의 `personal_net`만 별도 백필. 기존 kiwoom 행의 `foreign_net`/`inst_net`은 덮어쓰지 않도록 personal_net 전용 백필 경로가 필요하면 `krx_flow_sync.py`에 컬럼 단위 업데이트 모드 추가 검토.
+**검증:** 10종목·5거래일(2026-06-15~19) 대상 실행 — 45건 저장, `personal_net` 정상 채워짐 확인(`SELECT ... WHERE trade_date BETWEEN ...`로 직접 확인).
 
-**Effort:** S (human: ~30min / CC: ~20min)
-**Priority:** P2 (이미 라이브에 영향 중이므로 P3→P2 상향)
-**Depends on:** 없음 — 즉시 착수 가능
+**남은 리스크:** `KRX_SESSION` 쿠키가 만료되면 이 주간 잡만 조용히 실패(로그만 남김, 평일 kiwoom 잡은 영향 없음) — 결손이 다시 누적될 수 있으니 실패 로그(`[flow-personal-backfill] 비정상 종료`)를 주기적으로 확인할 것.
 
 ---
 
