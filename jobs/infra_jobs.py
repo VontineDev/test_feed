@@ -249,13 +249,13 @@ async def daily_ohlcv_warm_job() -> None:
 
 
 async def daily_flow_sync_job() -> None:
-    logger.info("[flow-sync] krx_flow_sync --incremental 시작")
+    logger.info("[flow-sync] krx_flow_sync --incremental --backend kiwoom 시작")
     try:
         _root   = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
         _script = os.path.join(_root, "data", "krx_flow_sync.py")
         _env    = {**os.environ, "PYTHONPATH": _root}
         proc = await asyncio.create_subprocess_exec(
-            sys.executable, _script, "--incremental",
+            sys.executable, _script, "--incremental", "--backend", "kiwoom",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=_env,

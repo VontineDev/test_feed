@@ -4,11 +4,32 @@
 
 `daily_flow` 테이블에 외국인·기관 순매수 이력을 적재합니다. 이 데이터는 stage classifier의 수급 강도 계산(`krx_flow_sync.py`)에 사용됩니다.
 
-## 전제 조건
+## 방법 D: 키움 REST API (권장, 스케줄러 기본값)
 
-한국 ISP 또는 VPN 환경 (data.krx.co.kr은 해외 IP 차단).
+`ka10045`(종목별기관매매추이요청, `/api/dostk/mrkcond`)로 종목별 기관/외국인 일별 순매수를 수집합니다.
+`KIWOOM_APPKEY`/`KIWOOM_SECRETKEY` Bearer 토큰만 있으면 되고, **브라우저 세션 쿠키가 필요 없어** 수동 갱신 작업이 없습니다.
 
-## 방법 A: KRX 직접 크롤 (권장)
+```bash
+# 증분 (스케줄러 18:00 KST 기본 실행 — run_scheduler.py가 이걸 호출함)
+python data/krx_flow_sync.py --incremental --backend kiwoom
+
+# 특정 기간 적재
+python data/krx_flow_sync.py --start 2026-01-01 --end 2026-01-31 --backend kiwoom
+
+# 테스트: 3종목만
+python data/krx_flow_sync.py --start 2026-06-01 --end 2026-06-19 --backend kiwoom --max 3
+```
+
+**알아둘 것:**
+- 거래일 캘린더(공휴일 포함)를 API가 자체 처리 — 주말/공휴일 보정 불필요.
+- 개인(`personal_net`) 순매수는 `ka10045`에 없음 — 이 백엔드로 적재 시 `personal_net`/`personal_streak`는 `NULL`. 개인 순매수가 필요하면 방법 A(KRX 직접 크롤)로 별도 채워야 함.
+- 날짜 범위 제한: 1개월 범위는 청크 분할 없이 단일 호출로 확인됨 (그 이상은 미검증).
+
+## 전제 조건 (방법 A/B/C — KRX 직접 크롤)
+
+한국 ISP 또는 VPN 환경 (data.krx.co.kr은 해외 IP 차단). 데이터.krx.co.kr 로그인이 보안 정책으로 막혀 있어 `KRX_SESSION` 브라우저 쿠키를 주기적으로 수동 갱신해야 하는 한계가 있음 — 위 방법 D 사용을 권장.
+
+## 방법 A: KRX 직접 크롤
 
 ### 1단계: 자격증명 설정
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -18,6 +18,8 @@ from data.krx_flow_sync import (
     FlowRecord,
     _KrxDirectFetcher,
     _compute_streaks,
+    _fetch_kiwoom_records,
+    _last_trading_day,
     _next_streak,
     _parse_int,
     load_csv_records,
@@ -389,6 +391,135 @@ class TestFetchRecords:
             )
 
         assert captured["krx_code"] == "005930"
+
+
+# ── _last_trading_day() ───────────────────────────────────────────────────────
+# --incremental은 평일에만 실행된다(cron mon-fri). 월요일 실행 시 '어제'를
+# 그대로 쓰면 일요일이 되어, 금요일 거래일 데이터를 어떤 실행도 대상으로
+# 삼지 못하고 영구히 누락시킨다 (토요일 실행이 없어 받아줄 회차가 없음).
+
+class TestLastTradingDay:
+    def test_monday_skips_back_to_friday(self):
+        monday = date(2026, 6, 22)
+        assert _last_trading_day(monday) == date(2026, 6, 19)  # Fri
+
+    def test_tuesday_through_friday_use_plain_yesterday(self):
+        for today_str, expected_str in [
+            ("2026-06-23", "2026-06-22"),  # Tue -> Mon
+            ("2026-06-24", "2026-06-23"),  # Wed -> Tue
+            ("2026-06-25", "2026-06-24"),  # Thu -> Wed
+            ("2026-06-26", "2026-06-25"),  # Fri -> Thu
+        ]:
+            today = date.fromisoformat(today_str)
+            assert _last_trading_day(today) == date.fromisoformat(expected_str)
+
+    def test_never_returns_a_weekend(self):
+        for offset in range(14):
+            today = date(2026, 6, 8) + timedelta(days=offset)
+            assert _last_trading_day(today).weekday() < 5
+
+
+# ── _fetch_kiwoom_records() (ka10045 backend) ─────────────────────────────────
+
+class TestFetchKiwoomRecords:
+    def _row(self, dt: str, orgn: str, for_: str) -> dict:
+        return {"dt": dt, "orgn_daly_nettrde_qty": orgn, "for_daly_nettrde_qty": for_}
+
+    def _client(self, pages: list[tuple[dict, dict]]) -> MagicMock:
+        client = MagicMock()
+        client._post.side_effect = pages
+        return client
+
+    def test_parses_inst_and_foreign_net(self):
+        client = self._client([
+            ({"stk_orgn_trde_trnsn": [self._row("20260619", "-1380348", "-3405260")]}, {}),
+        ])
+        records = _fetch_kiwoom_records(
+            client, "005930.KS", date(2026, 6, 19), date(2026, 6, 19),
+            prev_f_streak=None, prev_i_streak=None,
+        )
+        assert len(records) == 1
+        rec = records[0]
+        assert rec.ticker == "005930.KS"
+        assert rec.trade_date == date(2026, 6, 19)
+        assert rec.inst_net == -1380348
+        assert rec.foreign_net == -3405260
+        assert rec.personal_net is None  # ka10045 doesn't provide personal investor data
+
+    def test_strips_yfinance_suffix_for_stk_cd(self):
+        client = self._client([({"stk_orgn_trde_trnsn": []}, {})])
+        _fetch_kiwoom_records(
+            client, "005930.KS", date(2026, 1, 1), date(2026, 1, 5),
+            prev_f_streak=None, prev_i_streak=None,
+        )
+        sent_body = client._post.call_args[0][2]
+        assert sent_body["stk_cd"] == "005930"
+
+    def test_returns_empty_when_no_rows(self):
+        client = self._client([({"stk_orgn_trde_trnsn": []}, {})])
+        records = _fetch_kiwoom_records(
+            client, "005930.KS", date(2026, 1, 1), date(2026, 1, 5),
+            prev_f_streak=None, prev_i_streak=None,
+        )
+        assert records == []
+
+    def test_rows_outside_date_range_excluded(self):
+        client = self._client([({"stk_orgn_trde_trnsn": [
+            self._row("20251231", "100", "50"),    # before start
+            self._row("20260103", "200", "80"),    # in range
+            self._row("20260201", "300", "60"),    # after end
+        ]}, {})])
+        records = _fetch_kiwoom_records(
+            client, "005930.KS", date(2026, 1, 1), date(2026, 1, 31),
+            prev_f_streak=None, prev_i_streak=None,
+        )
+        assert len(records) == 1
+        assert records[0].trade_date == date(2026, 1, 3)
+
+    def test_streak_accumulates_in_ascending_date_order(self):
+        # Real API returns rows newest-first; streak calc must sort ascending first.
+        client = self._client([({"stk_orgn_trde_trnsn": [
+            self._row("20260106", "500", "300"),
+            self._row("20260103", "1000", "200"),
+        ]}, {})])
+        records = _fetch_kiwoom_records(
+            client, "005930.KS", date(2026, 1, 1), date(2026, 1, 10),
+            prev_f_streak=None, prev_i_streak=None,
+        )
+        assert records[0].trade_date == date(2026, 1, 3)
+        assert records[0].foreign_streak == 1
+        assert records[1].trade_date == date(2026, 1, 6)
+        assert records[1].foreign_streak == 2
+
+    def test_pagination_follows_cont_yn_next_key(self):
+        client = self._client([
+            ({"stk_orgn_trde_trnsn": [self._row("20260102", "100", "50")]},
+             {"cont-yn": "Y", "next-key": "page2"}),
+            ({"stk_orgn_trde_trnsn": [self._row("20260103", "200", "80")]},
+             {"cont-yn": "N", "next-key": ""}),
+        ])
+        records = _fetch_kiwoom_records(
+            client, "005930.KS", date(2026, 1, 1), date(2026, 1, 31),
+            prev_f_streak=None, prev_i_streak=None,
+        )
+        assert len(records) == 2
+        assert client._post.call_count == 2
+        # second call must carry forward the next-key from the first response
+        second_call_args = client._post.call_args_list[1][0]
+        assert second_call_args[3] == "Y"
+        assert second_call_args[4] == "page2"
+
+    def test_stops_pagination_without_next_key(self):
+        client = self._client([
+            ({"stk_orgn_trde_trnsn": [self._row("20260102", "100", "50")]},
+             {"cont-yn": "Y", "next-key": ""}),  # cont-yn=Y but no key → must not loop forever
+        ])
+        records = _fetch_kiwoom_records(
+            client, "005930.KS", date(2026, 1, 1), date(2026, 1, 31),
+            prev_f_streak=None, prev_i_streak=None,
+        )
+        assert len(records) == 1
+        assert client._post.call_count == 1
 
 
 # ── load_csv_records() ────────────────────────────────────────────────────────

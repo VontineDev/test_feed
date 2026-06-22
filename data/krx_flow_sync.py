@@ -68,7 +68,10 @@ import time as _time
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from data.kiwoom_aftermarket_sync import KiwoomClient
 
 from dotenv import load_dotenv
 
@@ -429,6 +432,150 @@ def _make_krx_direct(
     return fetcher
 
 
+# ── Kiwoom REST API 백엔드 ────────────────────────────────────
+#
+# ka10045 (종목별기관매매추이요청, POST /api/dostk/mrkcond)
+# data.krx.co.kr 브라우저 세션 쿠키 없이 Bearer 토큰(KIWOOM_APPKEY/SECRETKEY)만으로
+# 종목별 기관/외국인 일별 순매수를 날짜 범위로 조회. 거래일 캘린더(공휴일 포함)를
+# 자체적으로 처리해 응답에 비거래일이 섞이지 않음 (실측: 2025-01 설 연휴 자동 제외).
+#
+# 응답 배열 키: stk_orgn_trde_trnsn (행당 거래일 1개)
+#   dt                     : 거래일 YYYYMMDD
+#   orgn_daly_nettrde_qty  : 기관 일별 순매수 수량 (부호 있는 정수 문자열, +/- 접두사 없음)
+#   for_daly_nettrde_qty   : 외국인 일별 순매수 수량
+#
+# 개인(personal_net) 순매수는 이 TR에 제공되지 않음 — kiwoom 백엔드로 적재 시 None.
+
+
+def _fetch_kiwoom_records(
+    client: "KiwoomClient",
+    yf_symbol: str,
+    start: date,
+    end: date,
+    prev_f_streak: Optional[int],
+    prev_i_streak: Optional[int],
+) -> list[FlowRecord]:
+    """ka10045로 단일 종목 기관/외국인 일별 순매수 조회 → FlowRecord 목록.
+
+    cont-yn/next-key 페이지네이션 처리.
+    """
+    krx_code = yf_symbol.split(".")[0]
+    all_rows: list[dict] = []
+    cont_yn, next_key = "N", ""
+    while True:
+        data, hdrs = client._post(
+            "/api/dostk/mrkcond", "ka10045",
+            {
+                "stk_cd":           krx_code,
+                "strt_dt":          start.strftime("%Y%m%d"),
+                "end_dt":           end.strftime("%Y%m%d"),
+                "orgn_prsm_unp_tp": "0",
+                "for_prsm_unp_tp":  "0",
+            },
+            cont_yn, next_key,
+        )
+        rows = data.get("stk_orgn_trde_trnsn") or []
+        all_rows.extend(rows)
+        resp_cont = hdrs.get("cont-yn", "N")
+        resp_key  = hdrs.get("next-key", "")
+        if resp_cont != "Y" or not resp_key:
+            break
+        cont_yn, next_key = "Y", resp_key
+
+    if not all_rows:
+        return []
+
+    records: list[FlowRecord] = []
+    f_streak = prev_f_streak
+    i_streak = prev_i_streak
+
+    for row in sorted(all_rows, key=lambda r: r.get("dt", "")):
+        raw_date = (row.get("dt") or "").strip()
+        if len(raw_date) != 8 or not raw_date.isdigit():
+            continue
+        try:
+            d = date(int(raw_date[:4]), int(raw_date[4:6]), int(raw_date[6:8]))
+        except ValueError:
+            continue
+        if not (start <= d <= end):
+            continue
+
+        i_net = _parse_int(row.get("orgn_daly_nettrde_qty", ""))
+        f_net = _parse_int(row.get("for_daly_nettrde_qty", ""))
+        f_streak = _next_streak(f_streak, f_net)
+        i_streak = _next_streak(i_streak, i_net)
+
+        records.append(FlowRecord(
+            ticker=yf_symbol,
+            trade_date=d,
+            foreign_net=f_net,
+            inst_net=i_net,
+            foreign_streak=f_streak,
+            inst_streak=i_streak,
+        ))
+
+    return records
+
+
+async def run_kiwoom(
+    pool,
+    start: date,
+    end: date,
+    market: str,
+    max_tickers: int,
+    appkey: Optional[str],
+    secretkey: Optional[str],
+    force: bool = False,
+) -> None:
+    """kiwoom 백엔드: ka10045로 기관/외국인 일별 순매수 수집 (쿠키 불필요, 토큰 1회 발급)."""
+    from analysis.chart_screener import get_all_tickers
+    from core.db import get_prev_streak
+    from data.kiwoom_aftermarket_sync import KiwoomClient
+
+    if not appkey or not secretkey:
+        logger.error(
+            "[flow] [kiwoom] KIWOOM_APPKEY/KIWOOM_SECRETKEY 미설정 — .env에 추가하세요."
+        )
+        sys.exit(1)
+
+    client = KiwoomClient(use_mock=False)
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, client.issue_token, appkey, secretkey)
+
+    tickers = _filter_tickers(get_all_tickers(), market, max_tickers)
+    logger.info("[flow] [kiwoom] 대상 %d개 종목  %s ~ %s", len(tickers), start, end)
+
+    total_saved = 0
+    for i, (yf_sym, _name) in enumerate(tickers, 1):
+        if not force:
+            existing = await _get_existing_dates(pool, yf_sym, start, end)
+            if _already_loaded(existing, start, end):
+                logger.debug("[flow] %s 이미 저장됨, 건너뜀", yf_sym)
+                continue
+
+        prev_f, prev_i, _prev_p = await get_prev_streak(pool, yf_sym, start)
+
+        records = await loop.run_in_executor(
+            None,
+            lambda sym=yf_sym, pf=prev_f, pi=prev_i: _fetch_kiwoom_records(
+                client, sym, start, end, pf, pi
+            ),
+        )
+
+        if not records:
+            logger.debug("[flow] %s 데이터 없음", yf_sym)
+        else:
+            saved = await _save_batch(pool, records)
+            total_saved += saved
+
+        if i % 50 == 0 or i == len(tickers):
+            logger.info("[flow] %d/%d 처리 완료  저장 누계: %d건", i, len(tickers), total_saved)
+
+        await asyncio.sleep(0.2)  # Kiwoom REST API 호출 간격
+
+    logger.info("[flow] 완료 — 총 저장: %d건", total_saved)
+
+
 # ── pykrx 백엔드 ──────────────────────────────────────────────
 
 def _pykrx_available() -> bool:
@@ -698,6 +845,19 @@ def _already_loaded(existing: set, start: date, end: date) -> bool:
     return len(existing) >= max(1, expected * 0.9)
 
 
+def _last_trading_day(today: date) -> date:
+    """달력상 어제로부터 가장 가까운 평일(월~금) 반환.
+
+    --incremental은 평일에만 실행되므로(cron mon-fri) 월요일 실행 시
+    '어제'가 일요일이 되어, 금요일 거래일 데이터를 어떤 실행도 대상으로
+    삼지 못하고 영구히 누락시킨다 (토요일 실행이 없어 받아줄 회차가 없음).
+    """
+    d = today - timedelta(days=1)
+    while d.weekday() >= 5:  # 5=토, 6=일
+        d -= timedelta(days=1)
+    return d
+
+
 # 연속 빈 응답 N건 → 세션 만료 의심 → Samsung 프로브로 확인
 _SESSION_EXPIRY_THRESHOLD = 5
 
@@ -923,7 +1083,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--incremental", action="store_true",
                         help="어제 데이터만 적재 (스케줄러용)")
     parser.add_argument("--backend", default="krx-direct",
-                        choices=["krx-direct", "pykrx", "csv"],
+                        choices=["krx-direct", "pykrx", "csv", "kiwoom"],
                         help="수집 백엔드 (기본: krx-direct)")
     parser.add_argument("--csv",     default=None, metavar="FILE",
                         help="CSV 파일 임포트 경로 (--backend csv 시 필수)")
@@ -957,8 +1117,7 @@ async def main() -> None:
     yesterday = date.today() - timedelta(days=1)
 
     if args.incremental:
-        start = yesterday
-        end   = yesterday
+        start = end = _last_trading_day(date.today())
     else:
         end   = date.fromisoformat(args.end)   if args.end   else yesterday
         start = date.fromisoformat(args.start) if args.start else end - timedelta(days=730)
@@ -991,6 +1150,13 @@ async def main() -> None:
                     "KRX_ID/KRX_PW 미설정 — 인증 없이 시도합니다. 실패 시 .env 확인."
                 )
             await run_pykrx(pool, start, end, args.market, args.max, force=args.force)
+
+        elif args.backend == "kiwoom":
+            await run_kiwoom(
+                pool, start, end, args.market, args.max,
+                os.environ.get("KIWOOM_APPKEY"), os.environ.get("KIWOOM_SECRETKEY"),
+                force=args.force,
+            )
 
         else:  # krx-direct (기본)
             await run_krx_direct(

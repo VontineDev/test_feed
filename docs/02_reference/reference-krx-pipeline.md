@@ -8,7 +8,7 @@ KRX(한국거래소) 데이터를 수집하는 4개 모듈의 완전한 기술 �
 |------|------|-------------|
 | `krx_openapi.py` | OHLCV, 종목기본정보, 지수 수집 | KRX OpenAPI (openapi.krx.co.kr) |
 | `krx_sync.py` | 전 종목 리스트 → `krx_listings` 동기화 | KRX OpenAPI |
-| `krx_flow_sync.py` | 외국인·기관·개인 순매수 → `daily_flow` | data.krx.co.kr (직접 크롤) 또는 pykrx |
+| `krx_flow_sync.py` | 외국인·기관·개인 순매수 → `daily_flow` | 키움 REST API ka10045 (`--backend kiwoom`, **스케줄러 기본값**) — 또는 data.krx.co.kr 직접 크롤/pykrx/csv (`personal_net` 필요 시) |
 | `data/kiwoom_aftermarket_sync.py` | 시간외 단일가 스냅샷 → `aftermarket_snap` (**스케줄러가 실제로 호출하는 모듈**) | 키움 REST API ka10032 |
 | `data/krx_aftermarket_sync.py` | 위와 동일 테이블, 과거 날짜 backfill 전용 (키움 REST는 당일 데이터만 제공) | KRX BLD API (data.krx.co.kr) |
 
@@ -19,8 +19,9 @@ KRX(한국거래소) 데이터를 수집하는 4개 모듈의 완전한 기술 �
 | 변수 | 모듈 | 설명 |
 |------|------|------|
 | `KRX_OPENAPI_KEY` | krx_openapi, krx_sync | KRX OpenAPI 인증키. openapi.krx.co.kr 가입 후 발급 |
-| `KRX_ID` | krx_flow_sync | data.krx.co.kr 로그인 아이디 |
-| `KRX_PW` | krx_flow_sync | data.krx.co.kr 로그인 비밀번호 |
+| `KRX_ID` | krx_flow_sync (krx-direct/pykrx 백엔드) | data.krx.co.kr 로그인 아이디 |
+| `KRX_PW` | krx_flow_sync (krx-direct/pykrx 백엔드) | data.krx.co.kr 로그인 비밀번호 |
+| `KIWOOM_APPKEY`/`KIWOOM_SECRETKEY` | krx_flow_sync (kiwoom 백엔드, **기본값**) | [키움 연동 레퍼런스](reference-kiwoom.md) 참고 — `kiwoom_aftermarket_sync.py`와 동일 키 재사용 |
 
 ---
 
@@ -146,16 +147,23 @@ KOSPI + KOSDAQ 전 종목 upsert. `isin_code` PK 기준. `yfinance_symbol` 자�
 
 | 백엔드 | 조건 | 특징 |
 |--------|------|------|
-| `krx-direct` (기본, 권장) | KRX_ID/KRX_PW | data.krx.co.kr 직접 HTTP 요청. Python 3.14 호환 |
+| `kiwoom` (**스케줄러 기본값**) | KIWOOM_APPKEY/SECRETKEY | ka10045, Bearer 토큰. 브라우저 쿠키 불필요. `personal_net`은 NULL |
+| `krx-direct` (CLI 기본값) | KRX_ID/KRX_PW 또는 KRX_SESSION | data.krx.co.kr 직접 HTTP 요청. `personal_net` 채움 가능. ID/PW 로그인이 보안 정책상 막혀 있어 `KRX_SESSION` 브라우저 쿠키를 주기적으로 수동 갱신해야 함 |
 | `pykrx` | KRX_ID/KRX_PW | pykrx 라이브러리 경유. Python 3.12 이하 권장 |
 | `csv` | --csv 파일경로 | 수동 CSV 임포트 |
 
-**주의**: data.krx.co.kr은 한국 ISP 또는 VPN 환경에서만 접근 가능. 해외 IP 차단.
+**주의**: data.krx.co.kr은 한국 ISP 또는 VPN 환경에서만 접근 가능 (kiwoom 백엔드는 해당 없음).
 
 ### CLI
 
 ```bash
-# 벌크 적재 (초기 1회)
+# 증분 모드 (스케줄러 매일 18:00 KST 실행 — kiwoom 백엔드)
+python data/krx_flow_sync.py --incremental --backend kiwoom
+
+# 벌크 적재 (kiwoom, 기간 지정)
+python data/krx_flow_sync.py --start 2026-01-01 --end 2026-05-03 --backend kiwoom
+
+# krx-direct 벌크 적재 (personal_net 필요 시, 초기 1회)
 python data/krx_flow_sync.py --start 2023-01-01 --end 2026-05-03
 
 # 특정 백엔드
@@ -164,14 +172,11 @@ python data/krx_flow_sync.py --start 2025-01-01 --backend pykrx
 # CSV 임포트 (수동)
 python data/krx_flow_sync.py --csv /path/to/data.csv --backend csv
 
-# 응답 구조 확인 (첫 실행 권장)
+# 응답 구조 확인 (krx-direct 첫 실행 권장)
 python data/krx_flow_sync.py --probe 005930
 
 # 로그인 응답 원문 확인 (KRX_ID/KRX_PW 진단, DB 불필요)
 python data/krx_flow_sync.py --probe-login
-
-# 증분 모드 (스케줄러 매일 18:00 KST)
-python data/krx_flow_sync.py --incremental
 
 # 이미 저장된 날짜도 덮어쓰기 (personal_net 등 신규 필드 백필용)
 python data/krx_flow_sync.py --start 2025-01-01 --end 2026-05-03 --force

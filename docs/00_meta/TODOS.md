@@ -4,6 +4,20 @@ Items deferred from code review and planning sessions.
 
 ---
 
+## P3: stage_classifier v1.5 전환 시 personal_net 백필 필요
+
+**What:** `jobs/stage_job.py`가 현재 임포트하는 `classify_stage`(v1.0)는 `personal_net`을 전혀 참조하지 않는다. 하지만 `docs/00_meta/stage-screening-framework.md`가 "실제 구현" 기준으로 가리키는 `classify_stage_v15`는 Stage 2 게이트(`_check_stage2_v13` 상속)에서 `personal_net ≤ 0` 조건을 하드 게이트로 쓴다.
+
+**Why:** `daily_flow_sync_job`이 2026-06-22부터 `--backend kiwoom`(ka10045)으로 전환됨 — 이 TR은 기관/외국인만 제공하고 개인 순매수는 주지 않아, kiwoom 백엔드로 적재된 행은 `personal_net=NULL`이다. v1.0이 라이브인 지금은 무관하지만(참조 자체가 없음), 나중에 `jobs/stage_job.py`를 문서가 가리키는 v1.5로 전환하면 그 시점부터 Stage 2 "개인 출회" 필터가 데이터 없음 → 항상 통과로 조용히 무력화된다 (크래시는 없음 — `if personal_net is not None and ...` 가드로 graceful degrade).
+
+**How to apply:** v1.5(또는 personal_net 의존 버전)로 `jobs/stage_job.py`를 전환하기 *전에*, `krx_flow_sync.py --backend krx-direct`(또는 KRX_SESSION 쿠키 갱신)로 해당 기간 `personal_net`만 별도 백필. `--force` 옵션으로 기존 kiwoom 행의 `foreign_net`/`inst_net`은 덮어쓰지 않도록 personal_net 전용 백필 경로가 필요하면 `krx_flow_sync.py`에 컬럼 단위 업데이트 모드 추가 검토.
+
+**Effort:** S (human: ~30min / CC: ~20min) — v1.5 전환이 실제로 결정된 후
+**Priority:** P3
+**Depends on:** `jobs/stage_job.py`가 `classify_stage_v15`(또는 v12/v13/v14)로 전환되는 결정이 내려질 때
+
+---
+
 ## P1: YouTube 내러티브 — 블라인드 백테스트 실행 (분산 백필 완료 후) — ✅ 완료, [조건부]
 
 **What:** `python scripts/youtube_backtest.py --ret ret_5d` 실행.
