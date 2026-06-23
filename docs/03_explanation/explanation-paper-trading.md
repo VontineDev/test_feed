@@ -230,3 +230,4 @@ exit checker와 open_entry가 모두 Kiwoom mock API를 쓰는 이유: 두 잡 �
 - [키움 모의투자 설정 방법](howto-kiwoom-paper-trade.md) — API 키 발급부터 포지션 확인까지
 - [키움 연동 레퍼런스](reference-kiwoom.md) — API 코드 목록, 환경변수, 스케줄러 잡
 - [스케줄러 레퍼런스](reference-scheduler.md) — 잡 실행 시각, 의존 환경변수
+- [분할 청산 모델 개선 제안 ↔ 코드 대조](../02_reference/reference-paper-exit-model-proposal.md) — 외부 제안과 실제 exit checker 구현 비교, 미구현 항목(Breakeven Rule) 정리
