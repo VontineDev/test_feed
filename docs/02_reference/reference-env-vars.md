@@ -89,6 +89,18 @@ KRX 세션 쿠키는 24시간 후 만료됩니다. 만료 시 `krx_flow_sync.py`
 
 ---
 
+## 키움 실 계좌
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `KIWOOM_APPKEY` | *(없음)* | [openapi.kiwoom.com](https://openapi.kiwoom.com) 발급 App Key — `daily_aftermarket_sync_job`(ka10032/ka10098)과 `krx_flow_sync.py --backend kiwoom`(ka10045, 수동 폴백)이 공유 |
+| `KIWOOM_SECRETKEY` | *(없음)* | App Secret Key |
+| `KIWOOM_TOKEN` | *(없음)* | 미리 발급된 토큰 직접 주입 (선택, 토큰 발급 생략) |
+
+미설정 시 `daily_aftermarket_sync_job`은 경고 후 스킵된다. `krx_flow_sync.py`의 기본 백엔드(`krx-direct`)는 이 변수들을 쓰지 않는다 — `KRX_SESSION` 만료 시 수동 폴백(`--backend kiwoom`)으로만 필요.
+
+---
+
 ## 키움 모의투자
 
 | 변수 | 기본값 | 설명 |

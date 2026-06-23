@@ -50,7 +50,7 @@ python run_scheduler.py --no-summary  # 요약 없이 수집만
 
 | 잡 ID | 실행 시각 (KST) | 내용 |
 |-------|-----------------|------|
-| `krx_daily_refresh` | 평일 20:00 | KRX 종목 리스트 갱신 (krx_listings) |
+| `krx_daily_refresh` | 매일 20:00 (요일 제한 없음) | KRX 종목 리스트 갱신 (krx_listings) |
 | `weekly_chart_screener` | 일요일 20:30 | 주봉 Ichimoku 스크리닝 (chart_signals) |
 | `daily_stage_classifier` | 평일 16:30 | 일봉 3단계 Stage 분류기 |
 | `daily_watchlist_brief` | 평일 17:00 | 워치리스트 거래대금 일보 → Telegram |
@@ -82,7 +82,7 @@ python run_scheduler.py --no-summary  # 요약 없이 수집만
 | 잡 ID | 실행 시각 (KST) | 내용 |
 |-------|-----------------|------|
 | `daily_aftermarket_sync` | 평일 16:05 | 키움 시간외 단일가 스냅샷 (aftermarket_snap) |
-| `daily_flow_sync` | 평일 18:00 | KRX 외국인·기관 순매수 증분 (daily_flow) |
+| `daily_flow_sync` | 평일 18:00 | KRX 외국인·기관·개인 순매수 증분 (daily_flow, `--backend krx-direct`) |
 | `daily_ohlcv_warm` | 평일 18:30 | KRX OpenAPI 전일 전 종목 OHLCV → daily_ohlcv (KRX_OPENAPI_KEY 필수) |
 | `daily_market_snap` | 평일 16:10 | 당일 거래금액 Top 100 스냅샷 |
 
@@ -90,7 +90,7 @@ python run_scheduler.py --no-summary  # 요약 없이 수집만
 
 | 잡 ID | 실행 시각 (KST) | 필요 환경변수 | 내용 |
 |-------|-----------------|--------------|------|
-| `compose_paper_entry` | 일요일 21:15 | DB만 필요 | FUNNEL-1/AND-1 주간 신호 → pending 적재 |
+| `compose_paper_entry` | 일요일 21:15 | DB만 필요 | FUNNEL-1/AND-1/SCORE-1 주간 신호 → pending 적재 |
 | `paper_open_entry` | 평일 09:05 | `KIWOOM_MOCK_APPKEY` | T+1 진입 주문 실행 |
 | `paper_exit_checker` | 평일 15:20 | `KIWOOM_MOCK_APPKEY` | 익절/손절 조건 확인 |
 | `paper_eod_sampler` | 평일 16:40 | `KIWOOM_MOCK_APPKEY` | 일별 포지션 스냅샷 저장 |
@@ -143,7 +143,7 @@ Select-String "ERROR|WARNING" logs\news_crawler.log | Select-Object -Last 50
 
 ### 대시보드에서 잡 수동 트리거
 
-대시보드 → Scheduler 탭에서 `stage`, `screener`, `paper_sample` 잡을 즉시 실행할 수 있습니다. `scheduler_triggers` 테이블에 `pending` 행을 INSERT하면 30초 내에 `_trigger_watcher_job`이 실행합니다.
+대시보드 → Scheduler 탭에서 `stage`(추세 단계), `screener`(강세 후보), `paper_sample`(모의투자 샘플링), `youtube`(유튜브 수집), `flow`(KRX 수급) 5개 잡을 버튼으로 즉시 실행할 수 있습니다. `dart_screened`는 백엔드 `_VALID_JOBS`에는 있지만 UI 버튼은 없어 API 직접 호출로만 트리거 가능합니다. `scheduler_triggers` 테이블에 `pending` 행을 INSERT하면 30초 내에 `_trigger_watcher_job`이 실행합니다.
 
 ### 새 잡 추가
 

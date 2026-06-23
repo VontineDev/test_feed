@@ -1,35 +1,16 @@
-# KRX 외국인·기관 수급 데이터 임포트 방법
+# KRX 외국인·기관·개인 수급 데이터 임포트 방법
 
 ## 목적
 
-`daily_flow` 테이블에 외국인·기관 순매수 이력을 적재합니다. 이 데이터는 stage classifier의 수급 강도 계산(`krx_flow_sync.py`)에 사용됩니다.
+`daily_flow` 테이블에 외국인·기관·개인 순매수 이력을 적재합니다. 이 데이터는 stage classifier(`classify_stage_v15`)의 수급 강도 계산에 사용되며, Stage 2의 "개인 출회" 게이트는 `personal_net`이 없으면 무력화되므로 개인 순매수까지 채우는 백엔드가 필요합니다.
 
-## 방법 D: 키움 REST API (권장, 스케줄러 기본값)
+## 방법 A: KRX 직접 크롤 (권장, 스케줄러 기본값)
 
-`ka10045`(종목별기관매매추이요청, `/api/dostk/mrkcond`)로 종목별 기관/외국인 일별 순매수를 수집합니다.
-`KIWOOM_APPKEY`/`KIWOOM_SECRETKEY` Bearer 토큰만 있으면 되고, **브라우저 세션 쿠키가 필요 없어** 수동 갱신 작업이 없습니다.
+`data.krx.co.kr`에서 외국인·기관·개인 순매수를 모두 수집합니다 — `personal_net`을 채울 수 있는 유일한 방법입니다(아래 "왜 키움 API로는 안 되는가" 참고).
 
-```bash
-# 증분 (스케줄러 18:00 KST 기본 실행 — run_scheduler.py가 이걸 호출함)
-python data/krx_flow_sync.py --incremental --backend kiwoom
+### 전제 조건
 
-# 특정 기간 적재
-python data/krx_flow_sync.py --start 2026-01-01 --end 2026-01-31 --backend kiwoom
-
-# 테스트: 3종목만
-python data/krx_flow_sync.py --start 2026-06-01 --end 2026-06-19 --backend kiwoom --max 3
-```
-
-**알아둘 것:**
-- 거래일 캘린더(공휴일 포함)를 API가 자체 처리 — 주말/공휴일 보정 불필요.
-- 개인(`personal_net`) 순매수는 `ka10045`에 없음 — 이 백엔드로 적재 시 `personal_net`/`personal_streak`는 `NULL`. 개인 순매수가 필요하면 방법 A(KRX 직접 크롤)로 별도 채워야 함.
-- 날짜 범위 제한: 1개월 범위는 청크 분할 없이 단일 호출로 확인됨 (그 이상은 미검증).
-
-## 전제 조건 (방법 A/B/C — KRX 직접 크롤)
-
-한국 ISP 또는 VPN 환경 (data.krx.co.kr은 해외 IP 차단). 데이터.krx.co.kr 로그인이 보안 정책으로 막혀 있어 `KRX_SESSION` 브라우저 쿠키를 주기적으로 수동 갱신해야 하는 한계가 있음 — 위 방법 D 사용을 권장.
-
-## 방법 A: KRX 직접 크롤
+한국 ISP 또는 VPN 환경 (data.krx.co.kr은 해외 IP 차단). 데이터.krx.co.kr 로그인이 보안 정책으로 막혀 있어 `KRX_SESSION` 브라우저 쿠키를 주기적으로 수동 갱신해야 하는 한계가 있음.
 
 ### 1단계: 자격증명 설정
 
@@ -114,11 +95,29 @@ python data/krx_flow_sync.py --start 2025-01-01 --backend pykrx
 
 ---
 
+## 방법 D: 키움 REST API (수동 폴백 — `KRX_SESSION` 만료 시에만)
+
+`ka10045`(종목별기관매매추이요청, `/api/dostk/mrkcond`)로 종목별 기관/외국인 일별 순매수를 수집합니다.
+`KIWOOM_APPKEY`/`KIWOOM_SECRETKEY` Bearer 토큰만 있으면 되고 브라우저 세션 쿠키가 필요 없습니다.
+
+```bash
+python data/krx_flow_sync.py --start 2026-06-01 --end 2026-06-19 --backend kiwoom
+```
+
+**왜 스케줄러 기본값이 아닌가:** `ka10045` 응답에 개인(`personal_net`) 필드가 없습니다 — 이 백엔드로 적재하면 `personal_net`/`personal_streak`가 항상 `NULL`이 되고, `classify_stage_v15`의 Stage 2 "개인 출회" 게이트가 조용히 무력화됩니다. 2026-06-22에 한 번 스케줄러 기본값으로 시도했다가 이 문제로 되돌렸습니다(`docs/00_meta/TODOS.md` 참고).
+
+**왜 키움 API로는 개인 순매수를 영구히 구할 수 없는가:** 외국인/기관/개인 투자자 유형 분류는 거래소(KRX)가 전 증권사의 체결을 모아 투자자 코드로 집계하는 데이터입니다. 키움은 그 중 한 증권사일 뿐이라, 자사 고객의 주문이 개인인지는 알 수 있어도 **시장 전체의 개인 순매수 합계**는 원천적으로 가질 수 없습니다. 키움 REST API 전체 TR을 확인해도(`ka10045` 포함) 투자자 유형 분류가 있는 TR은 이 하나뿐이고, 개인 필드는 없습니다.
+
+**언제 쓰나:** `KRX_SESSION` 쿠키가 만료돼 방법 A가 실패하고 즉시 갱신이 어려울 때, 기관/외국인만이라도 임시로 채워두는 용도로 사용. 쿠키 갱신 후에는 `--force`로 같은 기간을 방법 A로 재실행해 `personal_net`을 메우는 것을 권장.
+
+---
+
 ## 검증
 
 ```sql
--- 최근 5일 데이터 확인
+-- 최근 5일 데이터 확인 (personal_net이 NULL이 많으면 방법 D로 적재된 행 — 방법 A로 재실행 필요)
 SELECT trade_date, COUNT(*) as ticker_count,
+       COUNT(*) FILTER (WHERE personal_net IS NULL) as null_personal,
        SUM(ABS(foreign_net)) as total_foreign_activity
 FROM daily_flow
 WHERE trade_date >= CURRENT_DATE - 5
@@ -126,7 +125,7 @@ GROUP BY trade_date
 ORDER BY trade_date DESC;
 ```
 
-기대값: 날짜당 KOSPI+KOSDAQ 전 종목 수 (~2,800건).
+기대값: 날짜당 KOSPI+KOSDAQ 전 종목 수 (~2,800건), `null_personal` ≈ 0.
 
 ---
 
