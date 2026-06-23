@@ -12,7 +12,25 @@
 | 2. Trailing Stop 기준점("전체 최고점"인지 "TP1 이후 최고점"인지 애매함) | `_watermark = _pos["watermark"] or _entry`(라인 67), `if _close > _watermark: _watermark = _close`(라인 83-84) — **진입(entry) 시점부터의 전체 최고점**, TP1 시점에 리셋하지 않음. Breakeven(본전 락인)도 구현 안 됨 | **미구현 — 실제 동작 확인됨.** 제안된 Breakeven Rule은 적용 안 됨 (아래 "검토 메모" 참고) |
 | 3. Blended Return 계산 오류 가능성 (TP1 못 가고 청산 시 blended 공식이 왜곡될 수 있음) | `if _tp1_done: blended = ratio*tp1_ret + (1-ratio)*final else: blended = _ret`(라인 142-147) — `_tp1_done`은 **이번 루프 진입 시점**(이전 날까지의 상태)을 읽으므로, hard_stop/period_end로 청산되는 날 TP1이 처음 발동하는 경우는 없음(TP1은 그 자체로 전량청산이 아니라 플래그 기록이며 같은 elif 체인에서 hard_stop/period_end보다 늦게 검사됨) | **이미 해결됨** — 우려한 오염 케이스가 발생하지 않는 구조 |
 
-**검토 메모 (2026-06-23):** 유일하게 실제로 미구현인 항목은 #2의 Breakeven Rule(TP1 발동 후 트레일링 기준을 진입가 이상으로 락인)입니다. 도입하려면 `_watermark` 갱신 로직(라인 83-84) 또는 trail 조건(라인 124)에 `max(watermark * (1 - trail_pct), entry)` 형태의 하한을 추가하는 방향이 됩니다 — 단, 이는 `OPTIMAL_EXIT_PARAMS`로 그리드서치 검증된 현재 파라미터(`tp1_pct`/`trail_pct`)의 전제를 바꾸므로 백테스트 재검증 없이 적용하면 안 됩니다.
+**검토 메모 (2026-06-23):** 유일하게 실제로 미구현인 항목은 #2의 Breakeven Rule(TP1 발동 후 트레일링 기준을 진입가 이상으로 락인)입니다. `analysis/backtest_engine.py`에 이미 `_compute_exit_logic_model_a()`(ATR 손절 + Breakeven + Chandelier Exit, 라인 2475-2607)로 구현되어 있었고 — 모의투자 잡에는 연결되지 않은 상태 — `scripts/compare_exit_models.py`로 백테스트 비교가 가능했습니다. 아래 "백테스트 검증 결과" 참고.
+
+## 백테스트 검증 결과 (2026-06-23)
+
+`scripts/compare_exit_models.py --max-tickers 200 --start 2025-01-01 --end 2026-06-17` (신호 소스 `stage_v13`, KOSPI+KOSDAQ 상위 200종목, 신호 403건):
+
+| 지표 | 원본 (현재 운영) | 모델A (ATR+Breakeven) | 모델B (3단계분할) |
+|---|---|---|---|
+| `win_sell` (실 청산 승률) | **37.2%** | 34.0% (-3.2pp) | 40.0% (+2.8pp) |
+| `avg_sell` (실 청산 평균수익률) | **2.7%** | 1.0% (-1.7pp) | 1.5% (-1.2pp) |
+| `sharpe_28d`/`win_28d`/`avg_28d`/`mdd` | 동일 | 동일 | 동일 |
+
+(`sharpe_28d` 등은 28일 고정 윈도우 forward return 기준이라 exit_model과 무관하게 동일 — `win_sell`/`avg_sell`만 실제 exit 로직 차이를 반영한다.)
+
+**결론: 제안과 반대로, Breakeven Rule을 포함한 모델A는 원본보다 승률과 평균수익률 모두 더 나쁩니다.** 제안문의 "MDD가 눈에 띄게 개선될 것"이라는 예측은 이 데이터로는 확인되지 않았고(`mdd`는 세 모델 모두 동일— 표본에 극단치 1종목이 모든 모델에 동일하게 영향을 줌), 오히려 수익률이 악화됐습니다. 가능한 원인: ① 본전 스탑이 TP1 이후 잔여분을 정확히 entry가로 묶어버려 일시적 되돌림에도 0% 손익으로 컷되는 경우가 잦고(원본의 -10% 트레일링이 주는 여유가 사라짐), ② Chandelier Exit(고점-3×ATR)이 종목별 변동성에 따라 원본의 고정 -10%보다 더 타이트하거나 더 느슨하게 작동해 일관성이 떨어짐.
+
+모델B(3단계 분할)는 승률은 개선(+2.8pp)되지만 평균수익률은 여전히 원본보다 낮습니다(-1.2pp) — 빠른 1차 익절(15%)이 승률을 높이는 대신 큰 수익 구간을 일부 포기하는 트레이드오프로 보입니다.
+
+**권고: 현재 운영 중인 원본 모델(`OPTIMAL_EXIT_PARAMS`)을 유지합니다.** 모델A/B 모두 모의투자 잡(`jobs/paper_jobs.py`)에 연결되지 않은 상태이며, 이 백테스트 결과로 보아 전환할 근거가 없습니다. 표본을 전체 종목(`--max-tickers 0`)으로 확장하면 결론이 더 견고해질 수 있으나, 200종목/403신호 표본에서도 방향성은 일관됩니다.
 
 ---
 
