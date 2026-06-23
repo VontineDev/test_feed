@@ -674,23 +674,29 @@ class ScreenResult:
 
 **역할**: 키움 모의투자 서버(mockapi.kiwoom.com)에 실제 주문을 제출하고, 백테스트 진입가(T+0 종가)와 실전 진입가(T+1 시가 체결가) 사이의 슬리피지를 측정합니다.
 
-**4개 모델 파라미터** (그리드서치 검증값):
+**7개 모델 파라미터** (그리드서치/backtest 검증값, `MODEL_CONFIG`):
 
-| 모델 | 신호 소스 | 슬롯 | tp1 | tp1_ratio | trail | stop | val_sharpe |
-|------|----------|------|-----|-----------|-------|------|-----------|
-| `stage` | Stage 1 (KOSPI) | 10 | 25% | 50% | 10% | 10% | 4.70 |
-| `kosdaq` | Stage 1 (KOSDAQ) | 10 | 25% | 50% | 15% | 10% | 5.48 |
-| `cross` | Stage 1 ∩ Ichimoku | 5 | 15% | 50% | 10% | 10% | 5.11 |
-| `ichimoku` | 주봉 Ichimoku 7조건 | 10 | 25% | **70%** | 10% | 10% | **7.50** |
+| 모델 | 신호 소스 | 슬롯 | 포지션 | tp1 | tp1_ratio | trail | stop | val_sharpe |
+|------|----------|------|--------|-----|-----------|-------|------|-----------|
+| `stage` | Stage 1 (KOSPI) | 10 | 1,000만원 | 25% | 50% | 10% | 10% | 4.70 |
+| `kosdaq` | Stage 1 (KOSDAQ) | 10 | 1,000만원 | 25% | 50% | 15% | 10% | 5.48 |
+| `cross` | Stage 1 ∩ Ichimoku | 5 | 2,000만원 | 15% | 50% | 10% | 10% | 5.11 |
+| `ichimoku` | 주봉 Ichimoku 7조건 | 10 | 1,000만원 | 25% | **70%** | 10% | 10% | **7.50** |
+| `compose-funnel1` | 주간 FUNNEL-1 | 10 | 1,000만원 | 15% | 50% | 10% | 10% | 0.74* |
+| `compose-and1` | 주간 AND-1 | 5 | 2,000만원 | 15% | 50% | 10% | 10% | 1.75* |
+| `compose-score1` | 주간 SCORE-1 | 5 | 2,000만원 | 15% | 50% | 10% | 10% | 1.17* |
 
-**스케줄 잡 3개** (`jobs/paper_jobs.py`):
-- `09:05 KST` — `paper_open_entry_job`: pending → T+1 시가로 키움 모의투자 매수주문
-- `16:10 KST` — `paper_exit_checker_job`: open 포지션 EOD 가격 → 손절/익절/트레일 매도주문
-- `16:40 KST` — `paper_eod_sampler_job`: Stage1·Ichimoku·Cross 신호 샘플링 → pending 삽입
+`*` compose 3개 모델은 train/val 분리 없는 backtest sharpe (val_sharpe 아님).
+
+**스케줄 잡 4개** (`jobs/paper_jobs.py` + `jobs/compose_paper_job.py`):
+- `09:05 KST` (평일) — `paper_open_entry_job`: pending → T+1 시가로 키움 모의투자 매수주문
+- `15:20 KST` (평일, 정규장 마감 직전) — `paper_exit_checker_job`: 오픈 포지션 Kiwoom 현재가 체크 → 손절/익절/트레일 매도주문
+- `16:40 KST` (평일) — `paper_eod_sampler_job`: Stage1·Ichimoku·Cross 신호 샘플링 → pending 삽입
+- `21:15 KST` (일요일) — `compose_paper_entry_job`: FUNNEL-1/AND-1/SCORE-1 주간 신호 → pending 삽입 (DB만 필요, Kiwoom 계정 불필요)
 
 **exit_type 분류**: `hard_stop` → `tp1` 기록 → `trail` → `period_end`(91일) → `manual`
 
-**가격 소스 (v0.10.0.1~)**: exit checker는 yfinance 배치 조회(`_fetch_prices_yf()`)로 당일 1분봉 최신가를 전 포지션 일괄 조회. 대시보드 `/api/positions`와 동일 소스. 주문 실행(place_sell)만 Kiwoom mock API 사용.
+**가격 소스 (v1.0.4.1~)**: exit checker가 정규장 중(15:20 KST)으로 옮겨지면서 1분봉 지연이 있는 yfinance 대신 Kiwoom mock API(`get_current_price()`, 종목당 0.5초 딜레이)로 되돌림 — 주문 실행(place_sell)과 동일 서버. 대시보드 `/api/positions`·텔레그램 `/paper`는 표시 전용이라 yfinance를 그대로 사용 (자세한 내력은 `explanation-paper-trading.md` 참고).
 
 **슬리피지 측정 목표**: `-0.5% ~ +0.5%` 범위 내 유지 시 백테스트 엣지 유효 판정
 
@@ -779,8 +785,9 @@ python analysis/macro_tracker.py --snapshot-only            # 매크로 현황 �
 | `watchlist_job.py` | `watchlist_brief_job(db_pool)` | 평일 17:00 KST |
 | `watchlist_job.py` | `build_watchlist_entries(pool)` | on-demand (`/watchlist` 봇 커맨드) |
 | `paper_jobs.py` | `paper_open_entry_job(db_pool, trader)` | 평일 09:05 KST |
-| `paper_jobs.py` | `paper_exit_checker_job(db_pool, trader)` | 평일 16:10 KST |
+| `paper_jobs.py` | `paper_exit_checker_job(db_pool, trader)` | 평일 15:20 KST |
 | `paper_jobs.py` | `paper_eod_sampler_job(db_pool, trader)` | 평일 16:40 KST |
+| `compose_paper_job.py` | `compose_paper_entry_job(dsn, pool)` | 일요일 21:15 KST |
 
 **설계 원칙**: 각 잡 함수는 `db_pool`/`trader` 등 의존성을 인자로 받아 전역 상태 없이 동작. 전역 캐시(`_screener_tickers`, `_active_stage_tickers`)를 갱신하는 잡은 새 값을 반환 — 호출자(`run_scheduler.py`)가 전역에 대입.
 
@@ -935,8 +942,9 @@ test_feed/
 │   ├── screener_job.py            # weekly_screener_job() — 전종목 Ichimoku 스캔 + HTML 리포트
 │   ├── infra_jobs.py              # daily_krx_refresh_job() + daily_flow_sync_job()
 │   ├── watchlist_job.py           # watchlist_brief_job() + build_watchlist_entries() 헬퍼
-│   └── paper_jobs.py              # paper_exit_checker_job() + paper_eod_sampler_job()
-│                                  # + paper_open_entry_job()
+│   ├── paper_jobs.py               # paper_exit_checker_job() + paper_eod_sampler_job()
+│   │                                # + paper_open_entry_job()
+│   └── compose_paper_job.py        # compose_paper_entry_job() — FUNNEL-1/AND-1/SCORE-1 주간 적재
 │
 ├── core/                          # 공유 유틸리티 (v0.9.6.0~)
 │   ├── db.py                      # asyncpg 커넥션 풀, 테이블 init, 모든 DB 헬퍼 함수
@@ -951,7 +959,7 @@ test_feed/
 │   ├── krx_flow_sync.py           # 외국인·기관 순매수 파이프라인 → daily_flow 테이블
 │   ├── krx_aftermarket_sync.py    # KRX 시간외 단일가 → aftermarket_snap 적재
 │   ├── kiwoom_aftermarket_sync.py # Kiwoom REST API 시간외 단일가 → aftermarket_snap 적재
-│   ├── kiwoom_paper_trader.py     # 키움 모의투자 자동주문 — 4모델, paper_positions 테이블
+│   ├── kiwoom_paper_trader.py     # 키움 모의투자 자동주문 — 7모델, paper_positions 테이블
 │   ├── dart_sync.py               # DART 전자공시 수집·XBRL 파싱·세그먼트 Ollama 추출
 │   ├── dart_download.py           # DART 보고서 원문 로컬 다운로더 (CLI 독립 실행)
 │   ├── dart_extractor.py          # DART XML → Ollama 내러티브 추출 → dart_extractions

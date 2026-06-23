@@ -79,7 +79,7 @@ paper_exit_checker(15:20 KST) → paper_trader.get_current_price(ticker) (종목
 ### compose_paper_entry_job (일요일 21:15 KST)
 
 1. `strategy_compose.load_signal_frame()` + 각 전략 `.run()`으로 이번 주(ISO) 신호 추출 (8주 lookback)
-2. FUNNEL-1 상위 10개, AND-1 전체, SCORE-1 상위 5개를 각 모델(`compose-funnel1` / `compose-and1` / `compose-score1`)로 `pending` 삽입
+2. FUNNEL-1 상위 10개, AND-1 상위 5개, SCORE-1 상위 5개를 각 모델(`compose-funnel1` / `compose-and1` / `compose-score1`)로 `pending` 삽입 (`_STRATEGIES_CFG`의 `top_n`으로 모두 캡 — "전체"는 아님)
 3. `entry_theory=0.0` (이론 진입가 없음 — `paper_open_entry_job`이 실제 시가로 채움)
 4. 같은 주에 이미 `pending/open`인 종목은 중복 스킵
 5. Kiwoom 계정 불필요 — DB 접근만으로 동작

@@ -140,7 +140,7 @@ yfinance 심볼(`005930.KS`) → 6자리 코드(`005930`) 자동 변환. `_to_6d
 
 ## 스케줄러 잡 (모의투자)
 
-`KIWOOM_MOCK_APPKEY` 설정 시에만 등록됩니다.
+`paper_open_entry`/`paper_exit_checker`/`paper_eod_sampler`는 `KIWOOM_MOCK_APPKEY` 설정 시에만 등록됩니다. `compose_paper_entry`는 예외로 DB 풀만 있으면 등록됩니다 (Kiwoom 계정 불필요).
 
 | 잡 ID | 실행 시각 (KST) | 내용 |
 |-------|-----------------|------|

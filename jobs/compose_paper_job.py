@@ -2,7 +2,7 @@
 
 일요일 21:15 KST 실행 (weekly_chart_screener 완료 후).
   FUNNEL-1  top-10 : 수급 스크린 후 이치모쿠 돌파 진입
-  AND-1     top-5  : 이치모쿠 ∩ Stage2+ ∩ 수급 비매도
+  AND-1     top-5  : 이치모쿠 ∩ Stage2+ ∩ 수급 비매도 (전체 아님 — _STRATEGIES_CFG에서 5로 캡)
   SCORE-1   top-5  : Stage·거래대금·수급 z-score 가중합 (2026-06-16 추가)
 """
 

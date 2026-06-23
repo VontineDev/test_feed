@@ -108,8 +108,8 @@ PostgreSQL (Supabase)
       "entry_actual": 75000.0,
       "qty": 10,
       "status": "open",
-      "tp1_pct": 5.0,
-      "trail_pct": 3.0,
+      "tp1_pct": 0.25,
+      "trail_pct": 0.10,
       "current_price": 76200.0,
       "unrealized_pct": 1.6
     }
@@ -117,7 +117,7 @@ PostgreSQL (Supabase)
 }
 ```
 
-`status`는 `open` 또는 `pending`. `current_price`는 `daily_ohlcv` 테이블 최신 종가.
+`status`는 `open` 또는 `pending`. `tp1_pct`/`trail_pct`는 DB에 저장된 그대로(분수, 0.25 = 25%) 반환됩니다. `current_price`는 yfinance 1분봉(5분 캐시)에서 조회 — `daily_ohlcv` 테이블이 아닙니다.
 
 ---
 
@@ -161,7 +161,22 @@ data: [{"id": 123, "direction": "BUY", "strength": 4, ...}]
 
 ### GET /api/scheduler/stream
 
-스케줄러 상태 SSE 스트림. 1초 폴링으로 `scheduler_triggers` 테이블 변경 감지.
+스케줄러 상태 SSE 스트림. 10초 폴링으로 `scheduler_triggers` 테이블 변경 시에만 push.
+
+---
+
+### GET /api/scheduler/status
+
+`scheduler_triggers` 최근 10건 이력을 1회성으로 반환합니다 (SSE 미지원 클라이언트·초기 로드용, 폴링 로직은 `/api/scheduler/stream`과 동일 쿼리).
+
+**응답:**
+```json
+{
+  "data": [
+    {"id": 7, "job_name": "stage", "requested_at": "2026-06-20T10:15:00", "executed_at": "2026-06-20T10:15:03", "status": "done"}
+  ]
+}
+```
 
 ---
 
@@ -200,6 +215,70 @@ data: [{"id": 123, "direction": "BUY", "strength": 4, ...}]
   }
 }
 ```
+
+---
+
+### GET /api/youtube/screener
+
+최신 윈도우의 `attention_score > 0` 종목 전체를 점수 내림차순으로 반환합니다 (Stage·차트 스크리너 데이터를 곁들임).
+
+**응답:**
+```json
+{
+  "data": {
+    "total": 42,
+    "stage2_plus": 9,
+    "in_screener": 18,
+    "narrative_q": 25,
+    "triple_combo": 3,
+    "items": [
+      {
+        "ticker": "005930.KS",
+        "name": "삼성전자",
+        "attention_score": 0.62,
+        "attention_q": 4,
+        "stage": 2,
+        "is_enhanced": true,
+        "has_gapjum": false,
+        "sector": "반도체",
+        "close": 87200
+      }
+    ]
+  }
+}
+```
+
+| 필드 | 설명 |
+|------|------|
+| `stage2_plus` | 항목 중 `stage >= 2`인 종목 수 |
+| `in_screener` | `is_enhanced` 또는 `has_gapjum`인 종목 수 |
+| `narrative_q` | `attention_q`가 2/3/4(중간 분위)인 종목 수 |
+| `triple_combo` | Stage2+ ∩ 스크리너 통과 ∩ narrative_q 모두 만족하는 종목 수 |
+
+`/api/report/unified`과 달리 Stage/스크리너 데이터가 없는 종목은 제외하지 않고 `youtube_attention_scores`를 기준 집합으로 사용합니다 (LEFT JOIN).
+
+---
+
+### GET /api/report/pipeline-status
+
+수급(`daily_flow`)·Stage·스크리너·유튜브 4개 파이프라인의 최신 적재일과 신선도 상태를 반환합니다. 대시보드 헤더의 파이프라인 상태 표시에 사용됩니다.
+
+**응답:**
+```json
+{
+  "flow":     {"date": "2026-06-20", "tickers": 2680, "status": "ok"},
+  "stage":    {"date": "2026-06-20", "status": "ok"},
+  "screener": {"date": "2026-06-14", "status": "ok"},
+  "youtube":  {"date": "2026-06-20", "status": "ok"}
+}
+```
+
+**status 판정 기준** — `flow`/`youtube`는 매일(daily) 갱신, `stage`/`screener`는 주간(weekly) 허용치 적용:
+
+| 소스 | `ok` | `warn` | `error` |
+|------|------|--------|---------|
+| flow, youtube (daily) | gap ≤ 1일 | gap ≤ 3일 | gap > 3일 또는 데이터 없음 |
+| stage, screener (weekly) | gap ≤ 7일 | gap ≤ 14일 | gap > 14일 또는 데이터 없음 |
 
 ---
 
@@ -544,6 +623,36 @@ DART 최신 보고서 기준 재무 요약(매출·영업이익·사업부문)�
 
 ---
 
+### GET /api/paper/history
+
+특정 종목의 모의투자 전체 이력(과거 모든 포지션, 모델 무관)을 신호일 역순으로 반환합니다. `종목 분석` 탭에서 종목 클릭 시 모의투자 이력 표시에 사용됩니다.
+
+**쿼리 파라미터:** `?ticker=005930.KS` (필수)
+
+**응답:**
+```json
+{
+  "data": [
+    {
+      "id": 42, "model": "stage", "ticker": "005930.KS", "name": "삼성전자",
+      "signal_date": "2026-05-17", "entry_theory": 74800.0, "entry_actual": 75000.0,
+      "slippage_pct": 0.0027, "qty": 10, "status": "open",
+      "tp1_pct": 0.25, "tp1_ratio": 0.5, "tp1_date": null, "tp1_price": null,
+      "trail_pct": 0.10, "hard_stop_pct": 0.10, "watermark": 75000.0,
+      "exit_date": null, "exit_price": null, "exit_type": null,
+      "blended_return": null, "created_at": "2026-05-17T09:05:02",
+      "current_price": 76200.0, "unrealized_pct": 1.6
+    }
+  ],
+  "ticker": "005930.KS",
+  "name": "삼성전자"
+}
+```
+
+`tp1_pct`/`trail_pct`/`hard_stop_pct` 등은 DB에 저장된 그대로(분수, 예: `0.25` = 25%) 반환됩니다 — `/api/positions`와 동일한 단위. `current_price`는 `open`/`pending` 행에만 채워집니다(yfinance 단일 종목 조회, 공유 캐시 미사용).
+
+---
+
 ### GET /api/paper/curve
 
 모델별 누적 P&L 시계열, 집계 통계, ticker_name_map, 미실현 포지션 현재가를 단일 응답으로 반환합니다.
@@ -592,6 +701,129 @@ DART 최신 보고서 기준 재무 요약(매출·영업이익·사업부문)�
 컬럼: `model, ticker, name, signal_date, entry_theory, entry_actual, slippage_pct, qty, status, tp1_pct, tp1_ratio, tp1_date, tp1_price, trail_pct, hard_stop_pct, watermark, exit_date, exit_price, exit_type, blended_return, created_at`
 
 ---
+
+### GET /api/macro
+
+`MacroTracker`(OLS 팩터 모델) 분석 결과를 반환합니다 (`Macro.tsx` 탭). 10분 캐시 — 최초 호출은 yfinance 다운로드로 30~60초 소요, 이후 캐시 즉시 반환.
+
+**쿼리 파라미터:** `?refresh=true` (캐시 무시하고 강제 재분석)
+
+**분석 대상 종목 선정:** 1순위 — 오늘 히트맵 캐시에서 거래대금 상위 20종목으로 변환 가능한 것. 히트맵이 비어 있으면(5종목 미만) 2순위 — 전일 `aftermarket_snap` TOP 20. 둘 다 없으면 `DEFAULT_TICKERS`(코드 하드코딩) 사용.
+
+**6개 팩터:** `rate`(미국10년금리) · `fx`(USD/KRW) · `oil`(브렌트유) · `vix`(VIX) · `dxy`(달러인덱스) · `export`(EWY, 외국인 수급 대리지표)
+
+**응답:**
+```json
+{
+  "snapshot": {
+    "rate": {"current": 4.25, "change_1d": 0.02, "change_5d": -0.05, "change_20d": 0.10, "change_60d": 0.30, "z_score_60d": 0.8}
+  },
+  "stocks": [
+    {
+      "ticker": "005930.KS", "name": "삼성전자",
+      "n_obs": 504, "r_squared": 0.42, "adj_r_squared": 0.40, "residual_std": 1.2,
+      "macro_score": 0.18, "macro_score_5d": 0.03, "macro_score_20d": 0.09,
+      "significant_factors": ["fx", "export"],
+      "betas": {"rate": -0.1, "fx": 0.6, "oil": 0.05, "vix": -0.2, "dxy": -0.3, "export": 0.4},
+      "alpha": 0.0002,
+      "t_stats": {"fx": 2.1, "export": 1.9},
+      "p_values": {"fx": 0.03, "export": 0.05},
+      "factor_contribs_5d": {"rate": -0.001, "fx": 0.012, "oil": 0.0, "vix": 0.004, "dxy": -0.002, "export": 0.006}
+    }
+  ],
+  "fetched_at": "14:32:10",
+  "cached": false
+}
+```
+
+| 필드 | 설명 |
+|------|------|
+| `snapshot` | 팩터별 현재값·1d/5d/20d/60d 변화율·60일 z-score (팩터 6개 키) |
+| `stocks` | 종목별 OLS 회귀 결과. 히트맵 경로면 거래대금 순(상위 20), 아니면 `macro_score` 내림차순 |
+| `betas`/`t_stats`/`p_values` | 팩터별 회귀계수·t값·p값 (`alpha`는 별도 필드로 분리) |
+| `factor_contribs_5d` | `beta × change_5d` — 팩터별 5일 기여도 |
+| `cached` / `stale` | `true` = 캐시 히트. `stale: true`면 백그라운드 갱신 중인 오래된 데이터 |
+
+캐시 갱신 실패 시 이전 데이터를 `stale: true, error: "분석 오류 — 이전 데이터 표시 중"`와 함께 반환합니다 (500 대신 graceful degradation).
+
+---
+
+### POST /api/feedback
+
+대시보드 피드백을 텔레그램으로 전송합니다 (`TELEGRAM_TOKEN`/`TELEGRAM_CHAT_ID` 미설정 시 503).
+
+**요청:**
+```json
+{"text": "히트맵 갱신이 느려요", "screenshot": null}
+```
+
+`screenshot`은 base64 JPEG (선택). 첨부 시 `sendPhoto`, 없으면 `sendMessage`로 전송. 메시지에 요청자 역할(`role`)과 본문 900자까지 포함.
+
+**응답:** `{"status": "sent"}`
+
+---
+
+### GET /api/auth/me
+
+현재 요청의 인증 역할을 반환합니다. 프론트엔드가 admin/special/user 역할별 UI 분기(스케줄러 트리거 버튼, 포트폴리오 탭 노출 등)에 사용합니다.
+
+**응답:** `{"role": "admin"}`
+
+---
+
+### GET /api/portfolio
+
+수동 입력 포트폴리오(`manual_portfolio` 테이블) 조회. **admin/special 역할만 접근 가능** (그 외 403).
+
+**응답:**
+```json
+{
+  "summary": {"tot_pur_amt": 10000000, "tot_evlt_amt": 10500000, "tot_evlt_pl": 500000, "tot_prft_rt": 5.0},
+  "holdings": [
+    {
+      "id": 1, "stk_cd": "005930.KS", "stk_nm": "삼성전자", "market": "KR",
+      "avg_price": 75000, "qty": 10, "cur_prc": 78000,
+      "pur_amt": 750000, "evlt_amt": 780000, "evltv_prft": 30000,
+      "pur_amt_krw": 750000, "evlt_amt_krw": 780000, "evltv_prft_krw": 30000,
+      "prft_rt": 4.0, "poss_rt": 7.4
+    }
+  ],
+  "usd_krw": 1380.5
+}
+```
+
+미국 주식(티커에 숫자 없음)은 `avg_price`/`pur_amt`/`evlt_amt`/`evltv_prft`를 USD 원화(native) 기준으로, `*_krw` 필드는 `usd_krw` 환율로 환산해 별도 제공합니다. 한국 주식은 둘이 동일합니다. `tot_*`/`poss_rt`(포트폴리오 내 비중)는 항상 원화 환산 기준.
+
+현재가: 한국 주식은 `aftermarket_snap.reg_close` 우선 → yfinance 폴백, 미국 주식은 yfinance 직접 조회.
+
+---
+
+### POST /api/portfolio/holdings
+
+종목 추가 (**admin 전용**, 그 외 403). 동일 `ticker` 존재 시 UPDATE(upsert).
+
+**요청:** `{"ticker": "005930.KS", "name": "삼성전자", "avg_price": 75000, "qty": 10}`
+
+`qty`/`avg_price` ≤ 0이면 422. 응답: `201` + 생성/갱신된 행 (`id`, `ticker`, `name`, `avg_price`, `qty`).
+
+---
+
+### PUT /api/portfolio/holdings/{holding_id} · DELETE /api/portfolio/holdings/{holding_id}
+
+각각 종목 수정·삭제 (**admin 전용**). PUT 응답 `{"ok": true}`, 대상 없으면 404. DELETE는 `204 No Content`.
+
+---
+
+### GET /api/ticker/lookup
+
+종목코드/티커로 종목명을 조회합니다 (포트폴리오 수동 추가 폼의 자동완성용).
+
+**쿼리 파라미터:** `?q=005930` (한국: 6자리 숫자 → KR, 그 외 → US로 판정)
+
+**조회 순서 (한국):** `ticker_names` → `krx_listings` → (둘 다 없으면) Yahoo Finance 검색(`.KS`/`.KQ` 순)
+**조회 순서 (미국):** Yahoo Finance 검색만
+
+**응답:** `{"ticker": "005930", "name": "삼성전자", "market": "KR"}` — 못 찾으면 `404`.
 
 ---
 
