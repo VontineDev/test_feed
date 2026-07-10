@@ -63,6 +63,7 @@ import csv
 import json as _json
 import logging
 import os
+import random
 import sys
 import time as _time
 from collections import defaultdict
@@ -307,8 +308,18 @@ class _KrxDirectFetcher:
         try:
             raw = self._post(self._DATA, payload)
         except Exception as e:
-            logger.debug("[krx-direct] %s 요청 실패: %s", krx_code, e)
-            return []
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status == 403 and _tor_new_identity():
+                logger.info("[krx-direct] 403 감지 — Tor 새 회로 요청 후 재시도 (%s)", krx_code)
+                _time.sleep(3)  # 새 회로 안정화 대기
+                try:
+                    raw = self._post(self._DATA, payload)
+                except Exception as e2:
+                    logger.debug("[krx-direct] %s 재시도 실패: %s", krx_code, e2)
+                    return []
+            else:
+                logger.debug("[krx-direct] %s 요청 실패: %s", krx_code, e)
+                return []
 
         # 응답이 LOGOUT/빈값이면 인증 실패
         if raw in (b"LOGOUT", b""):
@@ -354,7 +365,7 @@ class _KrxDirectFetcher:
             all_rows.extend(chunk_rows)
             chunk_start = chunk_end + timedelta(days=1)
             if rate_delay > 0 and chunk_start <= end:
-                _time.sleep(rate_delay)
+                _time.sleep(_jittered_delay(rate_delay))
 
         if not all_rows:
             return []
@@ -396,7 +407,7 @@ class _KrxDirectFetcher:
 
         # 마지막 청크 이후 딜레이
         if rate_delay > 0:
-            _time.sleep(rate_delay)
+            _time.sleep(_jittered_delay(rate_delay))
 
         return records
 
@@ -412,6 +423,53 @@ def _parse_int(s: str) -> Optional[int]:
         return int(float(s))
     except ValueError:
         return None
+
+
+def _jittered_delay(base: float) -> float:
+    """Tor 사용 시 요청 간격에 랜덤 지터 부여 (일정한 패턴으로 탐지되는 것 방지).
+
+    TOR_PROXY 미설정 시 base 그대로 반환 (기존 동작 유지).
+    """
+    if not os.environ.get("TOR_PROXY"):
+        return base
+    lo = max(base, 1.0)
+    return random.uniform(lo, lo + 1.5)
+
+
+def _tor_new_identity(timeout: float = 5.0) -> bool:
+    """Tor control port(SIGNAL NEWNYM)로 새 출구 노드 요청.
+
+    KRX가 Tor 출구 IP 상당수를 블록리스트에 올려둔 것으로 추정 — 요청 중
+    403이 뜨거나 일정 개수마다 회로를 바꿔 차단된 노드에 계속 요청이
+    몰리는 것을 방지한다. TOR_CONTROL_COOKIE 미설정 시 best-effort로
+    조용히 스킵 (Tor Browser는 기본적으로 control port 자체가 꺼져있는
+    경우가 많아 필수 기능으로 만들지 않음).
+    """
+    control_port = os.environ.get("TOR_CONTROL_PORT", "9151")
+    cookie_path = os.environ.get("TOR_CONTROL_COOKIE")
+    if not cookie_path:
+        return False
+    try:
+        import binascii
+        import socket as _socket
+
+        with open(cookie_path, "rb") as f:
+            cookie_hex = binascii.hexlify(f.read()).decode()
+
+        s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect(("127.0.0.1", int(control_port)))
+        s.sendall(f"AUTHENTICATE {cookie_hex}\r\n".encode())
+        if not s.recv(1024).startswith(b"250"):
+            s.close()
+            return False
+        s.sendall(b"SIGNAL NEWNYM\r\n")
+        ok = s.recv(1024).startswith(b"250")
+        s.close()
+        return ok
+    except Exception as e:
+        logger.debug("[krx-direct] Tor NEWNYM 실패: %s", e)
+        return False
 
 
 def _make_krx_direct(
@@ -887,6 +945,21 @@ async def _handle_possible_expiry(fetcher: "_KrxDirectFetcher", consecutive_empt
     )
     if probe_rows:
         return False  # 세션 정상
+
+    # 세션이 실제로 만료된 게 아니라 현재 Tor 출구 노드가 도중에 새로
+    # 차단됐을 가능성 — 이미 실패한 상태라 잃을 게 없으므로 회로만 바꿔
+    # 한 번 더 확인 (쿠키는 그대로 유지, IP만 변경).
+    # 주의: KRX_SESSION 쿠키가 발급 IP에 묶여 있을 가능성이 있어 이 시도가
+    # 항상 성공하진 않는다 — 실패하면 그대로 아래 수동 갱신 대기로 넘어간다.
+    if _tor_new_identity():
+        logger.info("[flow] Tor 회로 로테이션 후 세션 재확인...")
+        await asyncio.sleep(3)
+        probe_rows2 = await loop.run_in_executor(
+            None, lambda: fetcher.fetch_raw("005930", yesterday - timedelta(days=7), yesterday, isuCd)
+        )
+        if probe_rows2:
+            logger.info("[flow] 회로 로테이션으로 복구 — 수집을 재개합니다.")
+            return True
 
     logger.warning(
         "[flow] 세션 만료 감지 (연속 빈 응답 %d건) — "

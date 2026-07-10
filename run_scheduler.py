@@ -905,16 +905,17 @@ async def main(interval: int, enable_summary: bool) -> None:
     #
     # 2026-06-25: data.krx.co.kr 직접 접속 차단 확인 (인증 불필요한 warmup
     # 페이지조차 403 — 해외 IP 차단으로 추정, KRX_SESSION 만료가 아님) → 잡 비활성화.
-    # 접속 재확인 후 (curl -I https://data.krx.co.kr/contents/MDC/MDI/index.cmd
-    # 가 200을 반환하면) 아래 add_job 주석 해제.
-    # scheduler.add_job(
-    #     _daily_flow_sync_job,
-    #     CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone="UTC"),  # = 18:00 KST
-    #     id="daily_flow_sync",
-    #     max_instances=1,
-    #     misfire_grace_time=3600,
-    #     replace_existing=True,
-    # )
+    # 2026-07-10: Tor(TOR_PROXY) 프록시로 우회 확인 + 로그인 필드명 버그
+    # (userId/userPw → mbrId/pw) 수정 후 인증 정상 동작 확인 → 잡 재활성화.
+    # .env에 TOR_PROXY, KRX_SESSION(또는 KRX_ID/KRX_PW)이 설정돼 있어야 함.
+    scheduler.add_job(
+        _daily_flow_sync_job,
+        CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone="UTC"),  # = 18:00 KST
+        id="daily_flow_sync",
+        max_instances=1,
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
     if _paper_trader:
         scheduler.add_job(
             _paper_exit_checker_job,
