@@ -190,6 +190,10 @@ class _KrxDirectFetcher:
         import requests as _req
         self._session = _req.Session()
         self._authenticated = False
+        tor_proxy = os.environ.get("TOR_PROXY", "")
+        if tor_proxy:
+            self._session.proxies = {"http": tor_proxy, "https": tor_proxy}
+            logger.info("[krx-direct] Tor 프록시 적용: %s", tor_proxy)
 
     def _post(self, url: str, data: dict, timeout: int = 30) -> bytes:
         resp = self._session.post(url, data=data, headers=self._HEADERS, timeout=timeout)
@@ -219,7 +223,10 @@ class _KrxDirectFetcher:
         data.krx.co.kr 회원 자격증명 필요 (openapi.krx.co.kr과 별도 가입).
         """
         try:
-            raw = self._post(self._LOGIN, {"userId": krx_id, "userPw": krx_pw})
+            raw = self._post(self._LOGIN, {
+                "mbrNm": "", "telNo": "", "di": "", "certType": "",
+                "mbrId": krx_id, "pw": krx_pw,
+            })
             text = self._decode(raw)
 
             # KRX 로그인 성공 응답: "success" 포함 또는 단독 "OK" 응답.
@@ -1049,9 +1056,12 @@ def _probe_login(krx_id: Optional[str], krx_pw: Optional[str]) -> None:
     print(f"[probe-login] warmup ...")
     fetcher.warmup()
 
-    print(f"[probe-login] 로그인 시도 (userId={krx_id[:2]}***) ...")
+    print(f"[probe-login] 로그인 시도 (mbrId={krx_id[:2]}***) ...")
     try:
-        raw = fetcher._post(fetcher._LOGIN, {"userId": krx_id, "userPw": krx_pw})
+        raw = fetcher._post(fetcher._LOGIN, {
+            "mbrNm": "", "telNo": "", "di": "", "certType": "",
+            "mbrId": krx_id, "pw": krx_pw,
+        })
         text = fetcher._decode(raw)
         print(f"[probe-login] 응답 ({len(raw)}bytes):\n{text[:500]}")
         try:
@@ -1060,11 +1070,6 @@ def _probe_login(krx_id: Optional[str], krx_pw: Optional[str]) -> None:
             print(f"[probe-login] _error_message: {parsed.get('_error_message')}")
         except Exception:
             pass
-
-        print(f"\n[probe-login] loginYn=Y 재시도 ...")
-        raw2 = fetcher._post(fetcher._LOGIN, {"userId": krx_id, "userPw": krx_pw, "loginYn": "Y"})
-        text2 = fetcher._decode(raw2)
-        print(f"[probe-login] 응답 ({len(raw2)}bytes):\n{text2[:500]}")
     except Exception as e:
         print(f"[probe-login] 요청 실패: {e}")
 
