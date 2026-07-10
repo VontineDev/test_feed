@@ -902,14 +902,19 @@ async def main(interval: int, enable_summary: bool) -> None:
     # krx_flow_sync.py --incremental (전일 전 종목 수급 → daily_flow)
     # 장 마감(15:30) + KRX 데이터 게시 여유(~2h) 확보.
     # stage_classifier(16:30 KST)는 DB에 이미 적재된 전일 데이터를 읽으므로 순서 무관.
-    scheduler.add_job(
-        _daily_flow_sync_job,
-        CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone="UTC"),  # = 18:00 KST
-        id="daily_flow_sync",
-        max_instances=1,
-        misfire_grace_time=3600,
-        replace_existing=True,
-    )
+    #
+    # 2026-06-25: data.krx.co.kr 직접 접속 차단 확인 (인증 불필요한 warmup
+    # 페이지조차 403 — 해외 IP 차단으로 추정, KRX_SESSION 만료가 아님) → 잡 비활성화.
+    # 접속 재확인 후 (curl -I https://data.krx.co.kr/contents/MDC/MDI/index.cmd
+    # 가 200을 반환하면) 아래 add_job 주석 해제.
+    # scheduler.add_job(
+    #     _daily_flow_sync_job,
+    #     CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone="UTC"),  # = 18:00 KST
+    #     id="daily_flow_sync",
+    #     max_instances=1,
+    #     misfire_grace_time=3600,
+    #     replace_existing=True,
+    # )
     if _paper_trader:
         scheduler.add_job(
             _paper_exit_checker_job,
