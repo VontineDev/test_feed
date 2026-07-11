@@ -272,9 +272,24 @@ async def daily_flow_sync_job() -> None:
             logger.info("[flow-sync] 완료 (exit=0)")
         else:
             logger.warning("[flow-sync] 비정상 종료 (exit=%d) — KRX_SESSION 만료 의심", proc.returncode)
+            await _alert_flow_sync_failure(f"daily_flow_sync_job 비정상 종료 (exit={proc.returncode})")
         if out:
             for line in out.decode("utf-8", errors="replace").splitlines():
                 if line.strip():
                     logger.debug("[flow-sync] %s", line)
     except Exception as e:
         logger.warning("[flow-sync] 실행 실패: %s", e)
+        await _alert_flow_sync_failure(f"daily_flow_sync_job 실행 실패: {e}")
+
+
+async def _alert_flow_sync_failure(reason: str) -> None:
+    """daily_flow_sync_job 실패를 텔레그램으로 알림 (Tor Browser 꺼짐 등
+    조용히 반복 실패하는 것을 막기 위함). 알림 자체가 실패해도 잡을 죽이지
+    않는다 — best-effort."""
+    try:
+        from telegram.telegram_notify import send_admin_alert
+        await send_admin_alert(
+            f"{reason}\nTor Browser가 켜져있는지, KRX_SESSION이 유효한지 확인하세요."
+        )
+    except Exception as e:
+        logger.debug("[flow-sync] 실패 알림 전송 실패: %s", e)

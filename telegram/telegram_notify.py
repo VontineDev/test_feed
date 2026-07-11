@@ -137,6 +137,37 @@ async def _post_message(
     return False
 
 
+async def send_admin_alert(text: str, http: Optional[httpx.AsyncClient] = None) -> bool:
+    """스케줄러 잡 실패 등 운영 알림을 관리자 개인 DM으로 전송.
+
+    기사/신호 알림과 달리 채널 발송하지 않고 TELEGRAM_CHAT_ID로만 보낸다.
+    TELEGRAM_TOKEN/CHAT_ID 미설정 시 조용히 False 반환 (알림도 실패해도
+    잡 자체를 죽이지 않기 위함 — 호출부에서 반환값을 기다리지 않는다).
+    """
+    try:
+        token   = _get_token()
+        chat_id = _get_chat_id()
+    except ValueError as e:
+        logger.warning("[Telegram] 관리자 알림 설정 오류: %s", e)
+        return False
+
+    def esc(s: str) -> str:
+        for ch in r"\_*[]()~`>#+-=|{}.!":
+            s = s.replace(ch, f"\\{ch}")
+        return s
+
+    message = f"⚠️ *운영 알림*\n{esc(text)}"
+
+    _own_client = http is None
+    if _own_client:
+        http = httpx.AsyncClient()
+    try:
+        return await _post_message(http, token, chat_id, message, label="관리자 알림")
+    finally:
+        if _own_client:
+            await http.aclose()
+
+
 async def send_article(
     art: dict,
     summary_ko: str,
