@@ -957,29 +957,32 @@ async def main(interval: int, enable_summary: bool) -> None:
         )
         logger.info("[compose-paper] 주간 신호 적재 잡 등록 완료 (일요일 21:15 KST)")
 
-    # ── daily_ohlcv 워밍: 평일 18:30 KST (09:30 UTC) ────────────
+    # ── daily_ohlcv 워밍: 평일 20:00 KST (11:00 UTC) ────────────
     # KRX OpenAPI → 전일 전 종목 OHLCV → daily_ohlcv upsert
     # KRX_OPENAPI_KEY 미설정 시 내부에서 경고 후 skip (스케줄러 크래시 없음).
-    # flow_sync(18:00) 완료 후 30분 여유.
+    # flow_sync(18:00) 완료 후 여유 — 2026-07-11 Tor 지터(요청 간격 랜덤화)
+    # 도입으로 flow_sync 실행시간이 ~22분에서 최대 ~90분까지 늘었고, 세션
+    # 만료 의심 시 자동복구 대기(_SESSION_WAIT_TIMEOUT_MIN=30분)까지 겹치면
+    # 최악 ~120분까지 간다. 120분 + 여유를 두고 20:00으로 뒤로 밈.
     scheduler.add_job(
         _daily_ohlcv_warm_job,
-        CronTrigger(day_of_week="mon-fri", hour=9, minute=30, timezone="UTC"),  # = 18:30 KST
+        CronTrigger(day_of_week="mon-fri", hour=11, minute=0, timezone="UTC"),  # = 20:00 KST
         id="daily_ohlcv_warm",
         max_instances=1,
         misfire_grace_time=3600,
         replace_existing=True,
     )
-    # ── 섹터 일별 수급·수익률 집계: 평일 19:00 KST (10:00 UTC) ──
-    # daily_flow_sync(18:00) + daily_ohlcv_warm(18:30) 완료 후 집계.
+    # ── 섹터 일별 수급·수익률 집계: 평일 20:30 KST (11:30 UTC) ──
+    # daily_flow_sync(18:00, 최악 ~120분) + daily_ohlcv_warm(20:00) 완료 후 집계.
     scheduler.add_job(
         _sector_stats_job,
-        CronTrigger(day_of_week="mon-fri", hour=10, minute=0, timezone="UTC"),  # = 19:00 KST
+        CronTrigger(day_of_week="mon-fri", hour=11, minute=30, timezone="UTC"),  # = 20:30 KST
         id="sector_stats",
         max_instances=1,
         misfire_grace_time=3600,
         replace_existing=True,
     )
-    logger.info("[스케줄러] sector_stats 잡 등록 완료 (평일 19:00 KST)")
+    logger.info("[스케줄러] sector_stats 잡 등록 완료 (평일 20:30 KST)")
     # ── OpenDART 공시 수집: 평일 09:00 KST (00:00 UTC) ──────────
     # 전일 Top 20 기업 공시 이벤트 (실적발표·유상증자 등) → dart_disclosures
     # DART_API_KEY 미설정 시 내부에서 경고 후 skip — 스케줄러 크래시 없음.
