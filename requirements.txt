@@ -25,6 +25,9 @@ psycopg2-binary>=2.9.0
 # Scheduling
 APScheduler>=3.10.4
 
+# Tor control port (krx_flow_sync.py — SIGNAL NEWNYM circuit rotation)
+stem>=1.8.2
+
 # Environment variables
 python-dotenv>=1.0.0
 

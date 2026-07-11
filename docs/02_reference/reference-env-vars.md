@@ -171,8 +171,7 @@ ISP 차단 환경(KT 회선 등)에서 YouTube 자막 수집과 Telegram API 접
 |------|--------|------|
 | `TOR_PROXY` | *(없음)* | YouTube 자막 수집·`data.krx.co.kr` 접근 Tor 우회 프록시. 형식: `socks5h://127.0.0.1:9150` (Tor Browser) 또는 `socks5h://127.0.0.1:9050` (Tor Expert Bundle). 미설정 시 직접 연결 시도 |
 | `TELEGRAM_PROXY` | *(없음, 기본 비활성)* | Telegram API(`api.telegram.org`) Tor 우회 프록시. KT 회선에서 TCP 443이 차단된 경우에만 설정. 형식: `socks5h://127.0.0.1:9150`. 미설정 시 직접 연결 |
-| `TOR_CONTROL_PORT` | `9151` | Tor control port. `krx_flow_sync.py`가 전종목 수집 중 403 응답을 받거나 100개 종목마다 `SIGNAL NEWNYM`으로 출구 노드를 로테이션할 때 사용 (KRX가 Tor 출구 IP 다수를 블록리스트에 올려둔 것으로 추정 — 대량 요청이 차단된 노드 하나에 몰리는 것을 방지) |
-| `TOR_CONTROL_COOKIE` | *(없음)* | Tor control port 인증용 쿠키 파일 경로 (예: `C:\Users\<user>\Desktop\Tor Browser\Browser\TorBrowser\Data\Tor\control_auth_cookie`). 미설정 시 회로 로테이션은 조용히 스킵되고 기존 동작(고정 회로) 유지 |
+| `TOR_CONTROL_PORT` | `9151` | Tor control port. `krx_flow_sync.py`가 403 응답을 받거나 세션 만료가 의심될 때(연속 빈 응답)만 `SIGNAL NEWNYM`으로 출구 노드를 로테이션할 때 사용 — 이미 실패가 확인된 상황에서만 시도한다 (KRX_SESSION 쿠키가 발급 IP에 묶여 있을 가능성이 있어, 멀쩡히 동작 중인 세션을 무작정 로테이션하면 오히려 깨질 수 있기 때문에 정상 동작 중에는 로테이션하지 않음). 인증은 [stem](https://stem.torproject.org/)이 PROTOCOLINFO로 쿠키 경로를 자동 탐색 — 별도 쿠키 경로 설정 불필요 |
 
 **주의:** `.env` 파일에서 인라인 주석(`KEY=value  # comment`)을 사용하면 `start_crawler.bat` 파서가 주석 텍스트까지 값에 포함시킵니다. 주석은 반드시 별도 줄에 작성하세요.
 

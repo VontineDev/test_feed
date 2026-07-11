@@ -4,6 +4,22 @@ Items deferred from code review and planning sessions.
 
 ---
 
+## P2: Tor Browser(GUI) → 헤드리스 Tor 데몬 전환 (2026-07-11)
+
+**What:** `data/krx_flow_sync.py`의 krx-direct 백엔드가 `TOR_PROXY`(SOCKS5, 포트 9150)와 `TOR_CONTROL_PORT`(회로 로테이션용)로 로컬 Tor Browser에 의존한다. Tor Browser는 데스크톱 GUI 애플리케이션(`Desktop\Tor Browser\...`) — `tor.exe`(Tor Expert Bundle) 또는 서비스로 등록 가능한 헤드리스 Tor 데몬으로 교체.
+
+**Why:** `data.krx.co.kr` 직접 접속이 IP 차단(403)돼 2026-07-10에 Tor 프록시를 도입했다(`/plan-eng-review` D2). `daily_flow_sync_job`(평일 18:00 KST 스케줄)이 이제 통째로 "Tor Browser가 데스크톱에 켜져있는지"에 암묵적으로 의존하게 됐다 — 사람이 데스크톱에 로그인해서 Tor Browser를 띄워둬야 스케줄러가 정상 동작한다. 실패 시 텔레그램 알림(`send_admin_alert`)을 붙였지만, 이는 사후 감지일 뿐 근본 해결이 아니다. 헤드리스 데몬으로 바꾸면 머신 재부팅 후에도 서비스로 자동 기동되고, 사람이 데스크톱을 켜둘 필요가 없어진다.
+
+**Pros:** 무인 운영 가능(재부팅 생존). 사람 개입 없이 Windows 서비스로 자동 시작. GUI 오버헤드 없음(리소스 절약).
+
+**Cons:** `tor.exe` 설치·서비스 등록 작업 필요(운영 환경 변경, 코드 변경 아님). `TOR_CONTROL_COOKIE` 등 control port 인증 경로가 Tor Browser와 다를 수 있어 재검증 필요 — 다만 `stem`이 PROTOCOLINFO로 자동 탐색하므로 대부분 호환될 것으로 예상.
+
+**Context:** 이번 세션에서 `_tor_new_identity()`를 raw socket 구현에서 `stem` 라이브러리로 이전했다(`data/krx_flow_sync.py`) — `stem`은 Controller 종류(Tor Browser든 데몬이든)를 가리지 않으므로 이 전환의 코드 쪽 준비는 이미 돼 있다. 남은 건 순수 운영/설치 작업.
+
+**Depends on / blocked by:** 없음 — 독립적으로 아무 때나 진행 가능.
+
+---
+
 ## 완료: personal_net 결손 — daily_flow_sync_job을 krx-direct로 되돌림 (2026-06-22)
 
 **배경:** `daily_flow_sync_job`이 평일 `--backend kiwoom`(ka10045)으로 운영되며 `personal_net=NULL` 행이 쌓이는 문제 발생 — `classify_stage_v15`(Stage2 "개인 출회" 게이트)가 조용히 무력화됨(크래시 없음, 정확도만 저하). 같은 날 주간 krx-direct 캐치업 잡으로 임시 대응했었으나, "Kiwoom으로 개인 순매수를 구할 방법이 있는지" 점검 결과 **구조적으로 불가능**함을 확인:
