@@ -151,6 +151,16 @@ class TestLoginMethod:
         result, _ = self._run_login(b"  ok  ")
         assert result is True
 
+    def test_success_on_cd001_normal_response(self):
+        """Regression (/plan-eng-review live verification, 2026-07-11):
+        real KRX success response is {"_error_code":"CD001","_error_message":
+        "정상"} — contains neither "success" nor "OK", so it was being
+        misjudged as a failed login until this fix."""
+        cd001 = '{"previousMemberYn":false,"MDC_MBR_TP_CD":"P","MBR_NO":"2000095104","_error_code":"CD001","_error_message":"정상"}'.encode("utf-8")
+        result, fetcher = self._run_login(cd001)
+        assert result is True
+        assert fetcher._authenticated is True
+
     # --- failure paths -------------------------------------------------------
 
     def test_failure_on_logout_response(self):

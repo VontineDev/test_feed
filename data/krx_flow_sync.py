@@ -239,8 +239,19 @@ class _KrxDirectFetcher:
                 logger.info("[krx-direct] 로그인 성공")
                 return True
 
-            # 실패: KRX 실제 에러 메시지 추출해서 표시
             err_code, err_msg = self._parse_krx_error(text)
+
+            # CD001("정상")도 성공 응답이다 — 실측(2026-07-11)으로 확인:
+            # {"_error_code":"CD001","_error_message":"정상"}. 이전까지는
+            # --probe-login이 매번 CD003/CD011(실패)만 만나서 이 케이스가
+            # 드러나지 않았고, 실제 성공 응답이 위 "success"/"OK" 체크에
+            # 안 걸려 성공한 로그인을 실패로 오판정하고 있었다.
+            if err_code == "CD001":
+                self._authenticated = True
+                logger.info("[krx-direct] 로그인 성공 [CD001]")
+                return True
+
+            # 실패: KRX 실제 에러 메시지 추출해서 표시
             # CD003("서비스 에러")은 KRX의 범용 인증 실패 코드
             # (잘못된 자격증명, 미가입 계정 모두 동일 코드 반환)
             if err_code == "CD003":
