@@ -10,7 +10,7 @@ import json
 import os
 import tempfile
 from datetime import date, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -19,10 +19,14 @@ from data.krx_flow_sync import (
     _KrxDirectFetcher,
     _compute_streaks,
     _fetch_kiwoom_records,
+    _handle_possible_expiry,
+    _jittered_delay,
     _last_trading_day,
     _next_streak,
     _parse_int,
+    _tor_new_identity,
     load_csv_records,
+    run_krx_direct,
 )
 
 
@@ -624,3 +628,345 @@ class TestComputeStreaks:
         b = sorted([r for r in result if r.ticker == "B.KQ"], key=lambda r: r.trade_date)
         assert a[1].foreign_streak == 2
         assert b[1].foreign_streak == -2
+
+
+# ── _jittered_delay() ────────────────────────────────────────────────────────
+# Added for the Tor anti-blocking measures (/plan-eng-review, 2026-07-11):
+# request spacing gets randomized under Tor so KRX can't fingerprint a fixed
+# 0.5s cadence as bot traffic.
+
+class TestJitteredDelay:
+    def test_returns_base_unchanged_when_tor_proxy_unset(self, monkeypatch):
+        monkeypatch.delenv("TOR_PROXY", raising=False)
+        assert _jittered_delay(0.5) == 0.5
+
+    def test_randomizes_within_bounds_when_tor_proxy_set(self, monkeypatch):
+        monkeypatch.setenv("TOR_PROXY", "socks5h://127.0.0.1:9150")
+        for _ in range(50):
+            result = _jittered_delay(0.5)
+            assert 1.0 <= result <= 2.5
+
+    def test_floor_is_one_second_even_for_zero_base(self, monkeypatch):
+        """rate_delay could theoretically be 0 — jitter must not collapse to 0."""
+        monkeypatch.setenv("TOR_PROXY", "socks5h://127.0.0.1:9150")
+        result = _jittered_delay(0.0)
+        assert result >= 1.0
+
+    def test_base_above_floor_shifts_the_range(self, monkeypatch):
+        monkeypatch.setenv("TOR_PROXY", "socks5h://127.0.0.1:9150")
+        for _ in range(50):
+            result = _jittered_delay(2.0)
+            assert 2.0 <= result <= 3.5
+
+
+# ── _tor_new_identity() ───────────────────────────────────────────────────────
+# Tor control-port SIGNAL NEWNYM via stem (auto-discovers the control cookie
+# through PROTOCOLINFO — no manual cookie path needed). Best-effort: any
+# failure (control port down, bad auth, connection refused) must return
+# False, never raise — callers use this in exception handlers and must not
+# have a *second* exception thrown at them from the recovery path itself.
+
+class TestTorNewIdentity:
+    def _mock_controller(self):
+        """MagicMock usable as `with Controller.from_port(...) as controller:`."""
+        controller = MagicMock()
+        controller.__enter__ = MagicMock(return_value=controller)
+        controller.__exit__ = MagicMock(return_value=False)
+        return controller
+
+    def test_returns_true_on_successful_auth_and_signal(self, monkeypatch):
+        monkeypatch.delenv("TOR_CONTROL_PORT", raising=False)
+        controller = self._mock_controller()
+        with patch("stem.control.Controller.from_port", return_value=controller) as mock_from_port:
+            result = _tor_new_identity()
+
+        assert result is True
+        mock_from_port.assert_called_once_with(port=9151)
+        controller.authenticate.assert_called_once_with()
+        controller.signal.assert_called_once()
+
+    def test_uses_configured_control_port(self, monkeypatch):
+        monkeypatch.setenv("TOR_CONTROL_PORT", "9051")
+        controller = self._mock_controller()
+        with patch("stem.control.Controller.from_port", return_value=controller) as mock_from_port:
+            _tor_new_identity()
+        mock_from_port.assert_called_once_with(port=9051)
+
+    def test_returns_false_on_auth_failure(self):
+        controller = self._mock_controller()
+        controller.authenticate.side_effect = Exception("authentication failed")
+        with patch("stem.control.Controller.from_port", return_value=controller):
+            result = _tor_new_identity()  # must not raise
+        assert result is False
+        controller.signal.assert_not_called()
+
+    def test_returns_false_on_connection_error(self):
+        import stem
+        with patch("stem.control.Controller.from_port", side_effect=stem.SocketError("refused")):
+            result = _tor_new_identity()  # must not raise
+        assert result is False
+
+
+# ── fetch_raw() 403 rotation-retry ────────────────────────────────────────────
+# KRX appears to blocklist a large share of Tor exit IPs (/plan-eng-review
+# investigation, 2026-07-10). On 403, fetch_raw rotates the Tor circuit and
+# retries the same request once before giving up.
+
+class TestFetchRaw403Retry:
+    def _http_error(self, status_code: int):
+        import requests
+        resp = MagicMock()
+        resp.status_code = status_code
+        return requests.HTTPError(response=resp)
+
+    def test_403_with_successful_rotation_retries_and_succeeds(self):
+        fetcher = _bare_fetcher()
+        rows = [{"TRD_DD": "20250103", "TRDVAL1": "100"}]
+        success_bytes = json.dumps({"output": rows}).encode("utf-8")
+
+        with patch.object(fetcher, "_post", side_effect=[self._http_error(403), success_bytes]) as mock_post, \
+             patch("data.krx_flow_sync._tor_new_identity", return_value=True) as mock_rotate, \
+             patch("data.krx_flow_sync._time.sleep"):
+            result = fetcher.fetch_raw("005930", date(2025, 1, 1), date(2025, 1, 5))
+
+        assert result == rows
+        assert mock_post.call_count == 2
+        mock_rotate.assert_called_once()
+
+    def test_403_with_failed_rotation_returns_empty(self):
+        fetcher = _bare_fetcher()
+        with patch.object(fetcher, "_post", side_effect=self._http_error(403)) as mock_post, \
+             patch("data.krx_flow_sync._tor_new_identity", return_value=False):
+            result = fetcher.fetch_raw("005930", date(2025, 1, 1), date(2025, 1, 5))
+
+        assert result == []
+        mock_post.assert_called_once()  # no retry when rotation itself fails
+
+    def test_403_retry_also_fails_returns_empty(self):
+        fetcher = _bare_fetcher()
+        with patch.object(
+            fetcher, "_post", side_effect=[self._http_error(403), self._http_error(403)]
+        ) as mock_post, \
+             patch("data.krx_flow_sync._tor_new_identity", return_value=True), \
+             patch("data.krx_flow_sync._time.sleep"):
+            result = fetcher.fetch_raw("005930", date(2025, 1, 1), date(2025, 1, 5))
+
+        assert result == []
+        assert mock_post.call_count == 2
+
+    def test_non_403_exception_does_not_attempt_rotation(self):
+        """Plain connection errors (no .response) must not trigger rotation."""
+        fetcher = _bare_fetcher()
+        with patch.object(fetcher, "_post", side_effect=ConnectionError("down")) as mock_post, \
+             patch("data.krx_flow_sync._tor_new_identity") as mock_rotate:
+            result = fetcher.fetch_raw("005930", date(2025, 1, 1), date(2025, 1, 5))
+
+        assert result == []
+        mock_post.assert_called_once()
+        mock_rotate.assert_not_called()
+
+    def test_500_error_does_not_attempt_rotation(self):
+        """Only 403 triggers rotation — other HTTP errors shouldn't burn a circuit."""
+        fetcher = _bare_fetcher()
+        with patch.object(fetcher, "_post", side_effect=self._http_error(500)), \
+             patch("data.krx_flow_sync._tor_new_identity") as mock_rotate:
+            result = fetcher.fetch_raw("005930", date(2025, 1, 1), date(2025, 1, 5))
+
+        assert result == []
+        mock_rotate.assert_not_called()
+
+
+# ── _handle_possible_expiry() ─────────────────────────────────────────────────
+
+class TestHandlePossibleExpiry:
+    @pytest.mark.asyncio
+    async def test_below_threshold_returns_false_without_probing(self):
+        fetcher = _bare_fetcher()
+        fetcher._session_wait_exhausted = False
+        with patch.object(fetcher, "fetch_raw") as mock_fetch:
+            result = await _handle_possible_expiry(fetcher, consecutive_empty=1)
+        assert result is False
+        mock_fetch.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_exhausted_flag_short_circuits_regardless_of_count(self):
+        fetcher = _bare_fetcher()
+        fetcher._session_wait_exhausted = True
+        with patch.object(fetcher, "fetch_raw") as mock_fetch:
+            result = await _handle_possible_expiry(fetcher, consecutive_empty=999)
+        assert result is False
+        mock_fetch.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_probe_returns_rows_session_normal(self):
+        fetcher = _bare_fetcher()
+        fetcher._session_wait_exhausted = False
+        rows = [{"TRD_DD": "20250103", "TRDVAL1": "100"}]
+        with patch.object(fetcher, "fetch_raw", return_value=rows):
+            result = await _handle_possible_expiry(fetcher, consecutive_empty=5)
+        assert result is False
+        assert fetcher._session_wait_exhausted is False
+
+    @pytest.mark.asyncio
+    async def test_rotation_recovers_session(self):
+        fetcher = _bare_fetcher()
+        fetcher._session_wait_exhausted = False
+        rows = [{"TRD_DD": "20250103", "TRDVAL1": "100"}]
+        with patch.object(fetcher, "fetch_raw", side_effect=[[], rows]), \
+             patch("data.krx_flow_sync._tor_new_identity", return_value=True), \
+             patch("asyncio.sleep", new=AsyncMock()):
+            result = await _handle_possible_expiry(fetcher, consecutive_empty=5)
+        assert result is True
+        assert fetcher._session_wait_exhausted is False
+
+    @pytest.mark.asyncio
+    async def test_auto_relogin_recovers_session_when_rotation_fails(self):
+        """/plan-eng-review D6: with KRX_ID/KRX_PW available, attempt login()
+        (now that it works — mbrId/pw fix) before falling to the 30-min
+        manual-cookie wait."""
+        fetcher = _bare_fetcher()
+        fetcher._session_wait_exhausted = False
+        rows = [{"TRD_DD": "20250103", "TRDVAL1": "100"}]
+        with patch.object(fetcher, "fetch_raw", side_effect=[[], rows]), \
+             patch.object(fetcher, "login", return_value=True) as mock_login, \
+             patch("data.krx_flow_sync._tor_new_identity", return_value=False), \
+             patch("asyncio.sleep", new=AsyncMock()):
+            result = await _handle_possible_expiry(
+                fetcher, consecutive_empty=5, krx_id="testuser", krx_pw="testpw"
+            )
+        assert result is True
+        assert fetcher._session_wait_exhausted is False
+        mock_login.assert_called_once_with("testuser", "testpw")
+
+    @pytest.mark.asyncio
+    async def test_auto_relogin_skipped_when_credentials_missing(self):
+        """No KRX_ID/KRX_PW → login() must not be attempted, falls straight
+        through to manual wait (which times out here)."""
+        fetcher = _bare_fetcher()
+        fetcher._session_wait_exhausted = False
+        with patch.object(fetcher, "fetch_raw", return_value=[]), \
+             patch.object(fetcher, "login") as mock_login, \
+             patch("data.krx_flow_sync._tor_new_identity", return_value=False), \
+             patch("asyncio.sleep", new=AsyncMock()), \
+             patch("data.krx_flow_sync.load_dotenv"):
+            result = await _handle_possible_expiry(
+                fetcher, consecutive_empty=5, krx_id=None, krx_pw=None
+            )
+        assert result is False
+        mock_login.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_auto_relogin_failure_falls_through_to_manual_wait(self, monkeypatch):
+        """login() succeeds at the HTTP layer but the post-login probe is still
+        empty (e.g. CD011 duplicate-login edge case) → must still fall
+        through to the timeout path, not silently return True."""
+        monkeypatch.delenv("KRX_SESSION", raising=False)
+        fetcher = _bare_fetcher()
+        fetcher._session_wait_exhausted = False
+        with patch.object(fetcher, "fetch_raw", return_value=[]), \
+             patch.object(fetcher, "login", return_value=False), \
+             patch("data.krx_flow_sync._tor_new_identity", return_value=False), \
+             patch("asyncio.sleep", new=AsyncMock()), \
+             patch("data.krx_flow_sync.load_dotenv"):
+            result = await _handle_possible_expiry(
+                fetcher, consecutive_empty=5, krx_id="testuser", krx_pw="testpw"
+            )
+        assert result is False
+        assert fetcher._session_wait_exhausted is True
+
+    @pytest.mark.asyncio
+    async def test_timeout_sets_exhausted_flag_and_returns_false(self, monkeypatch):
+        """No KRX_SESSION refresh ever arrives — must give up, not hang forever
+        (regression test: an unbounded wait here previously could wedge
+        daily_flow_sync_job permanently since it has max_instances=1)."""
+        monkeypatch.delenv("KRX_SESSION", raising=False)
+        fetcher = _bare_fetcher()
+        fetcher._session_wait_exhausted = False
+        with patch.object(fetcher, "fetch_raw", return_value=[]), \
+             patch("data.krx_flow_sync._tor_new_identity", return_value=False), \
+             patch("asyncio.sleep", new=AsyncMock()), \
+             patch("data.krx_flow_sync.load_dotenv"):
+            result = await _handle_possible_expiry(fetcher, consecutive_empty=5)
+        assert result is False
+        assert fetcher._session_wait_exhausted is True
+
+    @pytest.mark.asyncio
+    async def test_session_refresh_during_wait_resets_and_returns_true(self, monkeypatch):
+        fetcher = _bare_fetcher()
+        fetcher._session_wait_exhausted = False
+        monkeypatch.setenv("KRX_SESSION", "old-session")
+        monkeypatch.delenv("KRX_VISITOR", raising=False)
+
+        call_count = [0]
+
+        def fake_load_dotenv(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                monkeypatch.setenv("KRX_SESSION", "new-session")
+
+        with patch.object(fetcher, "fetch_raw", return_value=[]), \
+             patch.object(fetcher, "inject_session") as mock_inject, \
+             patch("data.krx_flow_sync._tor_new_identity", return_value=False), \
+             patch("asyncio.sleep", new=AsyncMock()), \
+             patch("data.krx_flow_sync.load_dotenv", side_effect=fake_load_dotenv):
+            result = await _handle_possible_expiry(fetcher, consecutive_empty=5)
+
+        assert result is True
+        assert fetcher._session_wait_exhausted is False
+        mock_inject.assert_called_once_with("new-session", None)
+
+
+# ── run_krx_direct() return value ─────────────────────────────────────────────
+# Regression test for /plan-eng-review D5: run_krx_direct previously returned
+# None, so main() could not tell "collected nothing" from "collected
+# everything" and always exited 0 — meaning daily_flow_sync_job's Telegram
+# failure alert never fired for the exact case it exists to catch (Tor
+# Browser closed → every request fails to connect at all, no 403, fetch_raw
+# just returns [] silently, main() saw exit=0 and stayed quiet).
+
+class TestRunKrxDirectReturnValue:
+    def _patch_common(self, tickers, fetch_records_return):
+        """Common patch set: ticker universe, DB helpers, and a fetcher whose
+        fetch_records is fully controlled by the test."""
+        fetcher = _bare_fetcher()
+        return [
+            patch("analysis.chart_screener.get_all_tickers", return_value=tickers),
+            patch("data.krx_flow_sync._make_krx_direct", return_value=fetcher),
+            patch("data.krx_flow_sync._get_existing_dates", new=AsyncMock(return_value=set())),
+            patch("core.db.get_prev_streak", new=AsyncMock(return_value=(None, None, None))),
+            patch.object(fetcher, "fetch_records", side_effect=fetch_records_return),
+        ], fetcher
+
+    @pytest.mark.asyncio
+    async def test_returns_zero_when_every_ticker_fetch_fails(self):
+        """All connections fail (e.g. Tor Browser closed) → fetch_records
+        returns [] for every ticker → run_krx_direct must return 0, not None,
+        so main() can detect the failure and exit non-zero."""
+        tickers = [("005930.KS", "삼성전자", ""), ("000660.KS", "SK하이닉스", "")]
+        patches, fetcher = self._patch_common(tickers, fetch_records_return=[[], []])
+        pool = MagicMock()
+
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            result = await run_krx_direct(
+                pool, date(2025, 1, 1), date(2025, 1, 5), "ALL", 0,
+                krx_id=None, krx_pw=None, krx_session="fake-session",
+            )
+
+        assert result == 0
+
+    @pytest.mark.asyncio
+    async def test_returns_total_saved_count_on_success(self):
+        tickers = [("005930.KS", "삼성전자", ""), ("000660.KS", "SK하이닉스", "")]
+        rows_a = [FlowRecord("005930.KS", date(2025, 1, 3), 100, 50)]
+        rows_b = [FlowRecord("000660.KS", date(2025, 1, 3), -200, 30)]
+        patches, fetcher = self._patch_common(tickers, fetch_records_return=[rows_a, rows_b])
+        pool = MagicMock()
+
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patch("data.krx_flow_sync._save_batch", new=AsyncMock(side_effect=[1, 1])):
+            result = await run_krx_direct(
+                pool, date(2025, 1, 1), date(2025, 1, 5), "ALL", 0,
+                krx_id=None, krx_pw=None, krx_session="fake-session",
+            )
+
+        assert result == 2

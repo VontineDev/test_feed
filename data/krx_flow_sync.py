@@ -191,6 +191,9 @@ class _KrxDirectFetcher:
         import requests as _req
         self._session = _req.Session()
         self._authenticated = False
+        # 세션 갱신 대기(_handle_possible_expiry)가 타임아웃되면 세워짐 —
+        # 이후 남은 종목에 대해 대기 루프 재진입을 막는 플래그.
+        self._session_wait_exhausted = False
         tor_proxy = os.environ.get("TOR_PROXY", "")
         if tor_proxy:
             self._session.proxies = {"http": tor_proxy, "https": tor_proxy}
@@ -436,37 +439,27 @@ def _jittered_delay(base: float) -> float:
     return random.uniform(lo, lo + 1.5)
 
 
-def _tor_new_identity(timeout: float = 5.0) -> bool:
+def _tor_new_identity() -> bool:
     """Tor control port(SIGNAL NEWNYM)로 새 출구 노드 요청.
 
     KRX가 Tor 출구 IP 상당수를 블록리스트에 올려둔 것으로 추정 — 요청 중
-    403이 뜨거나 일정 개수마다 회로를 바꿔 차단된 노드에 계속 요청이
-    몰리는 것을 방지한다. TOR_CONTROL_COOKIE 미설정 시 best-effort로
-    조용히 스킵 (Tor Browser는 기본적으로 control port 자체가 꺼져있는
-    경우가 많아 필수 기능으로 만들지 않음).
+    403이 뜨거나 세션이 만료 의심 상태일 때 회로를 바꿔 차단된 노드에
+    계속 요청이 몰리는 것을 방지한다.
+
+    stem이 PROTOCOLINFO로 쿠키 파일 경로를 자동 탐색해 인증하므로 별도
+    쿠키 경로 설정이 필요 없다. control port 자체가 꺼져있어 연결이 안
+    되는 경우(Tor Browser 기본 설정 등) best-effort로 조용히 스킵 —
+    필수 기능이 아님.
     """
-    control_port = os.environ.get("TOR_CONTROL_PORT", "9151")
-    cookie_path = os.environ.get("TOR_CONTROL_COOKIE")
-    if not cookie_path:
-        return False
+    control_port = int(os.environ.get("TOR_CONTROL_PORT", "9151"))
     try:
-        import binascii
-        import socket as _socket
+        from stem import Signal
+        from stem.control import Controller
 
-        with open(cookie_path, "rb") as f:
-            cookie_hex = binascii.hexlify(f.read()).decode()
-
-        s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-        s.settimeout(timeout)
-        s.connect(("127.0.0.1", int(control_port)))
-        s.sendall(f"AUTHENTICATE {cookie_hex}\r\n".encode())
-        if not s.recv(1024).startswith(b"250"):
-            s.close()
-            return False
-        s.sendall(b"SIGNAL NEWNYM\r\n")
-        ok = s.recv(1024).startswith(b"250")
-        s.close()
-        return ok
+        with Controller.from_port(port=control_port) as controller:
+            controller.authenticate()
+            controller.signal(Signal.NEWNYM)
+        return True
     except Exception as e:
         logger.debug("[krx-direct] Tor NEWNYM 실패: %s", e)
         return False
@@ -926,14 +919,30 @@ def _last_trading_day(today: date) -> date:
 # 연속 빈 응답 N건 → 세션 만료 의심 → Samsung 프로브로 확인
 _SESSION_EXPIRY_THRESHOLD = 5
 
+# KRX_SESSION 수동 갱신 대기 최대 시간(분) — daily_flow_sync_job이 사람의
+# 응답을 기다리며 무한정 멈춰 다음 스케줄 실행을 막는 것을 방지.
+_SESSION_WAIT_TIMEOUT_MIN = 30
 
-async def _handle_possible_expiry(fetcher: "_KrxDirectFetcher", consecutive_empty: int) -> bool:
+
+async def _handle_possible_expiry(
+    fetcher: "_KrxDirectFetcher",
+    consecutive_empty: int,
+    krx_id: Optional[str] = None,
+    krx_pw: Optional[str] = None,
+) -> bool:
     """연속 빈 응답 임계값 도달 시 세션 만료 여부 확인 후 갱신 대기.
 
     Samsung(005930) 단기 프로브로 확인:
       - 데이터 반환 → 세션 정상 (해당 종목에 데이터 없는 것) → False 반환
       - 빈 응답 → 세션 만료 → .env 갱신 대기 후 True 반환 (카운터 리셋)
+
+    갱신 대기가 타임아웃되면 fetcher에 _session_wait_exhausted 플래그를 세워
+    이후 남은 종목들에 대해서는 프로브/대기 없이 즉시 False를 반환한다 —
+    그렇지 않으면 남은 종목마다 다시 _SESSION_WAIT_TIMEOUT_MIN분씩 대기하며
+    daily_flow_sync_job(max_instances=1)을 사실상 영구히 묶어버리게 된다.
     """
+    if getattr(fetcher, "_session_wait_exhausted", False):
+        return False
     if consecutive_empty < _SESSION_EXPIRY_THRESHOLD:
         return False
 
@@ -950,7 +959,7 @@ async def _handle_possible_expiry(fetcher: "_KrxDirectFetcher", consecutive_empt
     # 차단됐을 가능성 — 이미 실패한 상태라 잃을 게 없으므로 회로만 바꿔
     # 한 번 더 확인 (쿠키는 그대로 유지, IP만 변경).
     # 주의: KRX_SESSION 쿠키가 발급 IP에 묶여 있을 가능성이 있어 이 시도가
-    # 항상 성공하진 않는다 — 실패하면 그대로 아래 수동 갱신 대기로 넘어간다.
+    # 항상 성공하진 않는다 — 실패하면 그대로 아래 재로그인/수동 갱신 대기로 넘어간다.
     if _tor_new_identity():
         logger.info("[flow] Tor 회로 로테이션 후 세션 재확인...")
         await asyncio.sleep(3)
@@ -961,13 +970,32 @@ async def _handle_possible_expiry(fetcher: "_KrxDirectFetcher", consecutive_empt
             logger.info("[flow] 회로 로테이션으로 복구 — 수집을 재개합니다.")
             return True
 
+    # KRX_ID/KRX_PW가 있으면 사람이 브라우저에서 쿠키를 복사해줄 때까지
+    # 기다리기 전에 자동 재로그인을 먼저 시도한다. 주의: 기존 세션이
+    # 살아있는 상태에서 재로그인을 시도하면 KRX가 CD011("중복 로그인")로
+    # 거부하며 기존 세션까지 끊어버릴 수 있다 — 이미 연속 5회 빈 응답 +
+    # 회로 로테이션도 실패한 뒤이므로 기존 세션은 사실상 죽은 것으로 보고
+    # 감수한다.
+    if krx_id and krx_pw:
+        logger.info("[flow] KRX_ID/KRX_PW로 자동 재로그인 시도...")
+        login_ok = await loop.run_in_executor(None, lambda: fetcher.login(krx_id, krx_pw))
+        if login_ok:
+            probe_rows3 = await loop.run_in_executor(
+                None, lambda: fetcher.fetch_raw("005930", yesterday - timedelta(days=7), yesterday, isuCd)
+            )
+            if probe_rows3:
+                logger.info("[flow] 자동 재로그인으로 복구 — 수집을 재개합니다.")
+                return True
+
     logger.warning(
         "[flow] 세션 만료 감지 (연속 빈 응답 %d건) — "
-        ".env의 KRX_SESSION을 브라우저에서 새로 복사해 저장하세요. 30초마다 재확인합니다.",
-        consecutive_empty,
+        ".env의 KRX_SESSION을 브라우저에서 새로 복사해 저장하세요. 30초마다 재확인합니다 "
+        "(최대 %d분, 응답 없으면 잡을 종료합니다).",
+        consecutive_empty, _SESSION_WAIT_TIMEOUT_MIN,
     )
     current_session = os.environ.get("KRX_SESSION", "")
-    while True:
+    max_attempts = _SESSION_WAIT_TIMEOUT_MIN * 60 // 30
+    for attempt in range(1, max_attempts + 1):
         await asyncio.sleep(30)
         load_dotenv(override=True)
         new_session = os.environ.get("KRX_SESSION", "")
@@ -975,7 +1003,20 @@ async def _handle_possible_expiry(fetcher: "_KrxDirectFetcher", consecutive_empt
             fetcher.inject_session(new_session, os.environ.get("KRX_VISITOR"))
             logger.info("[flow] KRX_SESSION 갱신 완료 — 수집을 재개합니다.")
             return True
-        logger.info("[flow] KRX_SESSION 미갱신 — 30초 후 재확인...")
+        logger.info("[flow] KRX_SESSION 미갱신 (%d/%d) — 30초 후 재확인...", attempt, max_attempts)
+
+    # 타임아웃 — daily_flow_sync_job(max_instances=1)이 영구히 막히는 것을
+    # 방지하기 위해 여기서 포기한다. 플래그를 세워 남은 종목들이 다시
+    # 이 대기 루프에 들어가지 않도록 한다 (안 그러면 종목마다 타임아웃을
+    # 반복하며 잡이 사실상 영구히 안 끝남). 남은 종목은 "데이터 없음"으로
+    # 건너뛰어지고, 다음날 --incremental이 재시도한다.
+    fetcher._session_wait_exhausted = True
+    logger.error(
+        "[flow] KRX_SESSION 미갱신 상태로 %d분 경과 — 세션 갱신 대기를 포기하고 "
+        "남은 수집을 건너뜁니다. 다음 스케줄 실행을 막지 않기 위함.",
+        _SESSION_WAIT_TIMEOUT_MIN,
+    )
+    return False
 
 
 async def run_pykrx(
@@ -1035,8 +1076,16 @@ async def run_krx_direct(
     krx_session: Optional[str] = None,
     krx_visitor: Optional[str] = None,
     force: bool = False,
-) -> None:
-    """krx-direct 백엔드: pykrx 없이 data.krx.co.kr 직접 호출."""
+) -> int:
+    """krx-direct 백엔드: pykrx 없이 data.krx.co.kr 직접 호출.
+
+    반환값(total_saved)은 호출부(main())가 --incremental 실행에서 0건이면
+    비정상 종료(exit 1)로 판단해 daily_flow_sync_job의 텔레그램 알림이
+    실제로 발동하도록 하는 데 쓰인다 — Tor Browser가 꺼져있어 모든 요청이
+    연결 자체가 안 되는 경우 fetch_raw는 예외 없이 조용히 []를 반환하므로
+    (403이 아니라 연결 오류라 로테이션도 안 됨) exit code만으로는 이 실패를
+    감지할 수 없었다.
+    """
     from analysis.chart_screener import get_all_tickers
     from core.db import get_prev_streak
 
@@ -1066,7 +1115,7 @@ async def run_krx_direct(
 
         if not records:
             consecutive_empty += 1
-            if await _handle_possible_expiry(fetcher, consecutive_empty):
+            if await _handle_possible_expiry(fetcher, consecutive_empty, krx_id, krx_pw):
                 consecutive_empty = 0
             logger.debug("[flow] %s 데이터 없음", yf_sym)
             continue
@@ -1079,6 +1128,7 @@ async def run_krx_direct(
             logger.info("[flow] %d/%d 처리 완료  저장 누계: %d건", i, len(tickers), total_saved)
 
     logger.info("[flow] 완료 — 총 저장: %d건", total_saved)
+    return total_saved
 
 
 async def run_csv(pool, csv_path: str) -> None:
@@ -1237,10 +1287,19 @@ async def main() -> None:
             )
 
         else:  # krx-direct (기본)
-            await run_krx_direct(
+            total_saved = await run_krx_direct(
                 pool, start, end, args.market, args.max, krx_id, krx_pw, krx_session, krx_visitor,
                 force=args.force,
             )
+            # --incremental은 항상 "어제"라는 아직 적재 안 된 새 날짜를 대상으로
+            # 하므로 정상 동작이면 0건일 수 없다. 0건이면 네트워크/인증이 전부
+            # 조용히 실패한 것(예: Tor Browser가 꺼져있어 모든 요청이 연결 자체가
+            # 안 되는 경우 — fetch_raw가 예외 없이 []를 반환해 exit code로는
+            # 감지가 안 됨) — daily_flow_sync_job의 텔레그램 알림이 실제로
+            # 발동하도록 여기서 비정상 종료시킨다.
+            if args.incremental and total_saved == 0:
+                logger.error("[flow] --incremental 실행에서 0건 수집 — 네트워크/인증 실패로 판단, exit(1)")
+                sys.exit(1)
     finally:
         await pool.close()
 
