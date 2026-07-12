@@ -115,6 +115,20 @@ def fetch_kind_sector_map() -> dict[str, str]:
 
 
 # ── 티커 목록 ──────────────────────────────────────────────────
+def _last_trading_day(today):
+    """달력상 어제로부터 가장 가까운 평일(월~금) 반환.
+
+    단순 "어제"를 그대로 쓰면 토/일 실행 시 비거래일이 되어 KRX Open API가
+    상장 종목 목록을 0건으로 반환한다 (data/krx_flow_sync.py의 동명 함수와
+    동일한 문제 — 주말을 건너뛴 최근 평일로 보정).
+    """
+    from datetime import timedelta as _timedelta
+    d = today - _timedelta(days=1)
+    while d.weekday() >= 5:  # 5=토, 6=일
+        d -= _timedelta(days=1)
+    return d
+
+
 def get_all_tickers(sector_map: dict[str, str] | None = None) -> list[tuple[str, str, str]]:
     """KOSPI + KOSDAQ 전 종목 티커 조회.
 
@@ -131,7 +145,7 @@ def get_all_tickers(sector_map: dict[str, str] | None = None) -> list[tuple[str,
     if os.environ.get("KRX_OPENAPI_KEY"):
         try:
             from data.krx_openapi import KRXOpenAPIClient
-            bas_dd = (_date.today() - _date.resolution).strftime("%Y%m%d")
+            bas_dd = _last_trading_day(_date.today()).strftime("%Y%m%d")
             client = KRXOpenAPIClient()
             tickers = client.get_all_tickers(bas_dd)
             # sector 정보는 KRX Open API에 없음 — sector_map으로 보완

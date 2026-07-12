@@ -18,11 +18,14 @@ from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
 
+from datetime import date
+
 from analysis.chart_screener import (
     screen_ticker,
     calc_ichimoku,
     current_week_of,
     ScreenResult,
+    _last_trading_day,
 )
 
 
@@ -301,6 +304,35 @@ class TestConditionG:
             result = screen_ticker("005930.KS", "삼성전자")
         assert result is not None         # G는 NaN-pass → 통과
         assert result.ma_120w is None     # 데이터 부족 시 None
+
+
+# ── _last_trading_day() ───────────────────────────────────────────────────────
+# get_all_tickers()가 KRX Open API 조회 날짜(bas_dd)로 단순 "어제"를 쓰면
+# 토/일 실행 시 비거래일이 되어 상장 종목 목록이 0건으로 돌아온다.
+
+class TestLastTradingDay:
+    def test_sunday_skips_back_to_friday(self):
+        sunday = date(2026, 7, 12)
+        assert _last_trading_day(sunday) == date(2026, 7, 10)  # Fri
+
+    def test_monday_skips_back_to_friday(self):
+        monday = date(2026, 6, 22)
+        assert _last_trading_day(monday) == date(2026, 6, 19)  # Fri
+
+    def test_tuesday_through_friday_use_plain_yesterday(self):
+        for today_str, expected_str in [
+            ("2026-06-23", "2026-06-22"),  # Tue -> Mon
+            ("2026-06-24", "2026-06-23"),  # Wed -> Tue
+            ("2026-06-25", "2026-06-24"),  # Thu -> Wed
+            ("2026-06-26", "2026-06-25"),  # Fri -> Thu
+        ]:
+            today = date.fromisoformat(today_str)
+            assert _last_trading_day(today) == date.fromisoformat(expected_str)
+
+    def test_never_returns_a_weekend(self):
+        for offset in range(14):
+            today = date(2026, 6, 8) + timedelta(days=offset)
+            assert _last_trading_day(today).weekday() < 5
 
 
 # ── KIND 섹터 매핑 ─────────────────────────────────────────────
