@@ -37,6 +37,7 @@ def _bare_fetcher() -> _KrxDirectFetcher:
     fetcher = object.__new__(_KrxDirectFetcher)
     fetcher._session = MagicMock()
     fetcher._authenticated = False
+    fetcher._logout_warned = False
     return fetcher
 
 
@@ -784,6 +785,44 @@ class TestFetchRaw403Retry:
 
         assert result == []
         mock_rotate.assert_not_called()
+
+    def _http_error_with_body(self, status_code: int, body: bytes):
+        import requests
+        resp = MagicMock()
+        resp.status_code = status_code
+        resp.content = body
+        return requests.HTTPError(response=resp)
+
+    def test_400_logout_body_warns_once_and_returns_empty(self, caplog):
+        """KRX returns the LOGOUT auth-failure body wrapped in a 400 status
+        (2026-07-13 investigation) instead of 200. raise_for_status() raises
+        before the plain 'raw in (b"LOGOUT", b"")' check ever runs, so this
+        must be detected from the exception's response body — and only
+        warned once per fetcher instance to avoid spamming per-ticker."""
+        import logging
+        fetcher = _bare_fetcher()
+        err = self._http_error_with_body(400, b"LOGOUT")
+        with patch.object(fetcher, "_post", side_effect=[err, err]), \
+             caplog.at_level(logging.WARNING, logger="data.krx_flow_sync"):
+            result1 = fetcher.fetch_raw("005930", date(2025, 1, 1), date(2025, 1, 5))
+            result2 = fetcher.fetch_raw("000660", date(2025, 1, 1), date(2025, 1, 5))
+
+        assert result1 == [] and result2 == []
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1  # second occurrence stays quiet
+        assert "세션 만료" in warnings[0].message
+
+    def test_connection_error_without_response_does_not_warn_logout(self, caplog):
+        """A bare connection error (no .response at all) must not be
+        misclassified as a LOGOUT body — it has no body to inspect."""
+        import logging
+        fetcher = _bare_fetcher()
+        with patch.object(fetcher, "_post", side_effect=ConnectionError("down")), \
+             caplog.at_level(logging.WARNING, logger="data.krx_flow_sync"):
+            result = fetcher.fetch_raw("005930", date(2025, 1, 1), date(2025, 1, 5))
+
+        assert result == []
+        assert not [r for r in caplog.records if r.levelno == logging.WARNING]
 
 
 # ── _handle_possible_expiry() ─────────────────────────────────────────────────

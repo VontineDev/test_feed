@@ -194,6 +194,8 @@ class _KrxDirectFetcher:
         # 세션 갱신 대기(_handle_possible_expiry)가 타임아웃되면 세워짐 —
         # 이후 남은 종목에 대해 대기 루프 재진입을 막는 플래그.
         self._session_wait_exhausted = False
+        # LOGOUT 응답 WARNING을 실행당 1회만 남기기 위한 플래그 (종목마다 반복 방지).
+        self._logout_warned = False
         tor_proxy = os.environ.get("TOR_PROXY", "")
         if tor_proxy:
             self._session.proxies = {"http": tor_proxy, "https": tor_proxy}
@@ -322,7 +324,13 @@ class _KrxDirectFetcher:
         try:
             raw = self._post(self._DATA, payload)
         except Exception as e:
-            status = getattr(getattr(e, "response", None), "status_code", None)
+            resp = getattr(e, "response", None)
+            status = getattr(resp, "status_code", None)
+            # KRX는 세션 만료(LOGOUT) 응답을 200이 아닌 400으로도 반환한다 —
+            # raise_for_status()가 먼저 예외를 던져버려서, 아래 "raw in (b'LOGOUT', b'')"
+            # 검사가 이 케이스에는 절대 도달하지 못하고 매 종목 DEBUG로만 조용히
+            # 묻혀 세션 만료를 알아채기 어려웠다. 예외에 담긴 응답 바디를 직접 확인.
+            body = getattr(resp, "content", b"") if resp is not None else b""
             if status == 403 and _tor_new_identity():
                 logger.info("[krx-direct] 403 감지 — Tor 새 회로 요청 후 재시도 (%s)", krx_code)
                 _time.sleep(3)  # 새 회로 안정화 대기
@@ -331,6 +339,15 @@ class _KrxDirectFetcher:
                 except Exception as e2:
                     logger.debug("[krx-direct] %s 재시도 실패: %s", krx_code, e2)
                     return []
+            elif resp is not None and body in (b"LOGOUT", b""):
+                if not self._logout_warned:
+                    logger.warning(
+                        "[krx-direct] 인증 필요(세션 만료 의심, status=%s) — "
+                        "KRX_SESSION 갱신 필요 (이후 동일 실패는 조용히 처리)",
+                        status,
+                    )
+                    self._logout_warned = True
+                return []
             else:
                 logger.debug("[krx-direct] %s 요청 실패: %s", krx_code, e)
                 return []
