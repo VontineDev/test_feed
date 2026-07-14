@@ -3,9 +3,31 @@
 import asyncio
 import logging
 import os
+import re
 import sys
 
 logger = logging.getLogger(__name__)
+
+_SUBPROCESS_LOG_LEVEL_RE = re.compile(r"\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]")
+_SUBPROCESS_LOG_FNS = {
+    "DEBUG": logger.debug,
+    "INFO": logger.info,
+    "WARNING": logger.warning,
+    "ERROR": logger.error,
+    "CRITICAL": logger.critical,
+}
+
+
+def _relog_subprocess_line(line: str) -> None:
+    """서브프로세스 출력 라인을 원래 로그 레벨 그대로 재기록.
+
+    krx_flow_sync.py는 이미 logging level=INFO로 필터링된 라인만 stdout에
+    내보내므로, 여기서 전부 DEBUG로 깔아버리면(레벨 무관) WARNING/ERROR가
+    스케줄러 로그(INFO)에서 안 보여 세션 만료 같은 실패 신호가 묻힌다.
+    """
+    m = _SUBPROCESS_LOG_LEVEL_RE.search(line)
+    log_fn = _SUBPROCESS_LOG_FNS.get(m.group(1), logger.info) if m else logger.info
+    log_fn("[flow-sync] %s", line)
 
 
 async def daily_krx_refresh_job(db_pool) -> None:
@@ -276,7 +298,7 @@ async def daily_flow_sync_job() -> None:
         if out:
             for line in out.decode("utf-8", errors="replace").splitlines():
                 if line.strip():
-                    logger.debug("[flow-sync] %s", line)
+                    _relog_subprocess_line(line)
     except Exception as e:
         logger.warning("[flow-sync] 실행 실패: %s", e)
         await _alert_flow_sync_failure(f"daily_flow_sync_job 실행 실패: {e}")

@@ -9,6 +9,7 @@ _alert_flow_sync_failure() wiring in jobs/infra_jobs.py close that gap.
 """
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -100,3 +101,41 @@ class TestAlertFlowSyncFailure:
             new=AsyncMock(side_effect=RuntimeError("network down")),
         ):
             await ij._alert_flow_sync_failure("test reason")  # must not raise
+
+
+# ── jobs/infra_jobs.py:_relog_subprocess_line() ─────────────────────────────
+#
+# krx_flow_sync.py subprocess output was previously re-logged at DEBUG
+# unconditionally (2026-07-14 investigation), which the INFO-level scheduler
+# log silently dropped — hiding WARNING/ERROR signals like session expiry
+# from the operator. _relog_subprocess_line() preserves the original level.
+
+class TestRelogSubprocessLine:
+    def test_warning_line_relogs_as_warning(self, caplog):
+        import jobs.infra_jobs as ij
+        with caplog.at_level(logging.DEBUG, logger="jobs.infra_jobs"):
+            ij._relog_subprocess_line(
+                "17:32:16 [WARNING] [krx-direct] 인증 필요(세션 만료 의심, status=400)"
+            )
+        assert len(caplog.records) == 1
+        assert caplog.records[0].levelno == logging.WARNING
+
+    def test_error_line_relogs_as_error(self, caplog):
+        import jobs.infra_jobs as ij
+        with caplog.at_level(logging.DEBUG, logger="jobs.infra_jobs"):
+            ij._relog_subprocess_line("00:07:00 [ERROR] [flow] 세션 갱신 대기 포기")
+        assert caplog.records[0].levelno == logging.ERROR
+
+    def test_info_line_relogs_as_info(self, caplog):
+        import jobs.infra_jobs as ij
+        with caplog.at_level(logging.DEBUG, logger="jobs.infra_jobs"):
+            ij._relog_subprocess_line("18:00:05 [INFO] [flow] 완료 — 총 저장: 803건")
+        assert caplog.records[0].levelno == logging.INFO
+
+    def test_line_without_level_tag_defaults_to_info(self, caplog):
+        """A stray line with no [LEVEL] marker (e.g. a bare traceback line)
+        must not be silently dropped back to DEBUG."""
+        import jobs.infra_jobs as ij
+        with caplog.at_level(logging.DEBUG, logger="jobs.infra_jobs"):
+            ij._relog_subprocess_line("Traceback (most recent call last):")
+        assert caplog.records[0].levelno == logging.INFO

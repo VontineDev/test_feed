@@ -1,5 +1,5 @@
-SocksPort 9150
-ControlPort 9151
+SocksPort 9250
+ControlPort 9251
 CookieAuthentication 1
 DataDirectory C:\Users\1\test_feed\tor-daemon\data
 GeoIPFile C:\Users\1\Desktop\Tor Browser\Browser\TorBrowser\Data\Tor\geoip
