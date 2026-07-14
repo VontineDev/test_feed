@@ -1120,6 +1120,12 @@ async def run_krx_direct(
     fetcher = _make_krx_direct(krx_id, krx_pw, krx_session, krx_visitor)
 
     tickers = _filter_tickers(get_all_tickers(), market, max_tickers)
+    # KRX가 세션당 요청 횟수 기준으로 차단하는 것으로 추정 — 알파벳/등록순 그대로
+    # 처리하면 매일 정확히 같은 ~945번째 지점에서 죽어 그 뒤 종목은 영구히
+    # 누락된다(2026-07-14 투자 확인: 07-10/07-13 모두 동일 인덱스에서 붕괴).
+    # 순서를 매일 셔플해서 하루에 다 못 채우더라도 여러 날에 걸쳐 전체
+    # 종목이 골고루 커버되도록 한다.
+    random.shuffle(tickers)
     logger.info("[flow] [krx-direct] 대상 %d개 종목  %s ~ %s", len(tickers), start, end)
 
     total_saved = 0

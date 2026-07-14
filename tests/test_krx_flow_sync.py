@@ -1019,3 +1019,35 @@ class TestRunKrxDirectReturnValue:
             )
 
         assert result == 2
+
+
+# ── run_krx_direct() ticker order shuffle ─────────────────────────────────────
+# 2026-07-14 investigation: KRX appears to cut a session off after a fixed
+# request-count budget regardless of Tor circuit/relogin — 07-10 and 07-13
+# both collapsed at the exact same list index (945/2766). Processing tickers
+# in the same fixed order every day means the same trailing ~1800 tickers
+# are permanently starved. Shuffling means a different slice gets covered
+# each day so full coverage accumulates over time instead of never.
+
+class TestRunKrxDirectShuffle:
+    @pytest.mark.asyncio
+    async def test_shuffles_ticker_order_before_processing(self):
+        # Stay below _SESSION_EXPIRY_THRESHOLD(5) consecutive empties — at or
+        # above it, run_krx_direct calls the real _handle_possible_expiry(),
+        # which (with no krx_id/krx_pw to retry) falls through to the genuine
+        # 30-minute KRX_SESSION wait loop (asyncio.sleep(30) x60) and actually
+        # blocks the test for real wall-clock minutes instead of failing fast.
+        tickers = [(f"{i:06d}.KS", f"종목{i}", "") for i in range(4)]
+        patches, fetcher = TestRunKrxDirectReturnValue()._patch_common(
+            tickers, fetch_records_return=[[] for _ in tickers]
+        )
+        pool = MagicMock()
+
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patch("data.krx_flow_sync.random.shuffle", wraps=lambda lst: lst.reverse()) as mock_shuffle:
+            await run_krx_direct(
+                pool, date(2025, 1, 1), date(2025, 1, 5), "ALL", 0,
+                krx_id=None, krx_pw=None, krx_session="fake-session",
+            )
+
+        mock_shuffle.assert_called_once()
