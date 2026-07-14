@@ -55,3 +55,6 @@ docs/*.pdf
 docs/*.txt
 docs/삼프로TV_자막샘플.md
 docs/차트분석가이드
+
+# ── 헤드리스 Tor 데몬 런타임 상태 (캐시·control_auth_cookie 등 민감정보 포함) ──
+tor-daemon/data/

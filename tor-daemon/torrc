@@ -1,0 +1,7 @@
+SocksPort 9150
+ControlPort 9151
+CookieAuthentication 1
+DataDirectory C:\Users\1\test_feed\tor-daemon\data
+GeoIPFile C:\Users\1\Desktop\Tor Browser\Browser\TorBrowser\Data\Tor\geoip
+GeoIPv6File C:\Users\1\Desktop\Tor Browser\Browser\TorBrowser\Data\Tor\geoip6
+Log notice file C:\Users\1\test_feed\tor-daemon\tor.log

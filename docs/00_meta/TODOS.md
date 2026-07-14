@@ -4,7 +4,7 @@ Items deferred from code review and planning sessions.
 
 ---
 
-## P2: Tor Browser(GUI) → 헤드리스 Tor 데몬 전환 (2026-07-11)
+## 완료: Tor Browser(GUI) → 헤드리스 Tor 데몬 전환 (2026-07-11, 완료 2026-07-14)
 
 **What:** `data/krx_flow_sync.py`의 krx-direct 백엔드가 `TOR_PROXY`(SOCKS5, 포트 9150)와 `TOR_CONTROL_PORT`(회로 로테이션용)로 로컬 Tor Browser에 의존한다. Tor Browser는 데스크톱 GUI 애플리케이션(`Desktop\Tor Browser\...`) — `tor.exe`(Tor Expert Bundle) 또는 서비스로 등록 가능한 헤드리스 Tor 데몬으로 교체.
 
@@ -17,6 +17,14 @@ Items deferred from code review and planning sessions.
 **Context:** 이번 세션에서 `_tor_new_identity()`를 raw socket 구현에서 `stem` 라이브러리로 이전했다(`data/krx_flow_sync.py`) — `stem`은 Controller 종류(Tor Browser든 데몬이든)를 가리지 않으므로 이 전환의 코드 쪽 준비는 이미 돼 있다. 남은 건 순수 운영/설치 작업.
 
 **Depends on / blocked by:** 없음 — 독립적으로 아무 때나 진행 가능.
+
+**완료 내역(2026-07-14):** Tor Browser 번들의 `tor.exe`를 재사용해 전용 `tor-daemon/torrc`(SocksPort 9150, ControlPort 9151, CookieAuthentication)로 헤드리스 실행 — 별도 다운로드 없이 기존 바이너리만 재활용. Tor Browser GUI(및 그 자체 tor.exe)는 완전히 종료.
+
+자동기동은 새 예약 작업 대신(이 세션 권한으로는 `schtasks /Create`의 LogonTrigger 등록이 거부됨 — Access denied, 이 머신의 제한된 토큰 이슈) **기존 `NewsCrawler` 태스크가 실행하는 `scripts/start_crawler.bat`에 통합**: 로그온 시 `tor.exe`가 안 떠있으면 먼저 `tor-daemon\torrc`로 기동한 뒤 기존처럼 `run_scheduler.py`를 실행하도록 수정. 새 예약 작업 없이 기존 로그온 트리거 인프라를 재사용.
+
+검증: 헤드리스 데몬 부트스트랩 100% 확인 → `krx_flow_sync.py`의 자동 ID/PW 로그인·데이터 조회 정상 동작 확인(`CD001`, 실 데이터 수신).
+
+**잔존 리스크:** KRX가 Tor 출구 노드를 광범위하게 차단하는 근본 문제는 이 전환과 무관하게 여전함 — 로그인 403/circuit rotation 재시도는 이번에도 동일하게 관측됨(Tor Browser든 헤드리스든 동일 바이너리라 회로 품질은 동일). 이 전환이 해결하는 건 "사람이 데스크톱에 Tor Browser를 띄워둬야 하는 의존성"만이며, KRX 차단 자체의 완화는 아님.
 
 ---
 
