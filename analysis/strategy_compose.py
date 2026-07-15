@@ -377,10 +377,10 @@ def load_signal_frame(
     sources: {"ichimoku","stage","flow","volume","narrative"} 부분집합.
     각 소스 1 bulk query (N+1 회피). 반환 프레임은 derive_flags 전 원시 컬럼.
     """
-    import psycopg2
+    from core.db_sync import connect
 
     frames: list[pd.DataFrame] = []
-    conn = psycopg2.connect(dsn)
+    conn = connect(dsn)
     try:
         if "ichimoku" in sources:
             frames.append(_load_ichimoku(conn, start, end))

@@ -35,8 +35,8 @@ logger = logging.getLogger(__name__)
 
 def _get_filled_dates(dsn: str, start: date, end: date) -> set[date]:
     """daily_ohlcv에 이미 저장된 날짜 집합"""
-    import psycopg2
-    conn = psycopg2.connect(dsn)
+    from core.db_sync import connect
+    conn = connect(dsn)
     try:
         with conn.cursor() as cur:
             cur.execute(

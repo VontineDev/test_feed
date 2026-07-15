@@ -75,10 +75,10 @@ if TYPE_CHECKING:
     from data.kiwoom_aftermarket_sync import KiwoomClient
 
 from core.dates import last_trading_day
+from core.env import load_env_once, refresh_env
 from core.tor import jittered_delay, new_identity
-from dotenv import load_dotenv
 
-load_dotenv()
+load_env_once()
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 logging.basicConfig(
@@ -989,7 +989,7 @@ async def _handle_possible_expiry(
     max_attempts = _SESSION_WAIT_TIMEOUT_MIN * 60 // 30
     for attempt in range(1, max_attempts + 1):
         await asyncio.sleep(30)
-        load_dotenv(override=True)
+        refresh_env()  # 사람이 갱신한 .env의 KRX_SESSION을 다시 읽음
         new_session = os.environ.get("KRX_SESSION", "")
         if new_session and new_session != current_session:
             fetcher.inject_session(new_session, os.environ.get("KRX_VISITOR"))

@@ -194,12 +194,16 @@ CREATE INDEX IF NOT EXISTS idx_intraday_market
 
 
 # ── 풀 초기화 ─────────────────────────────────────────────────
-async def create_pool(dsn: Optional[str] = None) -> asyncpg.Pool:
+async def create_pool(
+    dsn: Optional[str] = None, *, min_size: int = 2, max_size: int = 8
+) -> asyncpg.Pool:
     dsn = dsn or get_dsn()
     # statement_cache_size=0: Supabase PgBouncer(port 6543) 트랜잭션 풀링 모드에서
     # asyncpg 기본 prepared statement 캐시가 "prepared statement already exists" 오류를 유발함.
     # 직접 연결(port 5432)에서도 무해하므로 항상 비활성화.
-    pool = await asyncpg.create_pool(dsn, min_size=2, max_size=8, statement_cache_size=0)
+    pool = await asyncpg.create_pool(
+        dsn, min_size=min_size, max_size=max_size, statement_cache_size=0
+    )
     logger.info("DB 풀 생성 완료 — %s", dsn.split("@")[-1])  # 비밀번호 숨기고 host/db만 출력
     return pool
 

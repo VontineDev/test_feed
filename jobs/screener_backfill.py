@@ -60,14 +60,10 @@ _KST = ZoneInfo("Asia/Seoul")
 
 # ── DB 연결 ────────────────────────────────────────────────────
 async def get_pool() -> asyncpg.Pool:
-    return await asyncpg.create_pool(
-        host=os.environ["DB_HOST"],
-        port=int(os.environ.get("DB_PORT", 5432)),
-        user=os.environ["DB_USER"],
-        password=os.environ["DB_PASSWORD"],
-        database=os.environ["DB_NAME"],
-        min_size=2, max_size=5,
-    )
+    # core.db.create_pool 사용 (2026-07 Phase B): DATABASE_URL 지원과
+    # statement_cache_size=0(PgBouncer 호환)을 얻음. 풀 사이즈는 기존값 유지.
+    from core.db import create_pool
+    return await create_pool(min_size=2, max_size=5)
 
 
 # ── 누락 주차 탐지 ─────────────────────────────────────────────

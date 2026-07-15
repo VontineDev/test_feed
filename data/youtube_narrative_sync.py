@@ -120,8 +120,8 @@ CREATE INDEX IF NOT EXISTS idx_yt_backfill_queue_status ON youtube_backfill_queu
 """
 
 
-def _connect(dsn: str):
-    return psycopg2.connect(dsn)
+# core/db_sync.py로 통합 (2026-07 Phase B) — 기존 이름 유지
+from core.db_sync import connect as _connect
 
 
 def ensure_tables(dsn: str) -> None:

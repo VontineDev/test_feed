@@ -3174,8 +3174,8 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
     # 외부 API 타임아웃 등으로 목록이 비면 DB daily_flow에서 직접 로드
     if not all_tickers and config.dsn:
         try:
-            import psycopg2
-            conn = psycopg2.connect(config.dsn)
+            from core.db_sync import connect
+            conn = connect(config.dsn)
             cur  = conn.cursor()
             cur.execute("SELECT DISTINCT ticker FROM daily_flow ORDER BY ticker")
             rows = cur.fetchall()

@@ -23,8 +23,8 @@ import psycopg2.extras
 logger = logging.getLogger(__name__)
 
 
-def _connect(dsn: str):
-    return psycopg2.connect(dsn)
+# core/db_sync.py로 통합 (2026-07 Phase B) — 기존 이름 유지
+from core.db_sync import connect as _connect
 
 
 def _get_coverage(

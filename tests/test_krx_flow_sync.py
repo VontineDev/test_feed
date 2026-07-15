@@ -897,7 +897,7 @@ class TestHandlePossibleExpiry:
              patch.object(fetcher, "login") as mock_login, \
              patch("data.krx_flow_sync._tor_new_identity", return_value=False), \
              patch("asyncio.sleep", new=AsyncMock()), \
-             patch("data.krx_flow_sync.load_dotenv"):
+             patch("data.krx_flow_sync.refresh_env"):
             result = await _handle_possible_expiry(
                 fetcher, consecutive_empty=5, krx_id=None, krx_pw=None
             )
@@ -916,7 +916,7 @@ class TestHandlePossibleExpiry:
              patch.object(fetcher, "login", return_value=False), \
              patch("data.krx_flow_sync._tor_new_identity", return_value=False), \
              patch("asyncio.sleep", new=AsyncMock()), \
-             patch("data.krx_flow_sync.load_dotenv"):
+             patch("data.krx_flow_sync.refresh_env"):
             result = await _handle_possible_expiry(
                 fetcher, consecutive_empty=5, krx_id="testuser", krx_pw="testpw"
             )
@@ -934,7 +934,7 @@ class TestHandlePossibleExpiry:
         with patch.object(fetcher, "fetch_raw", return_value=[]), \
              patch("data.krx_flow_sync._tor_new_identity", return_value=False), \
              patch("asyncio.sleep", new=AsyncMock()), \
-             patch("data.krx_flow_sync.load_dotenv"):
+             patch("data.krx_flow_sync.refresh_env"):
             result = await _handle_possible_expiry(fetcher, consecutive_empty=5)
         assert result is False
         assert fetcher._session_wait_exhausted is True
@@ -948,7 +948,7 @@ class TestHandlePossibleExpiry:
 
         call_count = [0]
 
-        def fake_load_dotenv(*args, **kwargs):
+        def fake_refresh_env(*args, **kwargs):
             call_count[0] += 1
             if call_count[0] >= 2:
                 monkeypatch.setenv("KRX_SESSION", "new-session")
@@ -957,7 +957,7 @@ class TestHandlePossibleExpiry:
              patch.object(fetcher, "inject_session") as mock_inject, \
              patch("data.krx_flow_sync._tor_new_identity", return_value=False), \
              patch("asyncio.sleep", new=AsyncMock()), \
-             patch("data.krx_flow_sync.load_dotenv", side_effect=fake_load_dotenv):
+             patch("data.krx_flow_sync.refresh_env", side_effect=fake_refresh_env):
             result = await _handle_possible_expiry(fetcher, consecutive_empty=5)
 
         assert result is True

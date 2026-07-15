@@ -456,8 +456,8 @@ def parse_bulk_rows(
 
 # ── DB 유틸 ──────────────────────────────────────────────────────
 
-def _connect(dsn: str):
-    return psycopg2.connect(dsn)
+# core/db_sync.py로 통합 (2026-07 Phase B) — 기존 이름 유지
+from core.db_sync import connect as _connect
 
 
 def ensure_table(dsn: str) -> None:
@@ -814,11 +814,10 @@ def main() -> None:
         trade_date = date.today()
 
     # ── DB 준비 ─────────────────────────────────────────────────
-    dsn = os.environ.get("DATABASE_URL") or (
-        f"postgresql://{os.environ['DB_USER']}:{os.environ['DB_PASSWORD']}"
-        f"@{os.environ['DB_HOST']}:{os.environ.get('DB_PORT', 5432)}"
-        f"/{os.environ['DB_NAME']}"
-    )
+    # get_dsn() 사용 (2026-07 Phase B): DSN 조립 중복 제거 + 특수문자
+    # 비밀번호 URL 인코딩을 얻음 (기존 f-string은 인코딩 없이 깨졌음).
+    from core.db import get_dsn
+    dsn = get_dsn()
     ensure_table(dsn)
 
     if not args.force and already_loaded(dsn, trade_date):
