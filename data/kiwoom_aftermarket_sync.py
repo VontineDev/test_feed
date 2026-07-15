@@ -59,13 +59,15 @@ import os
 import sys
 import time as _time
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Optional
 
 import psycopg2
 import psycopg2.extras
 import requests as _req
 from dotenv import load_dotenv
+
+from core.dates import last_trading_day
 
 load_dotenv()
 sys.stdout.reconfigure(encoding="utf-8")
@@ -692,12 +694,8 @@ def already_loaded(dsn: str, trade_date: date) -> bool:
 
 
 # ── 날짜 헬퍼 ────────────────────────────────────────────────────
-
-def _prev_business_day(d: date) -> date:
-    d -= timedelta(days=1)
-    while d.weekday() >= 5:
-        d -= timedelta(days=1)
-    return d
+# core/dates.py의 last_trading_day와 동일 로직이라 통합 (2026-07 Phase A)
+_prev_business_day = last_trading_day
 
 
 # ── probe: 응답 구조 출력 ─────────────────────────────────────────

@@ -329,11 +329,8 @@ def _tor_rotate_circuit() -> bool:
     if not _TOR_PROXY:
         return False
     try:
-        from stem import Signal
-        from stem.control import Controller
-        with Controller.from_port(port=_TOR_CONTROL_PORT) as ctrl:
-            ctrl.authenticate()
-            ctrl.signal(Signal.NEWNYM)
+        from core.tor import send_newnym
+        send_newnym(_TOR_CONTROL_PORT)
         logger.info("[yt-sync] Tor 회로 교체 완료 (NEWNYM) - %d초 대기", _TOR_NEWNYM_WAIT)
         time.sleep(_TOR_NEWNYM_WAIT)
         return True

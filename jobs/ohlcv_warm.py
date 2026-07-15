@@ -103,6 +103,10 @@ def daily_ohlcv_warm_job(dsn: str) -> int:
     """
     from core.ohlcv_cache import fill_daily_from_krx
 
+    # TODO(core.dates): core.dates.last_trading_day와 의미가 다름 — 여기는
+    # 주말 보정이 아니라 스킵. 월요일 실행 시 '어제'=일요일이라 금요일
+    # 데이터를 채우는 회차가 없다(잠재 커버리지 갭). 보정 전환은 동작
+    # 변경이므로 리팩토링 범위 밖 — 별도 fix로 판단 필요.
     yesterday = date.today() - timedelta(days=1)
     if yesterday.weekday() >= 5:
         logger.debug("[ohlcv-warm] 전일(%s) 주말 — 스킵", yesterday)

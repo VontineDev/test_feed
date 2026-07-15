@@ -26,13 +26,15 @@ import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional
 
 import pandas as pd
 import yfinance as yf
 from ta.trend import IchimokuIndicator
+
+from core.dates import last_trading_day
 
 logger = logging.getLogger(__name__)
 
@@ -115,18 +117,9 @@ def fetch_kind_sector_map() -> dict[str, str]:
 
 
 # ── 티커 목록 ──────────────────────────────────────────────────
-def _last_trading_day(today):
-    """달력상 어제로부터 가장 가까운 평일(월~금) 반환.
-
-    단순 "어제"를 그대로 쓰면 토/일 실행 시 비거래일이 되어 KRX Open API가
-    상장 종목 목록을 0건으로 반환한다 (data/krx_flow_sync.py의 동명 함수와
-    동일한 문제 — 주말을 건너뛴 최근 평일로 보정).
-    """
-    from datetime import timedelta as _timedelta
-    d = today - _timedelta(days=1)
-    while d.weekday() >= 5:  # 5=토, 6=일
-        d -= _timedelta(days=1)
-    return d
+# core/dates.py로 이동 (2026-07 리팩토링 Phase A) — 기존 이름 유지:
+# 테스트가 analysis.chart_screener._last_trading_day를 import한다.
+_last_trading_day = last_trading_day
 
 
 def get_all_tickers(sector_map: dict[str, str] | None = None) -> list[tuple[str, str, str]]:

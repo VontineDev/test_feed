@@ -72,6 +72,8 @@ import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
 
+from core.dates import last_trading_day
+
 load_dotenv()
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
@@ -490,9 +492,7 @@ def main() -> None:
 
     # ── 날짜 결정 ───────────────────────────────────────────────
     if args.incremental:
-        yesterday = date.today() - timedelta(days=1)
-        while yesterday.weekday() >= 5:       # 주말이면 전 영업일로
-            yesterday -= timedelta(days=1)
+        yesterday = last_trading_day(date.today())  # 주말이면 전 영업일로
         dates = load_missing_dates(dsn, yesterday, yesterday)
         if not dates:
             logger.info("[aftermarket] %s 이미 수집됨 — 스킵", yesterday)

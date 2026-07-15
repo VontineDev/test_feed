@@ -74,6 +74,8 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     from data.kiwoom_aftermarket_sync import KiwoomClient
 
+from core.dates import last_trading_day
+from core.tor import jittered_delay, new_identity
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -456,41 +458,11 @@ def _parse_int(s: str) -> Optional[int]:
         return None
 
 
-def _jittered_delay(base: float) -> float:
-    """Tor 사용 시 요청 간격에 랜덤 지터 부여 (일정한 패턴으로 탐지되는 것 방지).
-
-    TOR_PROXY 미설정 시 base 그대로 반환 (기존 동작 유지).
-    """
-    if not os.environ.get("TOR_PROXY"):
-        return base
-    lo = max(base, 1.0)
-    return random.uniform(lo, lo + 1.5)
-
-
-def _tor_new_identity() -> bool:
-    """Tor control port(SIGNAL NEWNYM)로 새 출구 노드 요청.
-
-    KRX가 Tor 출구 IP 상당수를 블록리스트에 올려둔 것으로 추정 — 요청 중
-    403이 뜨거나 세션이 만료 의심 상태일 때 회로를 바꿔 차단된 노드에
-    계속 요청이 몰리는 것을 방지한다.
-
-    stem이 PROTOCOLINFO로 쿠키 파일 경로를 자동 탐색해 인증하므로 별도
-    쿠키 경로 설정이 필요 없다. control port 자체가 꺼져있어 연결이 안
-    되는 경우(Tor Browser 기본 설정 등) best-effort로 조용히 스킵 —
-    필수 기능이 아님.
-    """
-    control_port = int(os.environ.get("TOR_CONTROL_PORT", "9151"))
-    try:
-        from stem import Signal
-        from stem.control import Controller
-
-        with Controller.from_port(port=control_port) as controller:
-            controller.authenticate()
-            controller.signal(Signal.NEWNYM)
-        return True
-    except Exception as e:
-        logger.debug("[krx-direct] Tor NEWNYM 실패: %s", e)
-        return False
+# core/tor.py로 이동 (2026-07 리팩토링 Phase A) — 기존 이름 유지:
+# 테스트가 data.krx_flow_sync._tor_new_identity를 import/patch하고,
+# fetch_raw/_handle_possible_expiry가 모듈 전역으로 참조한다.
+_jittered_delay = jittered_delay
+_tor_new_identity = new_identity
 
 
 def _make_krx_direct(
@@ -931,17 +903,9 @@ def _already_loaded(existing: set, start: date, end: date) -> bool:
     return len(existing) >= max(1, expected * 0.9)
 
 
-def _last_trading_day(today: date) -> date:
-    """달력상 어제로부터 가장 가까운 평일(월~금) 반환.
-
-    --incremental은 평일에만 실행되므로(cron mon-fri) 월요일 실행 시
-    '어제'가 일요일이 되어, 금요일 거래일 데이터를 어떤 실행도 대상으로
-    삼지 못하고 영구히 누락시킨다 (토요일 실행이 없어 받아줄 회차가 없음).
-    """
-    d = today - timedelta(days=1)
-    while d.weekday() >= 5:  # 5=토, 6=일
-        d -= timedelta(days=1)
-    return d
+# core/dates.py로 이동 (2026-07 리팩토링 Phase A) — 기존 이름 유지:
+# 테스트가 data.krx_flow_sync._last_trading_day를 import한다.
+_last_trading_day = last_trading_day
 
 
 # 연속 빈 응답 N건 → 세션 만료 의심 → Samsung 프로브로 확인
