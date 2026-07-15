@@ -4,6 +4,34 @@ Items deferred from code review and planning sessions.
 
 ---
 
+## P3: 리팩토링 Phase A~C 후속 — 심(shim) 삭제 + 범위 제외분 정리 (2026-07-15)
+
+**배경:** 2026-07-15 구조 리팩토링(우선순위 3단계 컷)으로 core/dates.py,
+core/tor.py, core/db_sync.py, core/env.py 신설 및 analysis/backtest_engine.py
+(3,360줄) → analysis/backtest/ 8모듈 분해 완료. 모든 이동은 옛 위치에
+re-export 심을 남김.
+
+**심 삭제 (스케줄러가 새 코드로 ~1주 정상 가동 후):**
+- `data/krx_flow_sync.py`, `analysis/chart_screener.py` 등의
+  `_last_trading_day`/`_jittered_delay`/`_tor_new_identity`/`_prev_business_day`/
+  `_connect` 별칭 — grep으로 잔여 importer 0 확인 후 테스트를 canonical
+  경로로 갱신하고 삭제.
+- `analysis/backtest_engine.py`(79줄 순수 심) — 소비자(telegram_bot,
+  paper_jobs, strategy_compose, scripts/, tests/)를 analysis.backtest.*
+  직접 import로 점진 전환 후 삭제 검토.
+
+**범위 제외로 남긴 것:**
+- `dashboard/backend/main.py:2374` psycopg2 직접 연결 → core.db_sync 미적용
+  (대시보드 라우터 분리 단계에서 함께).
+- `scripts/*`의 psycopg2/DSN 중복 — 일회성 스크립트라 기회적 정리.
+- `jobs/ohlcv_warm.py`의 주말 스킵 로직 — last_trading_day와 의미가 다름
+  (월요일 실행 시 금요일 daily_ohlcv를 채우는 회차가 없는 잠재 커버리지 갭).
+  보정 전환은 동작 변경이라 별도 fix로 판단 필요 (코드에 TODO 주석 있음).
+- 전체 9단계 계획의 나머지: 텔레그램 계층 정리, 지표/OHLCV 통합,
+  대시보드 라우터 분리, stage_classifier 레거시 분리, run_scheduler 분해.
+
+---
+
 ## 완료: Tor Browser(GUI) → 헤드리스 Tor 데몬 전환 (2026-07-11, 완료 2026-07-14)
 
 **What:** `data/krx_flow_sync.py`의 krx-direct 백엔드가 `TOR_PROXY`(SOCKS5, 포트 9150)와 `TOR_CONTROL_PORT`(회로 로테이션용)로 로컬 Tor Browser에 의존한다. Tor Browser는 데스크톱 GUI 애플리케이션(`Desktop\Tor Browser\...`) — `tor.exe`(Tor Expert Bundle) 또는 서비스로 등록 가능한 헤드리스 Tor 데몬으로 교체.
