@@ -18,7 +18,7 @@ Items deferred from code review and planning sessions.
 
 **Depends on / blocked by:** 없음 — 독립적으로 아무 때나 진행 가능.
 
-**완료 내역(2026-07-14):** Tor Browser 번들의 `tor.exe`를 재사용해 전용 `tor-daemon/torrc`(SocksPort 9150, ControlPort 9151, CookieAuthentication)로 헤드리스 실행 — 별도 다운로드 없이 기존 바이너리만 재활용. Tor Browser GUI(및 그 자체 tor.exe)는 완전히 종료.
+**완료 내역(2026-07-14):** Tor Browser 번들의 `tor.exe`를 재사용해 전용 `tor-daemon/torrc`(SocksPort 9150, ControlPort 9151, CookieAuthentication)로 헤드리스 실행 — 별도 다운로드 없이 기존 바이너리만 재활용. Tor Browser GUI(및 그 자체 tor.exe)는 완전히 종료. **같은 날 후속 수정(`2a3653c`):** Tor Browser 기본 포트(9150/9151)와 충돌해 헤드리스 데몬 포트를 **9250(SocksPort)/9251(ControlPort)**로 이전, `.env`(`TOR_PROXY`/`TOR_CONTROL_PORT`) 반영 완료.
 
 자동기동은 새 예약 작업 대신(이 세션 권한으로는 `schtasks /Create`의 LogonTrigger 등록이 거부됨 — Access denied, 이 머신의 제한된 토큰 이슈) **기존 `NewsCrawler` 태스크가 실행하는 `scripts/start_crawler.bat`에 통합**: 로그온 시 `tor.exe`가 안 떠있으면 먼저 `tor-daemon\torrc`로 기동한 뒤 기존처럼 `run_scheduler.py`를 실행하도록 수정. 새 예약 작업 없이 기존 로그온 트리거 인프라를 재사용.
 

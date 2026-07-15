@@ -21,7 +21,7 @@ KRX(한국거래소) 데이터를 수집하는 4개 모듈의 완전한 기술 �
 | `KRX_OPENAPI_KEY` | krx_openapi, krx_sync | KRX OpenAPI 인증키. openapi.krx.co.kr 가입 후 발급 |
 | `KRX_ID` | krx_flow_sync (krx-direct/pykrx 백엔드, **기본값**) | data.krx.co.kr 로그인 아이디 |
 | `KRX_PW` | krx_flow_sync (krx-direct/pykrx 백엔드, **기본값**) | data.krx.co.kr 로그인 비밀번호 |
-| `KRX_SESSION`/`KRX_VISITOR` | krx_flow_sync (krx-direct 백엔드) | data.krx.co.kr 브라우저 JSESSIONID 쿠키 — KRX_ID/PW 대신 사용 가능, 만료 시 수동 갱신 필요 |
+| `KRX_SESSION`/`KRX_VISITOR` | krx_flow_sync (krx-direct 백엔드) | data.krx.co.kr 브라우저 JSESSIONID 쿠키 — KRX_ID/PW 대신 사용 가능한 대안이지만, KRX_ID/PW와 달리 만료 시 수동 갱신 필요 |
 | `KIWOOM_APPKEY`/`KIWOOM_SECRETKEY` | krx_flow_sync (kiwoom 백엔드, 수동 폴백) | [키움 연동 레퍼런스](reference-kiwoom.md) 참고 — `kiwoom_aftermarket_sync.py`와 동일 키 재사용 |
 
 ---
@@ -148,7 +148,7 @@ KOSPI + KOSDAQ 전 종목 upsert. `isin_code` PK 기준. `yfinance_symbol` 자�
 
 | 백엔드 | 조건 | 특징 |
 |--------|------|------|
-| `krx-direct` (**CLI/스케줄러 공통 기본값**) | KRX_ID/KRX_PW 또는 KRX_SESSION | data.krx.co.kr 직접 HTTP 요청. `personal_net` 채움. ID/PW 로그인이 보안 정책상 막혀 있어 `KRX_SESSION` 브라우저 쿠키를 주기적으로 수동 갱신해야 함 |
+| `krx-direct` (**CLI/스케줄러 공통 기본값**) | KRX_ID/KRX_PW 또는 KRX_SESSION | data.krx.co.kr 직접 HTTP 요청. `personal_net` 채움. `KRX_ID`/`KRX_PW` 설정 시 자동 로그인·세션 만료 시 자동 재로그인(2026-07-11부터 정상 동작) — 수동 갱신 불필요. `KRX_SESSION` 브라우저 쿠키만 쓰는 경우엔 만료 시 수동 갱신 필요 |
 | `pykrx` | KRX_ID/KRX_PW | pykrx 라이브러리 경유. Python 3.12 이하 권장 |
 | `csv` | --csv 파일경로 | 수동 CSV 임포트 |
 | `kiwoom` (수동 폴백, 비권장) | KIWOOM_APPKEY/SECRETKEY | ka10045, Bearer 토큰. 브라우저 쿠키 불필요하지만 **`personal_net`이 항상 NULL** — 키움은 단일 증권사라 시장 전체 개인 순매수를 구조적으로 가질 수 없음. `KRX_SESSION` 만료로 krx-direct가 당장 안 될 때만 임시로 사용 |

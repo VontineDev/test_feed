@@ -83,8 +83,11 @@ python run_scheduler.py --no-summary  # 요약 없이 수집만
 |-------|-----------------|------|
 | `daily_aftermarket_sync` | 평일 16:05 | 키움 시간외 단일가 스냅샷 (aftermarket_snap) |
 | `daily_flow_sync` | 평일 18:00 | KRX 외국인·기관·개인 순매수 증분 (daily_flow, `--backend krx-direct`) |
-| `daily_ohlcv_warm` | 평일 18:30 | KRX OpenAPI 전일 전 종목 OHLCV → daily_ohlcv (KRX_OPENAPI_KEY 필수) |
+| `daily_ohlcv_warm` | 평일 20:00 | KRX OpenAPI 전일 전 종목 OHLCV → daily_ohlcv (KRX_OPENAPI_KEY 필수) |
+| `sector_stats` | 평일 20:30 | 섹터별 일별 수급·수익률 집계 (daily_flow_sync + daily_ohlcv_warm 완료 후) |
 | `daily_market_snap` | 평일 16:10 | 당일 거래금액 Top 100 스냅샷 |
+
+`daily_ohlcv_warm`/`sector_stats`는 원래 18:30/19:00이었으나, 2026-07-11 Tor 지터(요청 간격 랜덤화) 도입으로 `daily_flow_sync` 실행시간이 최대 ~90분(세션 만료 자동복구 대기까지 겹치면 ~120분)으로 늘어나 20:00/20:30으로 뒤로 밀림(`26284a8`).
 
 ### 모의투자 잡
 

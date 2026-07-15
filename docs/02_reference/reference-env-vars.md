@@ -80,12 +80,12 @@ Ollama가 응답하지 않으면 LM Studio로 자동 폴백합니다. 둘 다 �
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `KRX_ID` | *(없음)* | [data.krx.co.kr](https://data.krx.co.kr) 로그인 계정 |
+| `KRX_ID` | *(없음)* | [data.krx.co.kr](https://data.krx.co.kr) 로그인 계정. 설정 시 `krx_flow_sync.py`가 자동 로그인·재로그인(2026-07-11부터 정상 동작) — **권장 방식** |
 | `KRX_PW` | *(없음)* | 위 계정 비밀번호 |
-| `KRX_SESSION` | *(없음)* | JSESSIONID 쿠키. 브라우저 로그인 후 DevTools > Application > Cookies에서 복사. 수급 수집(`krx_flow_sync.py`)에 필수 |
+| `KRX_SESSION` | *(없음)* | JSESSIONID 쿠키. 브라우저 로그인 후 DevTools > Application > Cookies에서 복사. `KRX_ID`/`KRX_PW` 없이도 수급 수집(`krx_flow_sync.py`)을 돌릴 수 있는 대안이지만, 만료 시 브라우저에서 수동 갱신해야 함 |
 | `KRX_VISITOR` | *(없음)* | `__smVisitorID` 쿠키 (선택). 세션 갱신 성공률 향상 |
 
-KRX 세션 쿠키는 24시간 후 만료됩니다. 만료 시 `krx_flow_sync.py`가 자동 재로그인을 시도합니다. `KRX_ID`와 `KRX_PW`가 있어야 재로그인이 가능합니다.
+KRX 세션 쿠키는 24시간 후 만료됩니다. `KRX_ID`/`KRX_PW`가 설정돼 있으면 만료 시 `krx_flow_sync.py`가 자동으로 재로그인해 수동 갱신 없이 계속 동작합니다. `KRX_SESSION`만 설정한 경우에는 만료마다 브라우저에서 쿠키를 수동 갱신해야 합니다.
 
 ---
 
@@ -97,7 +97,7 @@ KRX 세션 쿠키는 24시간 후 만료됩니다. 만료 시 `krx_flow_sync.py`
 | `KIWOOM_SECRETKEY` | *(없음)* | App Secret Key |
 | `KIWOOM_TOKEN` | *(없음)* | 미리 발급된 토큰 직접 주입 (선택, 토큰 발급 생략) |
 
-미설정 시 `daily_aftermarket_sync_job`은 경고 후 스킵된다. `krx_flow_sync.py`의 기본 백엔드(`krx-direct`)는 이 변수들을 쓰지 않는다 — `KRX_SESSION` 만료 시 수동 폴백(`--backend kiwoom`)으로만 필요.
+미설정 시 `daily_aftermarket_sync_job`은 경고 후 스킵된다. `krx_flow_sync.py`의 기본 백엔드(`krx-direct`)는 이 변수들을 쓰지 않는다 — `KRX_ID`/`KRX_PW` 자동 재로그인까지 실패하는 예외적 상황에서만 수동 폴백(`--backend kiwoom`)으로 필요.
 
 ---
 
@@ -165,23 +165,23 @@ Caddy basicauth와 병행 사용하지 마세요. 두 인증 레이어가 충돌
 
 ## 네트워크 프록시 (선택)
 
-ISP 차단 환경(KT 회선 등)에서 YouTube 자막 수집과 Telegram API 접근에, 그리고 IP 차단된 `data.krx.co.kr` 접근(`krx_flow_sync.py` krx-direct 백엔드)에 Tor SOCKS5 프록시를 우회 경로로 사용합니다. Tor Browser(포트 9150) 또는 Tor Expert Bundle(포트 9050) 실행 중일 때 설정합니다.
+ISP 차단 환경(KT 회선 등)에서 YouTube 자막 수집과 Telegram API 접근에, 그리고 IP 차단된 `data.krx.co.kr` 접근(`krx_flow_sync.py` krx-direct 백엔드)에 Tor SOCKS5 프록시를 우회 경로로 사용합니다. 전용 헤드리스 Tor 데몬(`tor-daemon/torrc`, SocksPort 9250 / ControlPort 9251)이 로그온 시 자동 기동됩니다 — 2026-07-14부터 Tor Browser GUI 의존 제거(포트도 Tor Browser 기본값 9150/9151과 충돌해 9250/9251로 이전).
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `TOR_PROXY` | *(없음)* | YouTube 자막 수집·`data.krx.co.kr` 접근 Tor 우회 프록시. 형식: `socks5h://127.0.0.1:9150` (Tor Browser) 또는 `socks5h://127.0.0.1:9050` (Tor Expert Bundle). 미설정 시 직접 연결 시도 |
-| `TELEGRAM_PROXY` | *(없음, 기본 비활성)* | Telegram API(`api.telegram.org`) Tor 우회 프록시. KT 회선에서 TCP 443이 차단된 경우에만 설정. 형식: `socks5h://127.0.0.1:9150`. 미설정 시 직접 연결 |
-| `TOR_CONTROL_PORT` | `9151` | Tor control port. `krx_flow_sync.py`가 403 응답을 받거나 세션 만료가 의심될 때(연속 빈 응답)만 `SIGNAL NEWNYM`으로 출구 노드를 로테이션할 때 사용 — 이미 실패가 확인된 상황에서만 시도한다 (KRX_SESSION 쿠키가 발급 IP에 묶여 있을 가능성이 있어, 멀쩡히 동작 중인 세션을 무작정 로테이션하면 오히려 깨질 수 있기 때문에 정상 동작 중에는 로테이션하지 않음). 인증은 [stem](https://stem.torproject.org/)이 PROTOCOLINFO로 쿠키 경로를 자동 탐색 — 별도 쿠키 경로 설정 불필요 |
+| `TOR_PROXY` | *(없음)* | YouTube 자막 수집·`data.krx.co.kr` 접근 Tor 우회 프록시. 형식: `socks5h://127.0.0.1:9250` (헤드리스 tor-daemon, 기본 배포). 미설정 시 직접 연결 시도 |
+| `TELEGRAM_PROXY` | *(없음, 기본 비활성)* | Telegram API(`api.telegram.org`) Tor 우회 프록시. KT 회선에서 TCP 443이 차단된 경우에만 설정. 형식: `socks5h://127.0.0.1:9250`. 미설정 시 직접 연결 |
+| `TOR_CONTROL_PORT` | `9251` | Tor control port. `krx_flow_sync.py`가 403 응답을 받거나 세션 만료가 의심될 때(연속 빈 응답)만 `SIGNAL NEWNYM`으로 출구 노드를 로테이션할 때 사용 — 이미 실패가 확인된 상황에서만 시도한다 (KRX_SESSION 쿠키가 발급 IP에 묶여 있을 가능성이 있어, 멀쩡히 동작 중인 세션을 무작정 로테이션하면 오히려 깨질 수 있기 때문에 정상 동작 중에는 로테이션하지 않음). 인증은 [stem](https://stem.torproject.org/)이 PROTOCOLINFO로 쿠키 경로를 자동 탐색 — 별도 쿠키 경로 설정 불필요 |
 
 **주의:** `.env` 파일에서 인라인 주석(`KEY=value  # comment`)을 사용하면 `start_crawler.bat` 파서가 주석 텍스트까지 값에 포함시킵니다. 주석은 반드시 별도 줄에 작성하세요.
 
-**주의 2:** `TELEGRAM_PROXY`와 `TOR_PROXY`를 동시에 켜둔 채 텔레그램 봇이 백그라운드로 계속 폴링하면, 실제 Tor Browser를 새로 띄울 때 9150 포트 점유 경쟁이 발생해 Tor Browser 연결이 실패할 수 있습니다. `api.telegram.org`가 직접 연결로 막힘 없이 열리는지 먼저 확인(`Test-NetConnection api.telegram.org -Port 443`)한 뒤 필요한 경우에만 켜세요. (2026-06-21 직접 연결 테스트 결과 KT 차단 해제 확인 → 기본값 비활성으로 전환)
+**주의 2:** `TELEGRAM_PROXY`와 `TOR_PROXY`를 동시에 켜둔 채 텔레그램 봇이 백그라운드로 계속 폴링하면, tor-daemon 포트(9250) 점유 경쟁이 발생할 수 있습니다. `api.telegram.org`가 직접 연결로 막힘 없이 열리는지 먼저 확인(`Test-NetConnection api.telegram.org -Port 443`)한 뒤 필요한 경우에만 켜세요. (2026-06-21 직접 연결 테스트 결과 KT 차단 해제 확인 → 기본값 비활성으로 전환)
 
 ```env
-# Tor Browser 9150 — YouTube 자막 수집용, KT 차단 시 필수
-TOR_PROXY=socks5h://127.0.0.1:9150
+# 헤드리스 tor-daemon 9250 — YouTube 자막 수집용, KT 차단 시 필수
+TOR_PROXY=socks5h://127.0.0.1:9250
 # api.telegram.org KT 차단 우회 — 직접 연결이 막힐 때만 주석 해제
-# TELEGRAM_PROXY=socks5h://127.0.0.1:9150
+# TELEGRAM_PROXY=socks5h://127.0.0.1:9250
 ```
 
 SOCKS5 프록시 지원은 `socksio` 패키지가 필요합니다 (`pip install socksio`).
