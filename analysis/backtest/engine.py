@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 from dataclasses import replace as _dc_replace
 from datetime import date, datetime, timedelta
+from typing import Optional
 from zoneinfo import ZoneInfo
 
 from analysis.backtest.config import OPTIMAL_EXIT_PARAMS_CROSS
@@ -296,7 +297,26 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
         except Exception as e:
             logger.warning("[백테스트] 상장주식수 로드 실패 (조건 9 생략): %s", e)
 
-    # 6. 신호 재현
+    # 6. 신호 재현 — 모드 → replay 디스패치 테이블 (기존 11-branch if와 동일 분기)
+    # 람다 인자: (ticker, name, df, mkt, config, flow, streak, shares)
+    # replay 세대별로 받는 lookup이 달라 시그니처 차이를 여기서 명시한다.
+    _REPLAY_FNS = {
+        "ichimoku":   lambda t, n, d, m, c, fl, sl, sh: _replay_ichimoku(t, n, d, m, c),
+        "stage":      lambda t, n, d, m, c, fl, sl, sh: _replay_stage(t, n, d, m, c, fl),
+        "stage2":     lambda t, n, d, m, c, fl, sl, sh: _replay_stage2(t, n, d, m, c),
+        "stage_v11":  lambda t, n, d, m, c, fl, sl, sh: _replay_stage_v11(t, n, d, m, c, fl),
+        "stage2_v11": lambda t, n, d, m, c, fl, sl, sh: _replay_stage2_v11(t, n, d, m, c),
+        "stage_v12":  lambda t, n, d, m, c, fl, sl, sh: _replay_stage_v12(t, n, d, m, c, fl, sl, sh),
+        "stage2_v12": lambda t, n, d, m, c, fl, sl, sh: _replay_stage2_v12(t, n, d, m, c),
+        "stage_v13":  lambda t, n, d, m, c, fl, sl, sh: _replay_stage_v13(t, n, d, m, c, fl, sl, sh),
+        "stage2_v13": lambda t, n, d, m, c, fl, sl, sh: _replay_stage2_v13(t, n, d, m, c, fl),
+        "stage_v14":  lambda t, n, d, m, c, fl, sl, sh: _replay_stage_v14(t, n, d, m, c, fl, sl, sh),
+        "stage_v15":  lambda t, n, d, m, c, fl, sl, sh: _replay_stage_v15(t, n, d, m, c, fl, sl, sh),
+    }
+    # cross는 ichimoku+stage 둘 다 재현 후 교차 필터 적용
+    _MODE_REPLAYS = {"cross": ("ichimoku", "stage")}
+    replay_keys = _MODE_REPLAYS.get(config.mode, (config.mode,))
+
     all_signals: list[SignalRecord] = []
 
     for ticker, name, _ in tickers:
@@ -304,29 +324,11 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
         if df is None or df.empty:
             continue
         mkt = "KOSDAQ" if ticker.endswith(".KQ") else "KOSPI"
-
-        if config.mode in ("ichimoku", "cross"):
-            all_signals.extend(_replay_ichimoku(ticker, name, df, mkt, config))
-        if config.mode in ("stage", "cross"):
-            all_signals.extend(_replay_stage(ticker, name, df, mkt, config, flow_lookup))
-        if config.mode == "stage2":
-            all_signals.extend(_replay_stage2(ticker, name, df, mkt, config))
-        if config.mode == "stage_v11":
-            all_signals.extend(_replay_stage_v11(ticker, name, df, mkt, config, flow_lookup))
-        if config.mode == "stage2_v11":
-            all_signals.extend(_replay_stage2_v11(ticker, name, df, mkt, config))
-        if config.mode == "stage_v12":
-            all_signals.extend(_replay_stage_v12(ticker, name, df, mkt, config, flow_lookup, streak_lookup, shares_lookup))
-        if config.mode == "stage2_v12":
-            all_signals.extend(_replay_stage2_v12(ticker, name, df, mkt, config))
-        if config.mode == "stage_v13":
-            all_signals.extend(_replay_stage_v13(ticker, name, df, mkt, config, flow_lookup, streak_lookup, shares_lookup))
-        if config.mode == "stage2_v13":
-            all_signals.extend(_replay_stage2_v13(ticker, name, df, mkt, config, flow_lookup))
-        if config.mode == "stage_v14":
-            all_signals.extend(_replay_stage_v14(ticker, name, df, mkt, config, flow_lookup, streak_lookup, shares_lookup))
-        if config.mode == "stage_v15":
-            all_signals.extend(_replay_stage_v15(ticker, name, df, mkt, config, flow_lookup, streak_lookup, shares_lookup))
+        for key in replay_keys:
+            all_signals.extend(_REPLAY_FNS[key](
+                ticker, name, df, mkt, config,
+                flow_lookup, streak_lookup, shares_lookup,
+            ))
 
     # 7. Cross 필터
     if config.mode == "cross":
