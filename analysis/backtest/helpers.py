@@ -268,3 +268,55 @@ def _compute_group_metrics(
     return m
 
 
+
+
+def _fill_returns(
+    sig: SignalRecord,
+    stock_lookup: dict[date, float],
+    kospi_lookup: dict[date, float],
+    tx_cost_rt: float,
+    hold_weeks: Optional[int] = None,
+) -> None:
+    """신호에 수익률 및 초과수익률 채우기 (거래비용 차감 포함).
+
+    hold_weeks가 지정되면 N주(N*7일) 보유 수익률을 return_custom/excess_custom에도 채운다.
+    표준 기간(1/4/13w)이더라도 return_custom에 중복 저장하므로 리포트 로직이 단순해진다.
+    """
+    base = sig.close_at_signal
+    if base == 0:
+        return
+
+    def _ret(days: int) -> Optional[float]:
+        price = _nearest_price(stock_lookup, sig.signal_date + timedelta(days=days))
+        return (price / base - 1.0) - tx_cost_rt if price is not None else None
+
+    def _kospi_ret(days: int) -> Optional[float]:
+        k0 = _nearest_price(kospi_lookup, sig.signal_date)
+        k1 = _nearest_price(kospi_lookup, sig.signal_date + timedelta(days=days))
+        if k0 is None or k1 is None or k0 == 0:
+            return None
+        return k1 / k0 - 1.0
+
+    sig.return_7d  = _ret(7)
+    sig.return_28d = _ret(28)
+    sig.return_91d = _ret(91)
+
+    k7  = _kospi_ret(7)
+    k28 = _kospi_ret(28)
+    k91 = _kospi_ret(91)
+
+    sig.excess_7d  = sig.return_7d  - k7  if sig.return_7d  is not None and k7  is not None else None
+    sig.excess_28d = sig.return_28d - k28 if sig.return_28d is not None and k28 is not None else None
+    sig.excess_91d = sig.return_91d - k91 if sig.return_91d is not None and k91 is not None else None
+
+    if hold_weeks is not None:
+        hold_days = hold_weeks * 7
+        sig.return_custom = _ret(hold_days)
+        kc = _kospi_ret(hold_days)
+        sig.excess_custom = (
+            sig.return_custom - kc
+            if sig.return_custom is not None and kc is not None
+            else None
+        )
+
+
