@@ -21,7 +21,7 @@
 | 2026-07-15 | Phase A~C: core/dates·tor·db_sync·env 신설, backtest_engine(3,360줄) → analysis/backtest/ 8모듈 | L | (TODOS.md P3 항목 참조) |
 | 2026-07-16 | 대시보드 백엔드 라우터 분리: main.py → routers_* 10개 + market_snap 데이터 계층 | L | `b591f19`~`54d5001` (7커밋) |
 | 2026-07-16 | core/db.py 도메인 분리 (아래 상세) | M | `96bfb3c`~`7b31706` (5커밋) |
-| 2026-07-16 | Phase D 저위험 정리 3/4 항목 (아래 상세) | S | test_scan_cmd.py 교체 + jobs/_common.py + db_schema 분리 (3커밋) |
+| 2026-07-16 | Phase D 저위험 정리 4/4 항목 완료 (아래 상세) | S+M | test_scan_cmd.py 교체 + jobs/_common.py + db_schema 분리 + 심 삭제 (5커밋) |
 
 ### 2026-07-16 core/db.py 도메인 분리 상세
 
@@ -47,14 +47,17 @@
 
 **의도적 보류:** `_CREATE_TABLE` DDL 메가블록 + `init_db` 분리 — 멀티스테이트먼트 DDL이 단일 implicit transaction으로 실행되는 원자성을 보존하기 위해 이번 범위에서 제외. → Phase D 항목(아래에서 완료).
 
-### 2026-07-16 Phase D 저위험 정리 (3/4 완료)
+### 2026-07-16 Phase D 저위험 정리 (4/4 완료)
 
-Phase D 4개 항목 중 3개 실행, 1개는 탐색 결과 예상보다 범위가 커서 디스코프(아래 로드맵 참조).
+첫 세션에서 3개 실행, 1개(심 삭제)는 예상보다 범위가 커 디스코프했다가 같은 날 후속 세션에서 마이그레이션 후 완료.
 
 1. **test_scan_cmd.py → test_run_screener_cmd.py**: `_handle_scan`은 완전히 죽은 심볼(리포 전체에서 이 파일 4곳 외 참조 없음, 스위트의 유일한 실패 4건이었음). 동일한 4개 시나리오(no-pool/busy-lock/live-run-save/invoker-only-send)를 현재 실제 동작하는 함수(`_handle_run_screener` 가드 + `_run_screener_task` 실행, telegram_bot.py)를 대상으로 재작성. 결과: 830 passed(기존 실패 0).
 2. **jobs/_common.py 추출**: `stage_backfill.py`·`screener_backfill.py`의 byte-identical `get_pool()` + 부트스트랩 블록(load_dotenv+logging.basicConfig)을 통합. `sys.path.insert(ROOT)`만 각 파일에 남김 — `jobs` 패키지 자체를 import하려면 그 앞에 선행돼야 하는 최소 코드라 공유 모듈로 옮길 수 없었음(import 순서 제약). `ohlcv_warm.py`는 이중 용도(임포터블 job + 독립 CLI)라 범위 제외.
 3. **core/db_schema.py 분리**: `_CREATE_*` DDL 상수 7개, `_RLS_ALWAYS`/`_RLS_IF_EXISTS`, `init_db(pool)`을 byte-identical 이동(AST 비교로 검증). db.py는 get_dsn/create_pool만 남기고 facade에서 전체 재수출 — `_CREATE_TRADE_LOG` import(test_trade_integration.py), `patch("core.db.init_db")`(test_volume_integration.py) 모두 하위호환 유지.
-4. **Phase A~C 심 삭제 — 디스코프**: 탐색 결과 5개 별칭(`_last_trading_day`/`_jittered_delay`/`_tor_new_identity`/`_prev_business_day` 등)과 `analysis/backtest_engine.py` 79줄 심 전부 아직 실제 소비자가 남아있음 — 주로 테스트(`test_core_dates.py`/`test_core_tor.py`/`test_krx_flow_sync.py`/`test_chart_screener.py`의 alias-regression 테스트들), `backtest_engine`은 프로덕션 6곳(`paper_jobs.py`, `telegram_bot.py`×2, `scripts/` 4개)도. TODOS.md 자체 기준("grep으로 잔여 importer 0 확인 후 삭제")이 아직 충족되지 않아 이번 배치에서 제외 — Effort를 S→M으로 정정하고 아래 로드맵에 마이그레이션 선행 단계를 명시.
+4. **Phase A~C 심 마이그레이션 + 삭제 (완료)**: 5개 날짜/Tor 별칭(`_last_trading_day`/`_jittered_delay`/`_tor_new_identity`/`_prev_business_day`)과 `analysis/backtest_engine.py` 79줄 심을 두 커밋으로 처리.
+   - **별칭 4종**: 소스 3곳(`data/krx_flow_sync.py`, `analysis/chart_screener.py`, `data/kiwoom_aftermarket_sync.py`)에서 별칭 정의 제거 + 내부 호출부를 canonical 함수명으로 개명. 테스트 2곳(`test_krx_flow_sync.py`, `test_chart_screener.py`)은 import를 `core.dates`/`core.tor` 직접 참조로 전환(로컬 변수명 유지로 테스트 본문 무변경). `test_krx_flow_sync.py`의 `mock.patch("data.krx_flow_sync._tor_new_identity", ...)` 11곳은 내부 개명에 맞춰 `new_identity`로 갱신. `test_core_dates.py`/`test_core_tor.py`의 `TestAliasesStillResolve`(별칭이 canonical과 동일 객체인지만 확인하던 테스트)는 삭제 — 별칭 자체가 없어지므로 무의미. 결과: 826 passed(830→4개 회귀테스트 삭제, 신규 실패 0).
+   - **backtest_engine 심**: 프로덕션 6곳(`jobs/paper_jobs.py`, `telegram/telegram_bot.py`×2, `scripts/` 4개)과 테스트 6곳을 `analysis.backtest.{config,models,helpers,fetch,replay,exit_models,engine}` 직접 import로 전환 후 심 파일 삭제. **핵심 위험 포인트**: `telegram_bot.py`의 함수-로컬 import와 `test_backtest_compose_bot.py`의 `mock.patch` 문자열 타깃은 반드시 같은 커밋에서 함께 이동 — 따로 옮기면 패치가 조용히 무효화돼 테스트가 실제 `run_backtest`를 호출하는 위험(탐색 단계에서 발견, lockstep으로 처리해 회피). `test_backtest_reexports.py`(심의 re-export 완전성만 검증하던 33개 테스트)는 심 삭제와 함께 제거. 결과: 793 passed(826→33개 제거, 신규 실패 0).
+   - 최초 Effort 추정(S)이 실제로는 M 상당이었음 — 탐색에 두 서브에이전트, 마이그레이션에 파일 15개 이상 관여.
 
 ---
 
@@ -62,13 +65,9 @@ Phase D 4개 항목 중 3개 실행, 1개는 탐색 결과 예상보다 범위�
 
 우선순위·리스크 순으로 Phase D→G. 각 Phase 내 항목은 독립적이라 개별 진행 가능.
 
-### Phase D — 저위험 정리 (워밍업)
+### Phase D — 저위험 정리 (워밍업) — ✅ 완료 (4/4)
 
-3/4 완료(위 완료 기록 참조). 남은 항목:
-
-| 항목 | What | 제약 | Effort |
-|---|---|---|---|
-| Phase A~C 심(shim) 삭제 | 1단계(마이그레이션): `_last_trading_day`/`_jittered_delay`/`_tor_new_identity`/`_prev_business_day` 별칭을 참조하는 테스트(`test_core_dates.py`/`test_core_tor.py`/`test_krx_flow_sync.py`/`test_chart_screener.py`)를 canonical 경로(`core.dates`/`core.tor`)로 갱신. `analysis/backtest_engine.py` 심의 경우 프로덕션 6곳(`jobs/paper_jobs.py`, `telegram/telegram_bot.py`×2, `scripts/compare_exit_models.py`·`compare_v11_v12.py`·`run_compose.py`·`run_sweep.py`)과 테스트 7곳도 `analysis.backtest.*` 직접 import로 전환. 2단계(삭제): grep으로 잔여 importer 0 확인 후 심 삭제 | 스케줄러 ~1주 정상 가동 후 시작. 1단계가 끝나야 2단계 착수 가능 — 두 단계를 분리된 작업/커밋으로 진행 권장 | ~~S~~ **M** (2026-07-16 재평가: 최초 추정보다 마이그레이션 대상이 많음) |
+위 완료 기록 참조. 다음은 Phase E부터.
 
 ### Phase E — 대시보드 백엔드 마무리
 

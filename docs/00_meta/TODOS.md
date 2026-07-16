@@ -4,7 +4,7 @@ Items deferred from code review and planning sessions.
 
 ---
 
-## P3: 리팩토링 Phase A~C 후속 — 심(shim) 삭제 + 범위 제외분 정리 (2026-07-15)
+## P3: 리팩토링 Phase A~C 후속 — 심(shim) 삭제 + 범위 제외분 정리 (2026-07-15, 심 삭제 완료 2026-07-16)
 
 **배경:** 2026-07-15 구조 리팩토링(우선순위 3단계 컷)으로 core/dates.py,
 core/tor.py, core/db_sync.py, core/env.py 신설 및 analysis/backtest_engine.py
@@ -12,18 +12,23 @@ core/tor.py, core/db_sync.py, core/env.py 신설 및 analysis/backtest_engine.py
 re-export 심을 남김.
 
 **심 삭제 (스케줄러가 새 코드로 ~1주 정상 가동 후):**
-- `data/krx_flow_sync.py`, `analysis/chart_screener.py` 등의
+- ~~`data/krx_flow_sync.py`, `analysis/chart_screener.py` 등의
   `_last_trading_day`/`_jittered_delay`/`_tor_new_identity`/`_prev_business_day`/
   `_connect` 별칭 — grep으로 잔여 importer 0 확인 후 테스트를 canonical
-  경로로 갱신하고 삭제.
-- `analysis/backtest_engine.py`(79줄 순수 심) — 소비자(telegram_bot,
+  경로로 갱신하고 삭제.~~ — 완료(2026-07-16). `_connect`는 애초에 외부
+  importer가 없어 그대로 둠(내부 지역 별칭일 뿐).
+- ~~`analysis/backtest_engine.py`(79줄 순수 심) — 소비자(telegram_bot,
   paper_jobs, strategy_compose, scripts/, tests/)를 analysis.backtest.*
-  직접 import로 점진 전환 후 삭제 검토.
-- **재평가(2026-07-16, Phase D 실행 중 재탐색):** 아직 둘 다 삭제 불가 —
+  직접 import로 점진 전환 후 삭제 검토.~~ — 완료(2026-07-16). `strategy_compose.py`는
+  실제로는 주석에서만 언급, 실 import 없었음(당초 소비자 목록이 다소 과장됨).
+- **재평가(2026-07-16, Phase D 1차 탐색):** 처음엔 둘 다 삭제 보류 —
   5개 별칭 전부와 backtest_engine 심 전부 실제 소비자가 남아있음(별칭은
   주로 alias-regression 테스트, backtest_engine은 프로덕션 6곳도). 최초
-  Effort 추정(S)을 M으로 정정, 마이그레이션(테스트/소비자 canonical 전환)
-  → zero-importer 재확인 → 삭제의 2단계로 분리. 상세는
+  Effort 추정(S)을 M으로 정정. 같은 날 후속 세션에서 마이그레이션
+  (테스트/소비자 canonical 전환) → zero-importer 재확인 → 삭제 완료.
+  telegram_bot.py 함수-로컬 import와 test_backtest_compose_bot.py의
+  mock.patch 문자열 타깃을 같은 커밋에서 lockstep 처리(따로 옮기면 패치가
+  조용히 무효화되는 위험 발견). 상세는
   [refactoring-roadmap.md](refactoring-roadmap.md) Phase D 참조.
 
 **범위 제외로 남긴 것:**
@@ -42,8 +47,9 @@ re-export 심을 남김.
 대시보드 마무리 → 백필 플러밍 통합 → run_scheduler 분해)과 방법론 원칙은
 [refactoring-roadmap.md](refactoring-roadmap.md)로 이관.
 
-**후속(2026-07-16, Phase D 실행):** test_scan_cmd.py 교체, jobs/_common.py
-추출, core/db_schema.py 분리 3건 완료. 심 삭제만 위 재평가대로 디스코프.
+**후속(2026-07-16, Phase D 완료):** test_scan_cmd.py 교체, jobs/_common.py
+추출, core/db_schema.py 분리, 심 마이그레이션+삭제까지 4/4 전부 완료.
+Phase D 종료 — 다음은 Phase E(대시보드 백엔드 마무리).
 
 ---
 
