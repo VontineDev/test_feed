@@ -307,6 +307,14 @@ class _BasicAuthMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(_BasicAuthMiddleware)
 
+# ── 라우터 등록 ──────────────────────────────────────────────
+# 라우터 모듈은 common/database/core.*만 의존 — main을 import하지 않음.
+import routers_feedback  # noqa: E402
+app.include_router(routers_feedback.router)
+
+# 하위호환 재수출 — monkeypatch는 각 라우터 모듈에 해야 함
+from routers_feedback import FeedbackBody, auth_me, post_feedback  # noqa: E402,F401
+
 
 # ── daily_market_snap에서 거래대금 상위 N 조회 (장마감 1순위) ──────
 async def _fetch_daily_snap_top_async(n: int) -> dict | None:
@@ -2499,56 +2507,6 @@ async def get_macro(refresh: bool = False):
                 return {**_MACRO_CACHE["data"], "cached": True, "stale": True,
                         "error": "분석 오류 — 이전 데이터 표시 중"}
             raise HTTPException(status_code=500, detail=str(e))
-
-
-# ── POST /api/feedback ───────────────────────────────────────
-class FeedbackBody(BaseModel):
-    text: str
-    screenshot: str | None = None  # base64 JPEG
-
-
-@app.post("/api/feedback")
-async def post_feedback(request: Request, body: FeedbackBody):
-    token = os.environ.get("TELEGRAM_TOKEN", "")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-    if not token or not chat_id:
-        raise HTTPException(status_code=503, detail="Telegram 미설정")
-
-    role = getattr(request.state, "role", "admin")
-    caption = f"[피드백] ({role})\n{body.text[:900]}"
-
-    import httpx
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            if body.screenshot:
-                img_bytes = base64.b64decode(body.screenshot)
-                r = await client.post(
-                    f"https://api.telegram.org/bot{token}/sendPhoto",
-                    data={"chat_id": chat_id, "caption": caption},
-                    files={"photo": ("screenshot.jpg", img_bytes, "image/jpeg")},
-                )
-            else:
-                r = await client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={"chat_id": chat_id, "text": caption},
-                )
-        if r.status_code != 200:
-            logger.error("[feedback] Telegram 전송 실패: %s", r.text)
-            raise HTTPException(status_code=502, detail="Telegram 전송 실패")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("[feedback] 전송 오류: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
-
-    return {"status": "sent"}
-
-
-# ── GET /api/auth/me ──────────────────────────────────────────
-@app.get("/api/auth/me")
-async def auth_me(request: Request):
-    """현재 로그인 사용자의 역할 반환. 프론트엔드 역할 기반 UI 분기용."""
-    return {"role": getattr(request.state, "role", "user")}
 
 
 # ── 수동 포트폴리오 (manual_portfolio 테이블) ──────────────────
