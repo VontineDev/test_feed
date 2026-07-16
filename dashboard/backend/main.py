@@ -2369,9 +2369,8 @@ def _fetch_prev_top20_sync() -> dict[str, str] | None:
     2순위: aftermarket_snap  (NXT 거래 종목만, 폴백)
     """
     try:
-        import psycopg2
-        from core.db import get_dsn as _get_dsn
-        conn = psycopg2.connect(_get_dsn())
+        from core.db_sync import connect as _db_connect
+        conn = _db_connect()
         try:
             with conn.cursor() as cur:
                 # 1순위: daily_market_snap

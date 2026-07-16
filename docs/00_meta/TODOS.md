@@ -21,8 +21,8 @@ re-export 심을 남김.
   직접 import로 점진 전환 후 삭제 검토.
 
 **범위 제외로 남긴 것:**
-- `dashboard/backend/main.py:2374` psycopg2 직접 연결 → core.db_sync 미적용
-  (대시보드 라우터 분리 단계에서 함께).
+- ~~`dashboard/backend/main.py:2374` psycopg2 직접 연결 → core.db_sync 미적용~~
+  — 완료(2026-07-16, 대시보드 라우터 분리 작업에서 `core.db_sync.connect()`로 전환).
 - `scripts/*`의 psycopg2/DSN 중복 — 일회성 스크립트라 기회적 정리.
 - `jobs/ohlcv_warm.py`의 주말 스킵 로직 — last_trading_day와 의미가 다름
   (월요일 실행 시 금요일 daily_ohlcv를 채우는 회차가 없는 잠재 커버리지 갭).
