@@ -23,6 +23,7 @@
 | 2026-07-16 | core/db.py 도메인 분리 (아래 상세) | M | `96bfb3c`~`7b31706` (5커밋) |
 | 2026-07-16 | Phase D 저위험 정리 4/4 항목 완료 (아래 상세) | S+M | test_scan_cmd.py 교체 + jobs/_common.py + db_schema 분리 + 심 삭제 (5커밋) |
 | 2026-07-17 | Phase E 대시보드 백엔드 마무리 3/4 항목 완료 (아래 상세) | M | routers_portfolio 분리 + report_queries 추출 + JOIN 헬퍼 (3커밋) |
+| 2026-07-17 | Phase F 백필 플러밍 통합, 범위 재조정 후 완료 (아래 상세) | S | jobs/stage_shared.py 추출 (1커밋) |
 
 ### 2026-07-16 core/db.py 도메인 분리 상세
 
@@ -70,6 +71,22 @@
 4. **krx_listings JOIN 헬퍼**: 탐색 결과 종목명 해석 JOIN 패턴이 그룹별로 실제 다름을 확인 — byte-identical한 3-way JOIN(`ticker_names`→`krx_listings`→`chart_signals` LATERAL, `p.ticker` 기준)만 5곳(routers_heatmap.py get_positions, routers_paper.py×2, routers_report.py×2)에서 발견돼 `common._NAME_RESOLUTION_JOIN` 상수로 통합. 나머지는 의도적으로 범위 제외: `routers_report._STAGE_QUERY`(섹터까지 해석, superset), `_UNIFIED_TAIL`의 kl CTE(4단계 폴백+정규화, 별개 패턴), `routers_portfolio.lookup_ticker`(JOIN이 아닌 Python 순차 조회), `routers_paper.py`의 "krx_listings는 이 환경에서 항상 비어있어 제외"라는 주석이 달린 예외 케이스(전제가 최신인지 별도 확인 필요). 검증: whitespace 정규화 SQL 텍스트 비교로 3개 파일 무변화 확인.
 5. 결과: 전체 pytest 793 passed(3개 커밋 전부 신규 실패 0).
 
+### 2026-07-17 Phase F 백필 플러밍 통합 (범위 재조정 후 완료)
+
+탐색 결과 로드맵의 원래 전제("stage_backfill·screener_backfill 간 오케스트레이션 중복")가 대부분 false lead였음을 확인:
+- OHLCV fetch는 두 스크립트가 일봉/주봉으로 cadence 자체가 다름(의도적) — screener_backfill은 daily_flow를 아예 쓰지 않음.
+- `iso_fridays`/`week_label`/`slice_until`(stage_backfill 전용)과 `week_of_to_monday`(screener_backfill 전용)는 중복이 아니라 서로 다른 방향의 변환 — 상호보완적.
+
+진짜 byte-identical 중복은 **stage_backfill.py와 라이브 stage_job.py 사이**에 있었음(둘 다 백필 스크립트가 아닌데도) — 정확히 그 부분만 `jobs/stage_shared.py`로 추출:
+1. `normalize_ohlcv(df)`: MultiIndex 평탄화+컬럼선택+UTC tz 인덱스 3줄 스니펫 — stage_backfill/stage_job/screener_backfill **3곳 전부**에서 동일하게 반복되던 것을 통일.
+2. `load_listed_shares(pool)`: krx_listings SQL byte-identical (stage_backfill ↔ stage_job).
+3. `build_row(...)`: stage_classifications upsert 행 조립 — stage_backfill ↔ stage_job 간 byte-identical(매개변수명만 `friday`→`as_of_date`로 일반화). `tests/test_stage_backfill.py`가 `jobs.stage_backfill.build_row`를 직접 import하므로 facade 패턴으로 재수출.
+4. 부수 정리: stage_backfill.py가 `jobs._common.get_pool`을 이미 import해두고도 동일 내용으로 로컬 재정의해 shadow하던 죽은 코드 삭제.
+
+**범위 제외(judgment call 필요)**: ThreadPoolExecutor 프리페치 스켈레톤(예외처리 유무가 다름), `load_flow_range`(윈도우 상한 유무가 다름) — 둘 다 "같은 목적, 다른 안전장치"라 강제 통합 전 정책 결정 필요. 위 향후 로드맵 표에 남김.
+
+검증: AST 비교로 `build_row`/`load_listed_shares` 로직 무변화 확인, 두 백필 CLI `--help` 스모크, `test_stage_backfill.py` 19 passed, 전체 pytest 793 passed(신규 실패 0).
+
 ---
 
 ## 향후 로드맵
@@ -89,12 +106,17 @@
 | 가격 조회 로직 통합 | `common._fetch_current_prices`(paper, 배치+캐시, KR-only)와 `routers_portfolio._get_current_prices`(portfolio, DB우선+폴백, KR+US)를 하나로 — 통합하려면 pool 파라미터·US 분기·캐시 키 분리 등 **새 로직 작성 필요**(순수 이동 아님) | 둘 다 현재 테스트 커버리지 0 — 통합 전 회귀 테스트부터 작성 권장 | M(기능 작업) |
 | 나머지 krx_listings 패턴 조정 | `_STAGE_QUERY`(섹터 해석 superset), `_UNIFIED_TAIL`(4단계 폴백), `routers_paper.py`의 "krx_listings 항상 비어있음" 예외 주석(전제 재확인 필요) | 각각 실제 동작이 달라 case-by-case 판단 필요 | S~M |
 
-### Phase F — 백필 플러밍 통합
+### Phase F — 백필 플러밍 통합 — ✅ 완료 (범위 재조정)
 
-stage_backfill(421줄)·screener_backfill(351줄)은 분류 알고리즘 자체는 라이브 잡과 공유한다(`classify_stage_v15`/`chart_screener` — single source of truth 유지됨). 중복은 오케스트레이션 계층: OHLCV fetch, ThreadPoolExecutor prefetch 루프, ISO-week 슬라이싱(`iso_fridays`/`slice_until`/`week_of_to_monday`), flow/listed-shares 벌크 로드. 이를 공용 모듈로 통합.
+위 완료 기록 참조. 원래 가정("두 백필 스크립트 간 중복")은 탐색 결과 대부분 false lead였음 — 실제 중복은 stage_backfill.py와 라이브 stage_job.py 사이에 있었고, 그 부분만 `jobs/stage_shared.py`로 추출 완료.
 
-- 제약: 두 파일 모두 standalone CLI(argparse), `test_stage_backfill.py`가 stage_backfill을 직접 테스트.
-- Effort: M
+남은 항목(judgment call 필요, 순수 이동 아님):
+
+| 항목 | What | 제약 | Effort |
+|---|---|---|---|
+| ThreadPoolExecutor 프리페치 통합 | `batch_fetch_ohlcv`(stage_backfill, 예외처리 없음)와 `prefetch_all`(screener_backfill, try/except 있음)의 스켈레톤은 동일하지만 안전장치 유무가 다름 | 통합하려면 안전장치 정책을 먼저 통일해야 함 | S |
+| `load_flow_range` 윈도우 정책 통일 | stage_backfill(상한 있음, try/except 없음) vs stage_job(상한 없음, try/except 있음) — SQL은 근접 동일 | 상한 추가가 실질적 영향 없어 보이지만 검증 필요 | S |
+| OHLCV fetch cadence | 일봉(daily/60d) vs 주봉(3y/1wk) — 의도적으로 다른 그레인이라 통합 대상 아님 | 통합 시도하지 말 것 | — |
 
 ### Phase G — run_scheduler.py 분해 (최후순위 · 최고위험)
 
