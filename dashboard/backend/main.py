@@ -13,7 +13,9 @@ dashboard/backend/main.py
   routers_history    — /api/history/* (stage/screener/ticker)
   routers_macro      — /api/macro, /api/market_index
   routers_feedback   — /api/feedback, /api/auth/me
-  routers_portfolio  — /api/portfolio*, /api/ticker/lookup, /api/dart/summary
+  routers_portfolio  — /api/portfolio*
+  routers_ticker     — /api/ticker/lookup
+  routers_dart       — /api/dart/summary
 공용 계층: common.py(캘린더·SWR 캐시·스레드 풀), market_snap.py(Kiwoom 시세 소스)
 
 개발: uvicorn main:app --reload --port 8000
@@ -269,6 +271,7 @@ app.add_middleware(_BasicAuthMiddleware)
 # ── 라우터 등록 ──────────────────────────────────────────────
 # 의존 방향: routers_* → common/market_snap/database/core.*/data.*/analysis.*
 # 라우터는 main과 서로를 import하지 않음. main만 라우터를 import.
+import routers_dart  # noqa: E402
 import routers_feedback  # noqa: E402
 import routers_heatmap  # noqa: E402
 import routers_history  # noqa: E402
@@ -278,8 +281,10 @@ import routers_portfolio  # noqa: E402
 import routers_report  # noqa: E402
 import routers_scheduler  # noqa: E402
 import routers_signals  # noqa: E402
+import routers_ticker  # noqa: E402
 import routers_top  # noqa: E402
 import routers_youtube  # noqa: E402
+app.include_router(routers_dart.router)
 app.include_router(routers_feedback.router)
 app.include_router(routers_heatmap.router)
 app.include_router(routers_history.router)
@@ -289,6 +294,7 @@ app.include_router(routers_portfolio.router)
 app.include_router(routers_report.router)
 app.include_router(routers_scheduler.router)
 app.include_router(routers_signals.router)
+app.include_router(routers_ticker.router)
 app.include_router(routers_top.router)
 app.include_router(routers_youtube.router)
 
@@ -310,11 +316,11 @@ from routers_youtube import get_youtube_screener  # noqa: E402,F401
 from routers_portfolio import (  # noqa: E402,F401
     add_holding,
     delete_holding,
-    get_dart_summary,
     get_portfolio,
-    lookup_ticker,
     update_holding,
 )
+from routers_ticker import lookup_ticker  # noqa: E402,F401
+from routers_dart import get_dart_summary  # noqa: E402,F401
 from routers_paper import (  # noqa: E402,F401
     get_paper_curve,
     get_paper_export,

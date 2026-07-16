@@ -1,20 +1,19 @@
 """
 dashboard/backend/routers_portfolio.py
-수동 포트폴리오 + 종목코드 조회 + DART 요약 라우터.
+수동 포트폴리오 라우터.
 
   GET    /api/portfolio                        — 보유 종목 평가 (admin/special)
   POST   /api/portfolio/holdings               — 종목 추가 (admin)
   PUT    /api/portfolio/holdings/{holding_id}  — 종목 수정 (admin)
   DELETE /api/portfolio/holdings/{holding_id}  — 종목 삭제 (admin)
-  GET    /api/ticker/lookup                    — 종목코드 → 종목명
-  GET    /api/dart/summary/{ticker}            — DART 최신 재무요약
+
+종목코드 조회는 routers_ticker.py, DART 요약은 routers_dart.py로 분리됨.
 
 의존 방향: routers_* → common/database/core.*/data.* 만 허용 (main import 금지).
 """
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time as _time_module
 
@@ -290,133 +289,3 @@ async def delete_holding(request: Request, holding_id: int):
         )
     if result == "DELETE 0":
         raise HTTPException(status_code=404, detail="해당 종목을 찾을 수 없습니다")
-
-
-# ── GET /api/ticker/lookup ─────────────────────────────────────
-@router.get("/api/ticker/lookup")
-async def lookup_ticker(q: str):
-    """종목코드로 종목명 조회.
-
-    한국주식: 6자리 숫자 → DB(ticker_names → krx_listings) → Yahoo Finance
-    미국주식: 영문 티커 → Yahoo Finance 검색
-    """
-    q = q.strip().upper()
-    if not q or len(q) > 20:
-        raise HTTPException(status_code=400, detail="올바른 종목코드를 입력하세요")
-
-    is_kr = q.isdigit()
-
-    if is_kr:
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT name_ko FROM ticker_names WHERE ticker LIKE $1 LIMIT 1",
-                q + ".%",
-            )
-            if row and row["name_ko"]:
-                return {"ticker": q, "name": row["name_ko"], "market": "KR"}
-            row2 = await conn.fetchrow(
-                "SELECT name_ko FROM krx_listings WHERE yfinance_symbol LIKE $1 LIMIT 1",
-                q + ".%",
-            )
-            if row2 and row2["name_ko"]:
-                return {"ticker": q, "name": row2["name_ko"], "market": "KR"}
-
-    # Yahoo Finance 검색 (한국·미국 공통 폴백)
-    market = "KR" if is_kr else "US"
-    search_symbols = ([q + ".KS", q + ".KQ"] if is_kr else [q])
-
-    async def _yf_search() -> str | None:
-        import httpx
-        for sym in search_symbols:
-            url = (
-                f"https://query1.finance.yahoo.com/v1/finance/search"
-                f"?q={sym}&quotesCount=5&newsCount=0&enableFuzzyQuery=false"
-            )
-            try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    r = await client.get(
-                        url,
-                        headers={"User-Agent": "Mozilla/5.0"},
-                    )
-                    if r.status_code != 200:
-                        continue
-                    for quote in r.json().get("quotes", []):
-                        symbol = quote.get("symbol", "")
-                        matched = (
-                            symbol.startswith(q + ".") if is_kr else symbol.upper() == q
-                        )
-                        if matched:
-                            name = quote.get("longname") or quote.get("shortname")
-                            if name:
-                                return name
-            except Exception:
-                continue
-        return None
-
-    try:
-        name = await asyncio.wait_for(_yf_search(), timeout=9.0)
-        if name:
-            return {"ticker": q, "name": name, "market": market}
-    except (asyncio.TimeoutError, Exception):
-        pass
-
-    raise HTTPException(status_code=404, detail="종목을 찾을 수 없습니다")
-
-
-# ── GET /api/dart/summary/{ticker} ───────────────────────────
-@router.get("/api/dart/summary/{ticker}")
-async def get_dart_summary(ticker: str):
-    """DART 재무 현황 — 최신 보고서 기준 매출/영업이익/사업부문.
-
-    ticker: yfinance 형식 (005930.KS, 005930.KQ)
-    dart_companies.stock_code(6자리)와 매핑 후 가장 최근 추출 결과 반환.
-    응답: {data: {corp_name, period, report_type, extracted_at, revenue, segments}}
-    """
-    stock_code = ticker.split(".")[0]
-    if not stock_code.isdigit() or len(stock_code) != 6:
-        return {"data": None}
-
-    pool = await get_pool()
-    try:
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT de.corp_name, de.period, de.report_type, de.extracted_at,
-                       de.revenue_json, de.segments_json
-                FROM   dart_extractions de
-                JOIN   dart_companies dc ON dc.corp_name = de.corp_name
-                WHERE  dc.stock_code = $1
-                  AND  de.revenue_json IS NOT NULL
-                ORDER  BY de.period DESC
-                LIMIT  1
-                """,
-                stock_code,
-            )
-    except Exception as e:
-        logger.warning("[dart/summary] DB 조회 실패 (%s): %s", ticker, e)
-        return {"data": None}
-
-    if not row:
-        return {"data": None}
-
-    def _parse(v):
-        if v is None:
-            return None
-        if isinstance(v, (dict, list)):
-            return v
-        try:
-            return json.loads(v)
-        except Exception:
-            return None
-
-    return {
-        "data": {
-            "corp_name":   row["corp_name"],
-            "period":      row["period"],
-            "report_type": row["report_type"],
-            "extracted_at": str(row["extracted_at"]) if row["extracted_at"] else None,
-            "revenue":     _parse(row["revenue_json"]),
-            "segments":    _parse(row["segments_json"]),
-        }
-    }
