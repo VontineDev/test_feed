@@ -35,35 +35,23 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance as yf
-from dotenv import load_dotenv
 
-# 프로젝트 루트를 sys.path에 추가
+# 프로젝트 루트를 sys.path에 추가 (jobs._common을 import하려면 선행 필요)
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-load_dotenv(os.path.join(ROOT, ".env"))
+from jobs._common import bootstrap, get_pool
+
+bootstrap(ROOT)
 
 import asyncpg
 
 from analysis.chart_screener import ScreenResult, calc_ichimoku, get_all_tickers, fetch_kind_sector_map
 from core.db import save_chart_signals
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
 logger = logging.getLogger(__name__)
 
 _KST = ZoneInfo("Asia/Seoul")
-
-
-# ── DB 연결 ────────────────────────────────────────────────────
-async def get_pool() -> asyncpg.Pool:
-    # core.db.create_pool 사용 (2026-07 Phase B): DATABASE_URL 지원과
-    # statement_cache_size=0(PgBouncer 호환)을 얻음. 풀 사이즈는 기존값 유지.
-    from core.db import create_pool
-    return await create_pool(min_size=2, max_size=5)
 
 
 # ── 누락 주차 탐지 ─────────────────────────────────────────────

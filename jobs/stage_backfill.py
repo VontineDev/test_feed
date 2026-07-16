@@ -58,13 +58,14 @@ from typing import Optional
 
 import pandas as pd
 import yfinance as yf
-from dotenv import load_dotenv
 
-# 프로젝트 루트를 sys.path에 추가
+# 프로젝트 루트를 sys.path에 추가 (jobs._common을 import하려면 선행 필요)
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-load_dotenv(os.path.join(ROOT, ".env"))
+from jobs._common import bootstrap, get_pool
+
+bootstrap(ROOT)
 
 import asyncpg
 
@@ -77,11 +78,6 @@ from core.db import (
     save_stage_classifications, get_stage1_history, get_stage2_history,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
 logger = logging.getLogger(__name__)
 
 # classify_stage가 안정적으로 동작하려면 최소 일봉 수 (MA60 + 여유).
