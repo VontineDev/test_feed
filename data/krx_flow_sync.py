@@ -333,7 +333,7 @@ class _KrxDirectFetcher:
             # 검사가 이 케이스에는 절대 도달하지 못하고 매 종목 DEBUG로만 조용히
             # 묻혀 세션 만료를 알아채기 어려웠다. 예외에 담긴 응답 바디를 직접 확인.
             body = getattr(resp, "content", b"") if resp is not None else b""
-            if status == 403 and _tor_new_identity():
+            if status == 403 and new_identity():
                 logger.info("[krx-direct] 403 감지 — Tor 새 회로 요청 후 재시도 (%s)", krx_code)
                 _time.sleep(3)  # 새 회로 안정화 대기
                 try:
@@ -398,7 +398,7 @@ class _KrxDirectFetcher:
             all_rows.extend(chunk_rows)
             chunk_start = chunk_end + timedelta(days=1)
             if rate_delay > 0 and chunk_start <= end:
-                _time.sleep(_jittered_delay(rate_delay))
+                _time.sleep(jittered_delay(rate_delay))
 
         if not all_rows:
             return []
@@ -440,7 +440,7 @@ class _KrxDirectFetcher:
 
         # 마지막 청크 이후 딜레이
         if rate_delay > 0:
-            _time.sleep(_jittered_delay(rate_delay))
+            _time.sleep(jittered_delay(rate_delay))
 
         return records
 
@@ -456,13 +456,6 @@ def _parse_int(s: str) -> Optional[int]:
         return int(float(s))
     except ValueError:
         return None
-
-
-# core/tor.py로 이동 (2026-07 리팩토링 Phase A) — 기존 이름 유지:
-# 테스트가 data.krx_flow_sync._tor_new_identity를 import/patch하고,
-# fetch_raw/_handle_possible_expiry가 모듈 전역으로 참조한다.
-_jittered_delay = jittered_delay
-_tor_new_identity = new_identity
 
 
 def _make_krx_direct(
@@ -903,11 +896,6 @@ def _already_loaded(existing: set, start: date, end: date) -> bool:
     return len(existing) >= max(1, expected * 0.9)
 
 
-# core/dates.py로 이동 (2026-07 리팩토링 Phase A) — 기존 이름 유지:
-# 테스트가 data.krx_flow_sync._last_trading_day를 import한다.
-_last_trading_day = last_trading_day
-
-
 # 연속 빈 응답 N건 → 세션 만료 의심 → Samsung 프로브로 확인
 _SESSION_EXPIRY_THRESHOLD = 5
 
@@ -952,7 +940,7 @@ async def _handle_possible_expiry(
     # 한 번 더 확인 (쿠키는 그대로 유지, IP만 변경).
     # 주의: KRX_SESSION 쿠키가 발급 IP에 묶여 있을 가능성이 있어 이 시도가
     # 항상 성공하진 않는다 — 실패하면 그대로 아래 재로그인/수동 갱신 대기로 넘어간다.
-    if _tor_new_identity():
+    if new_identity():
         logger.info("[flow] Tor 회로 로테이션 후 세션 재확인...")
         await asyncio.sleep(3)
         probe_rows2 = await loop.run_in_executor(
@@ -1243,7 +1231,7 @@ async def main() -> None:
     yesterday = date.today() - timedelta(days=1)
 
     if args.incremental:
-        start = end = _last_trading_day(date.today())
+        start = end = last_trading_day(date.today())
     else:
         end   = date.fromisoformat(args.end)   if args.end   else yesterday
         start = date.fromisoformat(args.start) if args.start else end - timedelta(days=730)

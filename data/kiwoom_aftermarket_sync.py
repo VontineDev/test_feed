@@ -693,11 +693,6 @@ def already_loaded(dsn: str, trade_date: date) -> bool:
         conn.close()
 
 
-# ── 날짜 헬퍼 ────────────────────────────────────────────────────
-# core/dates.py의 last_trading_day와 동일 로직이라 통합 (2026-07 Phase A)
-_prev_business_day = last_trading_day
-
-
 # ── probe: 응답 구조 출력 ─────────────────────────────────────────
 
 def probe(client: KiwoomClient) -> None:
@@ -809,7 +804,7 @@ def main() -> None:
     if args.trade_date:
         trade_date = date.fromisoformat(args.trade_date)
     elif args.incremental:
-        trade_date = _prev_business_day(date.today())
+        trade_date = last_trading_day(date.today())
     else:
         trade_date = date.today()
 

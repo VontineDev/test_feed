@@ -1,9 +1,4 @@
-"""core/dates.py — last_trading_day 주말 보정 테스트.
-
-기존 test_krx_flow_sync.py / test_chart_screener.py의 동명 테스트는
-각 모듈의 별칭(_last_trading_day)이 살아있는지 회귀 확인용으로 유지되고,
-여기는 canonical 구현을 직접 검증한다.
-"""
+"""core/dates.py — last_trading_day 주말 보정 테스트."""
 
 from __future__ import annotations
 
@@ -36,19 +31,3 @@ class TestLastTradingDay:
         for offset in range(60):
             today = d + timedelta(days=offset)
             assert last_trading_day(today) < today
-
-
-class TestAliasesStillResolve:
-    """이관 후에도 기존 모듈 별칭이 canonical과 동일 객체인지."""
-
-    def test_krx_flow_sync_alias(self):
-        from data.krx_flow_sync import _last_trading_day
-        assert _last_trading_day is last_trading_day
-
-    def test_chart_screener_alias(self):
-        from analysis.chart_screener import _last_trading_day
-        assert _last_trading_day is last_trading_day
-
-    def test_kiwoom_aftermarket_alias(self):
-        from data.kiwoom_aftermarket_sync import _prev_business_day
-        assert _prev_business_day is last_trading_day

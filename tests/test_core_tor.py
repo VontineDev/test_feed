@@ -1,9 +1,4 @@
-"""core/tor.py — NEWNYM/지터 공용 헬퍼 테스트.
-
-행동 계약은 test_krx_flow_sync.py의 TestJitteredDelay/TestTorNewIdentity에서
-별칭 경유로도 검증된다. 여기는 canonical 구현과 send_newnym(예외 전파
-버전)의 계약을 직접 확인한다.
-"""
+"""core/tor.py — NEWNYM/지터 공용 헬퍼 테스트."""
 
 from __future__ import annotations
 
@@ -69,10 +64,3 @@ class TestNewIdentity:
         import stem
         with patch("stem.control.Controller.from_port", side_effect=stem.SocketError("refused")):
             assert new_identity() is False
-
-
-class TestAliasesStillResolve:
-    def test_krx_flow_sync_aliases(self):
-        from data.krx_flow_sync import _jittered_delay, _tor_new_identity
-        assert _jittered_delay is jittered_delay
-        assert _tor_new_identity is new_identity

@@ -14,17 +14,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from core.dates import last_trading_day as _last_trading_day
+from core.tor import jittered_delay as _jittered_delay, new_identity as _tor_new_identity
 from data.krx_flow_sync import (
     FlowRecord,
     _KrxDirectFetcher,
     _compute_streaks,
     _fetch_kiwoom_records,
     _handle_possible_expiry,
-    _jittered_delay,
-    _last_trading_day,
     _next_streak,
     _parse_int,
-    _tor_new_identity,
     load_csv_records,
     run_krx_direct,
 )
@@ -736,7 +735,7 @@ class TestFetchRaw403Retry:
         success_bytes = json.dumps({"output": rows}).encode("utf-8")
 
         with patch.object(fetcher, "_post", side_effect=[self._http_error(403), success_bytes]) as mock_post, \
-             patch("data.krx_flow_sync._tor_new_identity", return_value=True) as mock_rotate, \
+             patch("data.krx_flow_sync.new_identity", return_value=True) as mock_rotate, \
              patch("data.krx_flow_sync._time.sleep"):
             result = fetcher.fetch_raw("005930", date(2025, 1, 1), date(2025, 1, 5))
 
@@ -747,7 +746,7 @@ class TestFetchRaw403Retry:
     def test_403_with_failed_rotation_returns_empty(self):
         fetcher = _bare_fetcher()
         with patch.object(fetcher, "_post", side_effect=self._http_error(403)) as mock_post, \
-             patch("data.krx_flow_sync._tor_new_identity", return_value=False):
+             patch("data.krx_flow_sync.new_identity", return_value=False):
             result = fetcher.fetch_raw("005930", date(2025, 1, 1), date(2025, 1, 5))
 
         assert result == []
@@ -758,7 +757,7 @@ class TestFetchRaw403Retry:
         with patch.object(
             fetcher, "_post", side_effect=[self._http_error(403), self._http_error(403)]
         ) as mock_post, \
-             patch("data.krx_flow_sync._tor_new_identity", return_value=True), \
+             patch("data.krx_flow_sync.new_identity", return_value=True), \
              patch("data.krx_flow_sync._time.sleep"):
             result = fetcher.fetch_raw("005930", date(2025, 1, 1), date(2025, 1, 5))
 
@@ -769,7 +768,7 @@ class TestFetchRaw403Retry:
         """Plain connection errors (no .response) must not trigger rotation."""
         fetcher = _bare_fetcher()
         with patch.object(fetcher, "_post", side_effect=ConnectionError("down")) as mock_post, \
-             patch("data.krx_flow_sync._tor_new_identity") as mock_rotate:
+             patch("data.krx_flow_sync.new_identity") as mock_rotate:
             result = fetcher.fetch_raw("005930", date(2025, 1, 1), date(2025, 1, 5))
 
         assert result == []
@@ -780,7 +779,7 @@ class TestFetchRaw403Retry:
         """Only 403 triggers rotation — other HTTP errors shouldn't burn a circuit."""
         fetcher = _bare_fetcher()
         with patch.object(fetcher, "_post", side_effect=self._http_error(500)), \
-             patch("data.krx_flow_sync._tor_new_identity") as mock_rotate:
+             patch("data.krx_flow_sync.new_identity") as mock_rotate:
             result = fetcher.fetch_raw("005930", date(2025, 1, 1), date(2025, 1, 5))
 
         assert result == []
@@ -862,7 +861,7 @@ class TestHandlePossibleExpiry:
         fetcher._session_wait_exhausted = False
         rows = [{"TRD_DD": "20250103", "TRDVAL1": "100"}]
         with patch.object(fetcher, "fetch_raw", side_effect=[[], rows]), \
-             patch("data.krx_flow_sync._tor_new_identity", return_value=True), \
+             patch("data.krx_flow_sync.new_identity", return_value=True), \
              patch("asyncio.sleep", new=AsyncMock()):
             result = await _handle_possible_expiry(fetcher, consecutive_empty=5)
         assert result is True
@@ -878,7 +877,7 @@ class TestHandlePossibleExpiry:
         rows = [{"TRD_DD": "20250103", "TRDVAL1": "100"}]
         with patch.object(fetcher, "fetch_raw", side_effect=[[], rows]), \
              patch.object(fetcher, "login", return_value=True) as mock_login, \
-             patch("data.krx_flow_sync._tor_new_identity", return_value=False), \
+             patch("data.krx_flow_sync.new_identity", return_value=False), \
              patch("asyncio.sleep", new=AsyncMock()):
             result = await _handle_possible_expiry(
                 fetcher, consecutive_empty=5, krx_id="testuser", krx_pw="testpw"
@@ -895,7 +894,7 @@ class TestHandlePossibleExpiry:
         fetcher._session_wait_exhausted = False
         with patch.object(fetcher, "fetch_raw", return_value=[]), \
              patch.object(fetcher, "login") as mock_login, \
-             patch("data.krx_flow_sync._tor_new_identity", return_value=False), \
+             patch("data.krx_flow_sync.new_identity", return_value=False), \
              patch("asyncio.sleep", new=AsyncMock()), \
              patch("data.krx_flow_sync.refresh_env"):
             result = await _handle_possible_expiry(
@@ -914,7 +913,7 @@ class TestHandlePossibleExpiry:
         fetcher._session_wait_exhausted = False
         with patch.object(fetcher, "fetch_raw", return_value=[]), \
              patch.object(fetcher, "login", return_value=False), \
-             patch("data.krx_flow_sync._tor_new_identity", return_value=False), \
+             patch("data.krx_flow_sync.new_identity", return_value=False), \
              patch("asyncio.sleep", new=AsyncMock()), \
              patch("data.krx_flow_sync.refresh_env"):
             result = await _handle_possible_expiry(
@@ -932,7 +931,7 @@ class TestHandlePossibleExpiry:
         fetcher = _bare_fetcher()
         fetcher._session_wait_exhausted = False
         with patch.object(fetcher, "fetch_raw", return_value=[]), \
-             patch("data.krx_flow_sync._tor_new_identity", return_value=False), \
+             patch("data.krx_flow_sync.new_identity", return_value=False), \
              patch("asyncio.sleep", new=AsyncMock()), \
              patch("data.krx_flow_sync.refresh_env"):
             result = await _handle_possible_expiry(fetcher, consecutive_empty=5)
@@ -955,7 +954,7 @@ class TestHandlePossibleExpiry:
 
         with patch.object(fetcher, "fetch_raw", return_value=[]), \
              patch.object(fetcher, "inject_session") as mock_inject, \
-             patch("data.krx_flow_sync._tor_new_identity", return_value=False), \
+             patch("data.krx_flow_sync.new_identity", return_value=False), \
              patch("asyncio.sleep", new=AsyncMock()), \
              patch("data.krx_flow_sync.refresh_env", side_effect=fake_refresh_env):
             result = await _handle_possible_expiry(fetcher, consecutive_empty=5)

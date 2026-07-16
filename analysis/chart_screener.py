@@ -117,11 +117,6 @@ def fetch_kind_sector_map() -> dict[str, str]:
 
 
 # ── 티커 목록 ──────────────────────────────────────────────────
-# core/dates.py로 이동 (2026-07 리팩토링 Phase A) — 기존 이름 유지:
-# 테스트가 analysis.chart_screener._last_trading_day를 import한다.
-_last_trading_day = last_trading_day
-
-
 def get_all_tickers(sector_map: dict[str, str] | None = None) -> list[tuple[str, str, str]]:
     """KOSPI + KOSDAQ 전 종목 티커 조회.
 
@@ -138,7 +133,7 @@ def get_all_tickers(sector_map: dict[str, str] | None = None) -> list[tuple[str,
     if os.environ.get("KRX_OPENAPI_KEY"):
         try:
             from data.krx_openapi import KRXOpenAPIClient
-            bas_dd = _last_trading_day(_date.today()).strftime("%Y%m%d")
+            bas_dd = last_trading_day(_date.today()).strftime("%Y%m%d")
             client = KRXOpenAPIClient()
             tickers = client.get_all_tickers(bas_dd)
             # sector 정보는 KRX Open API에 없음 — sector_map으로 보완

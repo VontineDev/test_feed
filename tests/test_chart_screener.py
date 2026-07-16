@@ -20,12 +20,12 @@ from unittest.mock import patch
 
 from datetime import date
 
+from core.dates import last_trading_day as _last_trading_day
 from analysis.chart_screener import (
     screen_ticker,
     calc_ichimoku,
     current_week_of,
     ScreenResult,
-    _last_trading_day,
 )
 
 
