@@ -1,22 +1,20 @@
 """
 dashboard/backend/main.py
-웹 대시보드 FastAPI 앱 — 12 엔드포인트 + React dist 서빙.
+웹 대시보드 FastAPI 앱 — 앱 조립(미들웨어·lifespan·warmup·health) + React dist 서빙.
 
-엔드포인트:
-  GET  /api/heatmap              — Stage 색상 히트맵 데이터 (5분 캐시)
-  GET  /api/positions            — paper_positions 미실현 수익률
-  GET  /api/signals/stream       — SSE 신호 라이브 피드
-  POST /api/scheduler/trigger    — 스케줄러 잡 수동 트리거
-  GET  /api/scheduler/stream     — SSE 스케줄러 상태 스트림
-  GET  /api/report/stage         — Stage 분류 결과 (최신일)
-  GET  /api/report/screener      — 차트 스크리너 결과 (최신주)
-  GET  /api/report/paper         — 모의투자 포지션
-  GET  /api/top                  — 당일 거래대금 상위 N 종목 (Kiwoom, 5분 캐시)
-  GET  /api/history/stage        — 기간별 Stage 분류 집계 (이력 트래킹)
-  GET  /api/history/screener     — 기간별 스크리너 집계 (이력 트래킹)
-  GET  /api/history/ticker/{t}   — 종목별 Stage+스크리너 이력
-  GET  /api/dart/summary/{t}    — DART 최신 보고서 재무요약 (매출/영업이익/사업부문)
-  POST /api/feedback             — 피드백 텍스트+스크린샷 → Telegram 전송
+라우트는 라우터 모듈로 분리됨 (2026-07 리팩토링, 총 30 엔드포인트):
+  routers_heatmap    — /api/heatmap, /api/positions
+  routers_signals    — /api/signals/stream (SSE)
+  routers_scheduler  — /api/scheduler/* (trigger/status/stream)
+  routers_report     — /api/report/* (stage/screener/pipeline-status/unified/paper)
+  routers_youtube    — /api/youtube/screener
+  routers_top        — /api/top
+  routers_paper      — /api/paper/* (history/curve/export)
+  routers_history    — /api/history/* (stage/screener/ticker)
+  routers_macro      — /api/macro, /api/market_index
+  routers_feedback   — /api/feedback, /api/auth/me
+  routers_portfolio  — /api/portfolio*, /api/ticker/lookup, /api/dart/summary
+공용 계층: common.py(캘린더·SWR 캐시·스레드 풀), market_snap.py(Kiwoom 시세 소스)
 
 개발: uvicorn main:app --reload --port 8000
 프로덕션: npm run build → FastAPI가 ../frontend/dist 서빙
@@ -25,22 +23,17 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import logging
 import os
 import secrets
 import time as _time_module
 from contextlib import asynccontextmanager
-from datetime import date, datetime, time, timedelta
-from zoneinfo import ZoneInfo
 from pathlib import Path
-from typing import AsyncGenerator
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from database import close_pool, get_pool
@@ -67,7 +60,7 @@ from common import (  # noqa: F401 — 공용 인프라 (재수출 겸용)
 import sys as _sys
 _sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from core.db import upsert_ticker_names as _upsert_ticker_names  # noqa: E402
-from data.kiwoom_aftermarket_sync import KiwoomClient, _parse_int, _parse_float, _VALUE_UNIT  # noqa: E402
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -274,7 +267,8 @@ class _BasicAuthMiddleware(BaseHTTPMiddleware):
 app.add_middleware(_BasicAuthMiddleware)
 
 # ── 라우터 등록 ──────────────────────────────────────────────
-# 라우터 모듈은 common/database/core.*만 의존 — main을 import하지 않음.
+# 의존 방향: routers_* → common/market_snap/database/core.*/data.*/analysis.*
+# 라우터는 main과 서로를 import하지 않음. main만 라우터를 import.
 import routers_feedback  # noqa: E402
 import routers_heatmap  # noqa: E402
 import routers_history  # noqa: E402
