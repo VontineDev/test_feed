@@ -47,7 +47,9 @@ def _load_dotenv():
 def test_compose_and_reproduces_cross():
     _load_dotenv()
     from core.db import get_dsn
-    from analysis.backtest_engine import BacktestConfig, run_backtest, _week_label
+    from analysis.backtest.models import BacktestConfig
+    from analysis.backtest.engine import run_backtest
+    from analysis.backtest.helpers import _week_label
     from analysis.chart_screener import get_all_tickers
     from analysis import strategy_compose as sc
 

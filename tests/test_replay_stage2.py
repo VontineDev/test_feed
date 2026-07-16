@@ -18,11 +18,8 @@ from typing import Optional
 import pandas as pd
 import pytest
 
-from analysis.backtest_engine import (
-    BacktestConfig,
-    SignalRecord,
-    _replay_stage2,
-)
+from analysis.backtest.models import BacktestConfig, SignalRecord
+from analysis.backtest.replay import _replay_stage2
 
 # ── 합성 데이터 헬퍼 ──────────────────────────────────────────────
 

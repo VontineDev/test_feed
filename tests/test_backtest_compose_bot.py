@@ -67,8 +67,8 @@ async def test_backtest_non_compose_not_routed():
             mock_lock.__aenter__ = AsyncMock(return_value=None)
             mock_lock.__aexit__ = AsyncMock(return_value=None)
             with patch("telegram.telegram_bot._send_plain", new_callable=AsyncMock):
-                with patch("analysis.backtest_engine.BacktestConfig"), \
-                     patch("analysis.backtest_engine.run_backtest", return_value=MagicMock(
+                with patch("analysis.backtest.models.BacktestConfig"), \
+                     patch("analysis.backtest.engine.run_backtest", return_value=MagicMock(
                          to_telegram_report=lambda: "ok",
                          to_html_report=lambda p: None,
                          top_bottom_telegram_text=lambda n: "",
@@ -131,8 +131,8 @@ async def test_compose_single_strategy_sends_report():
 
     with patch("core.db.get_dsn", return_value="postgresql://test"), \
          patch("telegram.telegram_bot._backtest_lock") as mock_lock, \
-         patch("analysis.backtest_engine.BacktestConfig"), \
-         patch("analysis.backtest_engine.run_backtest", return_value=fake_result):
+         patch("analysis.backtest.models.BacktestConfig"), \
+         patch("analysis.backtest.engine.run_backtest", return_value=fake_result):
 
         mock_lock.locked.return_value = False
         mock_lock.__aenter__ = AsyncMock(return_value=None)
@@ -179,8 +179,8 @@ async def test_compose_all_strategy_sends_table():
 
     with patch("core.db.get_dsn", return_value="postgresql://test"), \
          patch("telegram.telegram_bot._backtest_lock") as mock_lock, \
-         patch("analysis.backtest_engine.BacktestConfig"), \
-         patch("analysis.backtest_engine.run_backtest", side_effect=_fake_run), \
+         patch("analysis.backtest.models.BacktestConfig"), \
+         patch("analysis.backtest.engine.run_backtest", side_effect=_fake_run), \
          patch("analysis.strategy_compose.STRATEGIES", results_by_strategy):
 
         mock_lock.locked.return_value = False

@@ -65,7 +65,8 @@ def _val(v, dp=2):
 
 
 def _run_one(strategy: str, start: date, end: date, market: str, workers: int, dsn: str):
-    from analysis.backtest_engine import BacktestConfig, run_backtest
+    from analysis.backtest.models import BacktestConfig
+    from analysis.backtest.engine import run_backtest
     cfg = BacktestConfig(
         mode="compose",
         strategy=strategy,

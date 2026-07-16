@@ -65,10 +65,10 @@ def _build_shared_data(start: date, end: date, max_tickers: int, dsn: str):
     """
     from datetime import timedelta as _td
 
-    from analysis.backtest_engine import (
-        BacktestConfig, _build_price_lookup, _fetch_index, _fetch_single_ohlcv,
-        _replay_stage_v13,
-    )
+    from analysis.backtest.models import BacktestConfig
+    from analysis.backtest.helpers import _build_price_lookup
+    from analysis.backtest.fetch import _fetch_index, _fetch_single_ohlcv
+    from analysis.backtest.replay import _replay_stage_v13
     from analysis.chart_screener import fetch_kind_sector_map, get_all_tickers
     from core.ohlcv_cache import (
         batch_fetch_cached, fetch_index_cached, load_flow_data,
@@ -136,10 +136,10 @@ def run_one(label: str, params: dict, shared: dict) -> dict:
     import copy
     from dataclasses import replace as dc_replace
 
-    from analysis.backtest_engine import (
-        _build_price_lookup, _compute_group_metrics, _compute_sell_signals_and_s2,
-        _fill_returns,
+    from analysis.backtest.helpers import (
+        _build_price_lookup, _compute_group_metrics, _fill_returns,
     )
+    from analysis.backtest.exit_models import _compute_sell_signals_and_s2
 
     cfg     = dc_replace(shared["base_cfg"], **params)
     signals = copy.deepcopy(shared["base_signals"])

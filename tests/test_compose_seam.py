@@ -11,7 +11,8 @@ from datetime import date
 
 import pytest
 
-from analysis.backtest_engine import BacktestConfig, _entry_on_or_after
+from analysis.backtest.models import BacktestConfig
+from analysis.backtest.helpers import _entry_on_or_after
 
 
 class TestComposeConfigValidation:

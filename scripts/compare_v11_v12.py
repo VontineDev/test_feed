@@ -47,7 +47,8 @@ def _metrics_from_result(result) -> dict:
 
 
 def run_one(mode: str, start: date, end: date, max_tickers: int, dsn: str) -> dict:
-    from analysis.backtest_engine import BacktestConfig, run_backtest
+    from analysis.backtest.models import BacktestConfig
+    from analysis.backtest.engine import run_backtest
     cfg = BacktestConfig(
         mode=mode,
         start=start,

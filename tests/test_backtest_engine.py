@@ -13,28 +13,24 @@ from typing import Optional
 import pandas as pd
 import pytest
 
-from analysis.backtest_engine import (
-    BacktestConfig,
-    BacktestResult,
-    GroupMetrics,
-    SignalRecord,
-    TX_COST_DEFAULT,
-    _STOP_LOSS_PCT,
-    _apply_cross_filter,
+from analysis.backtest.models import (
+    BacktestConfig, BacktestResult, GroupMetrics, SignalRecord,
+)
+from analysis.backtest.config import TX_COST_DEFAULT, _STOP_LOSS_PCT
+from analysis.backtest.helpers import (
     _build_price_lookup,
     _build_weekly_ichimoku,
     _compute_group_metrics,
     _compute_mdd,
     _compute_rsi,
-    _compute_sell_signals_and_s2,
     _compute_sharpe,
     _fill_returns,
     _find_ichimoku_sell,
     _nearest_price,
-    _replay_ichimoku,
-    _replay_stage,
     _week_label,
 )
+from analysis.backtest.replay import _apply_cross_filter, _replay_ichimoku, _replay_stage
+from analysis.backtest.exit_models import _compute_sell_signals_and_s2
 
 # ── BacktestConfig.hold_weeks ─────────────────────────────────────
 

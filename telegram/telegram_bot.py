@@ -371,7 +371,8 @@ async def _handle_backtest_compose(
         "완료되면 결과를 전송합니다."
     )
 
-    from analysis.backtest_engine import BacktestConfig, run_backtest
+    from analysis.backtest.models import BacktestConfig
+    from analysis.backtest.engine import run_backtest
     from analysis.strategy_compose import STRATEGIES as _STRATS
 
     async with _backtest_lock:
@@ -563,7 +564,9 @@ async def _handle_backtest(
                 pass
         i += 1
 
-    from analysis.backtest_engine import BacktestConfig, TX_COST_DEFAULT, MODE_KOR, run_backtest
+    from analysis.backtest.models import BacktestConfig
+    from analysis.backtest.config import TX_COST_DEFAULT, MODE_KOR
+    from analysis.backtest.engine import run_backtest
 
     try:
         from core.db import get_dsn as _get_dsn

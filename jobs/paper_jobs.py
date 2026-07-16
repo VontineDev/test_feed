@@ -8,7 +8,7 @@ from typing import Optional
 
 import httpx
 
-from analysis.backtest_engine import (
+from analysis.backtest.config import (
     OPTIMAL_EXIT_PARAMS          as _KOSPI_P,
     OPTIMAL_EXIT_PARAMS_KOSDAQ   as _KOSDAQ_P,
     OPTIMAL_EXIT_PARAMS_CROSS    as _CROSS_P,

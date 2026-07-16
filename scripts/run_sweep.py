@@ -121,21 +121,18 @@ def sweep_backtest(
 
     반환: DataFrame (1행 = 1 파라미터 조합)
     """
-    from analysis.backtest_engine import (
-        BacktestConfig,
-        _replay_ichimoku,
-        _replay_stage,
-        _replay_stage2,
-        _apply_cross_filter,
-        _fill_returns,
-        _build_price_lookup,
-        _compute_sell_signals_and_s2,
+    from analysis.backtest.models import BacktestConfig
+    from analysis.backtest.replay import (
+        _replay_ichimoku, _replay_stage, _replay_stage2, _apply_cross_filter,
     )
+    from analysis.backtest.helpers import _fill_returns, _build_price_lookup
+    from analysis.backtest.exit_models import _compute_sell_signals_and_s2
     from analysis.chart_screener import get_all_tickers, fetch_kind_sector_map
     from core.ohlcv_cache import batch_fetch_cached, fetch_index_cached
 
     # ── 1. 티커 목록 ───────────────────────────────────────────────
-    from analysis.backtest_engine import TX_COST_DEFAULT, _fetch_single_ohlcv, _fetch_index
+    from analysis.backtest.config import TX_COST_DEFAULT
+    from analysis.backtest.fetch import _fetch_single_ohlcv, _fetch_index
     from datetime import timedelta
 
     fetch_start = min(train_start, val_start) - timedelta(days=760)
@@ -154,7 +151,7 @@ def sweep_backtest(
         )
         kospi_df = fetch_index_cached("^KS11", "IDX", fetch_start, fetch_end, dsn, _fetch_index)
     else:
-        from analysis.backtest_engine import _batch_fetch_ohlcv
+        from analysis.backtest.fetch import _batch_fetch_ohlcv
         ticker_syms = [t for t, _, _ in tickers]
         ohlcv_map   = _batch_fetch_ohlcv(ticker_syms, fetch_start, fetch_end, workers)
         kospi_df    = _fetch_index("^KS11", fetch_start, fetch_end)
