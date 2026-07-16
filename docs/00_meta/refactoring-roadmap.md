@@ -24,6 +24,7 @@
 | 2026-07-16 | Phase D 저위험 정리 4/4 항목 완료 (아래 상세) | S+M | test_scan_cmd.py 교체 + jobs/_common.py + db_schema 분리 + 심 삭제 (5커밋) |
 | 2026-07-17 | Phase E 대시보드 백엔드 마무리 3/4 항목 완료 (아래 상세) | M | routers_portfolio 분리 + report_queries 추출 + JOIN 헬퍼 (3커밋) |
 | 2026-07-17 | Phase F 백필 플러밍 통합, 범위 재조정 후 완료 (아래 상세) | S | jobs/stage_shared.py 추출 (1커밋) |
+| 2026-07-17 | Phase G run_scheduler.py 분해, 안전한 부분만 완료 (아래 상세) | L | jobs/scheduler_collect.py + jobs/scheduler_wrappers.py 추출 (2커밋) |
 
 ### 2026-07-16 core/db.py 도메인 분리 상세
 
@@ -91,7 +92,7 @@
 
 ## 향후 로드맵
 
-우선순위·리스크 순으로 Phase D→G. 각 Phase 내 항목은 독립적이라 개별 진행 가능.
+우선순위·리스크 순으로 Phase D→G. 각 Phase 내 항목은 독립적이라 개별 진행 가능. **Phase D~G 전부 완료** — 아래는 각 Phase 진행 중 발견된, case-by-case 판단이 필요해 범위 제외한 잔여 항목들이다.
 
 ### Phase D — 저위험 정리 (워밍업) — ✅ 완료 (4/4)
 
@@ -118,19 +119,23 @@
 | `load_flow_range` 윈도우 정책 통일 | stage_backfill(상한 있음, try/except 없음) vs stage_job(상한 없음, try/except 있음) — SQL은 근접 동일 | 상한 추가가 실질적 영향 없어 보이지만 검증 필요 | S |
 | OHLCV fetch cadence | 일봉(daily/60d) vs 주봉(3y/1wk) — 의도적으로 다른 그레인이라 통합 대상 아님 | 통합 시도하지 말 것 | — |
 
-### Phase G — run_scheduler.py 분해 (최후순위 · 최고위험)
+### Phase G — run_scheduler.py 분해 (최후순위 · 최고위험) — ✅ 완료 (안전한 부분만)
 
-1,130줄 = 진입점 + 스케줄 배선 + 실비즈니스 로직 + 위임 심 혼재. 자연 분할:
+938줄로 축소(1,130→938, -192줄). 탐색 결과 전역 상태 **재할당**(global 재바인딩)이 여러 함수·모듈 경계에 걸쳐 있어 순수 이동만으로는 위험(다른 모듈로 옮긴 뒤 `from x import y`로 이름을 가져오면 재할당이 반영 안 돼 조용히 깨짐)함을 확인 — 사용자와 논의해 범위를 "안전한 부분만"으로 확정.
 
-- **collector 모듈**: FEEDS 설정, `fetch_feed`/`collect_job`, `summary_worker` (~470줄 실로직)
-- **job_wrappers 모듈**: jobs/를 lazy-import하는 1~3줄 위임 심 ~25개
-- **run_scheduler.py 잔류**: `main()`(scheduler.add_job 배선 ~30개), argparse CLI, `_trigger_watcher_job`, facade re-export
+**이동 완료:**
+- `jobs/scheduler_collect.py`(105줄): `_url_hash`/`_parse_dt`/`_fmt_date`/`_is_fresh`/`fetch_feed` + `MAX_AGE_HOURS`/`FETCH_RETRY_COUNT`/`FETCH_RETRY_DELAY` — 전역 상태 완전 무관(http/cfg 매개변수만 사용), byte-identical.
+- `jobs/scheduler_wrappers.py`(159줄): 순수 위임 잡 19개. 그중 8개(`_youtube_*`×3, `_daily_market_snap_job`, `_daily_aftermarket_sync_job`, `_daily_flow_sync_job`, `_daily_ohlcv_warm_job`, `_build_watchlist_entries`)는 전역 상태 완전 무관이라 byte-identical. 나머지 11개는 `_db_pool`/`_paper_trader`를 bare-name으로 읽어서, 함수 본문에 `import run_scheduler`(이 파일이 이미 쓰는 지연 import 스타일과 동일)를 추가하고 `run_scheduler._db_pool`/`run_scheduler._paper_trader` 속성 접근으로 전환 — 모듈은 싱글턴이라 속성 접근은 매번 최신값을 읽으므로 `main()`의 재할당이 정상 반영됨(`from run_scheduler import _db_pool` 같은 이름 import는 값을 스냅샷해서 재할당을 못 봄 — 이 프로젝트에서 처음 만난 종류의 위험).
 
-**하드 제약 (이것 때문에 마지막):**
-- Task Scheduler 진입점 — `scripts/register_tasks.ps1`·`scripts/start_crawler.bat`이 `python run_scheduler.py --interval/--incremental/--once` 실행. 파일명·플래그 불변.
-- 테스트 6개 파일이 `run_scheduler.*`를 mock.patch/직접 참조: `get_macro_context`, `_macro_cache`, `_macro_cache_ts`, `MACRO_CACHE_TTL`, `_get_macro`, `tg_send_signal`, `_screener_tickers`, `_build_watchlist_entries` → **db.py와 동일한 facade 패턴 필수**, 심볼을 옮기지 말고 re-export.
-- 모듈 전역 상태(`_seen_hashes`, `_summary_queue`, `_db_pool`, `_paper_trader`)를 collect_job/summary_worker가 공유 — 이동 시 참조 공유 의미론 주의 (재할당 금지, dashboard common.py 캐시 dict와 같은 제약).
-- Effort: L
+**run_scheduler.py에 남긴 것(전역 재할당 또는 오케스트레이션):**
+`main()`, argparse CLI, `_run_once_watchlist`/`_run_once_stage`, `collect_job`/`summary_worker`(전역상태 R/W), `_get_macro`+매크로 캐시(자기완결적, 유일한 호출자 summary_worker도 남음), `_daily_stage_job`/`_weekly_screener_job`(전역 재할당+체이닝), `_trigger_watcher_job`(DB 트랜잭션+5개 잡 디스패치 오케스트레이션).
+
+**facade**: run_scheduler.py 상단의 `from jobs.scheduler_wrappers import (...)` 19개 블록 자체가 facade 역할 — `main()`의 `scheduler.add_job(...)`과 `_trigger_watcher_job`의 디스패치가 이 이름들을 참조하려면 어차피 top-level import가 필요해 별도 재수출 코드 불필요.
+
+**검증**: AST 비교로 8개 byte-identical + 11개는 `run_scheduler.` 치환 외 무변화 확인, import/`--help` 스모크, 타깃 테스트 6개 파일(`test_macro_signal`/`test_news_gating`/`test_telegram_routing`/`test_watchlist_features`/`test_high_confidence`/`test_p3_remaining`) 76 passed, 전체 pytest 793 passed(신규 실패 0). Task Scheduler 진입점(`register_tasks.ps1`→`start_crawler.bat`→`python run_scheduler.py --interval N [--no-summary]`) 파일명·CLI 불변. **실제 스케줄러 프로세스 재시작은 이번 범위 밖** — 코드/테스트 검증까지만.
+
+**범위 제외(추가 분리하려면 공유 state 모듈 필요):**
+`_db_pool`/`_paper_trader` 재할당까지 다른 모듈로 옮기려면 `import state; state.x = ...` 패턴의 공유 state 모듈을 도입해 ~30-40군데 read/write 사이트를 전부 고쳐야 함 — 기계적이지만 광범위한 수정이라 이번 범위에서 제외. `_daily_stage_job`/`_weekly_screener_job`/`_trigger_watcher_job`/`collect_job`/`summary_worker`는 그런 이유로 run_scheduler.py에 남아있음.
 
 ### 비대상 (현상 유지)
 

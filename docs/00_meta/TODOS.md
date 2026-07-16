@@ -38,14 +38,19 @@ re-export 심을 남김.
 - `jobs/ohlcv_warm.py`의 주말 스킵 로직 — last_trading_day와 의미가 다름
   (월요일 실행 시 금요일 daily_ohlcv를 채우는 회차가 없는 잠재 커버리지 갭).
   보정 전환은 동작 변경이라 별도 fix로 판단 필요 (코드에 TODO 주석 있음).
-- 전체 9단계 계획의 나머지: 텔레그램 계층 정리, 지표/OHLCV 통합,
+- 전체 9단계 계획의 나머지: 텔레그램 계층 정리,
+  ~~지표/OHLCV 통합~~ — 완료(2026-07-17, jobs/stage_shared.py, Phase F),
   ~~대시보드 라우터 분리~~ — 완료(2026-07-16, `b591f19`~`54d5001` 7커밋),
-  stage_classifier 레거시 분리, run_scheduler 분해.
+  stage_classifier 레거시 분리,
+  ~~run_scheduler 분해~~ — 완료(2026-07-17, 안전한 부분만, Phase G).
 
 **후속(2026-07-16):** core/db.py(1,689줄) 도메인 분리 완료 — facade + 6모듈,
 `96bfb3c`~`7b31706` 5커밋. 이후의 리팩토링 후속 계획(Phase D~G: 저위험 정리 →
 대시보드 마무리 → 백필 플러밍 통합 → run_scheduler 분해)과 방법론 원칙은
 [refactoring-roadmap.md](refactoring-roadmap.md)로 이관.
+
+**최종(2026-07-17): Phase D~G 전부 완료.** 구조 리팩토링 로드맵 종료 —
+상세 기록·잔여 case-by-case 항목은 [refactoring-roadmap.md](refactoring-roadmap.md) 참조.
 
 **후속(2026-07-16, Phase D 완료):** test_scan_cmd.py 교체, jobs/_common.py
 추출, core/db_schema.py 분리, 심 마이그레이션+삭제까지 4/4 전부 완료.
