@@ -21,6 +21,7 @@
 | 2026-07-15 | Phase A~C: core/dates·tor·db_sync·env 신설, backtest_engine(3,360줄) → analysis/backtest/ 8모듈 | L | (TODOS.md P3 항목 참조) |
 | 2026-07-16 | 대시보드 백엔드 라우터 분리: main.py → routers_* 10개 + market_snap 데이터 계층 | L | `b591f19`~`54d5001` (7커밋) |
 | 2026-07-16 | core/db.py 도메인 분리 (아래 상세) | M | `96bfb3c`~`7b31706` (5커밋) |
+| 2026-07-16 | Phase D 저위험 정리 3/4 항목 (아래 상세) | S | test_scan_cmd.py 교체 + jobs/_common.py + db_schema 분리 (3커밋) |
 
 ### 2026-07-16 core/db.py 도메인 분리 상세
 
@@ -44,7 +45,16 @@
 
 **검증 결과:** pytest 826 passed(베이스라인 동일, 기존 실패 4건은 test_scan_cmd.py — 아래 Phase D 참조) / `vars(core.db)` 표면 diff 무변화(미사용 stdlib import 3개 제거만) / AST 비교 33함수 byte-identical / import 스모크 전 소비자 통과 / pyright 신규 오류 0.
 
-**의도적 보류:** `_CREATE_TABLE` DDL 메가블록 + `init_db` 분리 — 멀티스테이트먼트 DDL이 단일 implicit transaction으로 실행되는 원자성을 보존하기 위해 이번 범위에서 제외. → Phase D 항목.
+**의도적 보류:** `_CREATE_TABLE` DDL 메가블록 + `init_db` 분리 — 멀티스테이트먼트 DDL이 단일 implicit transaction으로 실행되는 원자성을 보존하기 위해 이번 범위에서 제외. → Phase D 항목(아래에서 완료).
+
+### 2026-07-16 Phase D 저위험 정리 (3/4 완료)
+
+Phase D 4개 항목 중 3개 실행, 1개는 탐색 결과 예상보다 범위가 커서 디스코프(아래 로드맵 참조).
+
+1. **test_scan_cmd.py → test_run_screener_cmd.py**: `_handle_scan`은 완전히 죽은 심볼(리포 전체에서 이 파일 4곳 외 참조 없음, 스위트의 유일한 실패 4건이었음). 동일한 4개 시나리오(no-pool/busy-lock/live-run-save/invoker-only-send)를 현재 실제 동작하는 함수(`_handle_run_screener` 가드 + `_run_screener_task` 실행, telegram_bot.py)를 대상으로 재작성. 결과: 830 passed(기존 실패 0).
+2. **jobs/_common.py 추출**: `stage_backfill.py`·`screener_backfill.py`의 byte-identical `get_pool()` + 부트스트랩 블록(load_dotenv+logging.basicConfig)을 통합. `sys.path.insert(ROOT)`만 각 파일에 남김 — `jobs` 패키지 자체를 import하려면 그 앞에 선행돼야 하는 최소 코드라 공유 모듈로 옮길 수 없었음(import 순서 제약). `ohlcv_warm.py`는 이중 용도(임포터블 job + 독립 CLI)라 범위 제외.
+3. **core/db_schema.py 분리**: `_CREATE_*` DDL 상수 7개, `_RLS_ALWAYS`/`_RLS_IF_EXISTS`, `init_db(pool)`을 byte-identical 이동(AST 비교로 검증). db.py는 get_dsn/create_pool만 남기고 facade에서 전체 재수출 — `_CREATE_TRADE_LOG` import(test_trade_integration.py), `patch("core.db.init_db")`(test_volume_integration.py) 모두 하위호환 유지.
+4. **Phase A~C 심 삭제 — 디스코프**: 탐색 결과 5개 별칭(`_last_trading_day`/`_jittered_delay`/`_tor_new_identity`/`_prev_business_day` 등)과 `analysis/backtest_engine.py` 79줄 심 전부 아직 실제 소비자가 남아있음 — 주로 테스트(`test_core_dates.py`/`test_core_tor.py`/`test_krx_flow_sync.py`/`test_chart_screener.py`의 alias-regression 테스트들), `backtest_engine`은 프로덕션 6곳(`paper_jobs.py`, `telegram_bot.py`×2, `scripts/` 4개)도. TODOS.md 자체 기준("grep으로 잔여 importer 0 확인 후 삭제")이 아직 충족되지 않아 이번 배치에서 제외 — Effort를 S→M으로 정정하고 아래 로드맵에 마이그레이션 선행 단계를 명시.
 
 ---
 
@@ -54,12 +64,11 @@
 
 ### Phase D — 저위험 정리 (워밍업)
 
+3/4 완료(위 완료 기록 참조). 남은 항목:
+
 | 항목 | What | 제약 | Effort |
 |---|---|---|---|
-| test_scan_cmd.py 정리 | 제거된 `_handle_scan`을 import하는 dead test 4건(현재 스위트의 유일한 실패). 삭제 또는 `_handle_screener`(telegram_bot.py, 동일 `_scan_lock` 가드)로 재작성 | 없음 | XS |
-| jobs/ 보일러플레이트 dedupe | stage_backfill·screener_backfill의 동일한 `get_pool()`, CLI 잡 3개(stage_backfill/screener_backfill/ohlcv_warm)의 `sys.path.insert + load_dotenv + logging.basicConfig` 삼중복 → `jobs/_common.py` | 표준 CLI 인터페이스 유지 | S |
-| core/db.py 후속: DDL 분리 | `_CREATE_TABLE` 등 DDL 상수 + init_db → `core/db_schema.py`, db.py facade에서 re-export 유지 | `_CREATE_TRADE_LOG` import 경로, init_db 런타임 호출(run_scheduler main/_run_once_*), DDL 단일 트랜잭션 원자성 | S |
-| Phase A~C 심(shim) 삭제 | TODOS.md P3 항목 그대로 — `_last_trading_day` 등 별칭, `analysis/backtest_engine.py` 79줄 심 | 스케줄러 ~1주 정상 가동 후, grep으로 잔여 importer 0 확인 | S |
+| Phase A~C 심(shim) 삭제 | 1단계(마이그레이션): `_last_trading_day`/`_jittered_delay`/`_tor_new_identity`/`_prev_business_day` 별칭을 참조하는 테스트(`test_core_dates.py`/`test_core_tor.py`/`test_krx_flow_sync.py`/`test_chart_screener.py`)를 canonical 경로(`core.dates`/`core.tor`)로 갱신. `analysis/backtest_engine.py` 심의 경우 프로덕션 6곳(`jobs/paper_jobs.py`, `telegram/telegram_bot.py`×2, `scripts/compare_exit_models.py`·`compare_v11_v12.py`·`run_compose.py`·`run_sweep.py`)과 테스트 7곳도 `analysis.backtest.*` 직접 import로 전환. 2단계(삭제): grep으로 잔여 importer 0 확인 후 심 삭제 | 스케줄러 ~1주 정상 가동 후 시작. 1단계가 끝나야 2단계 착수 가능 — 두 단계를 분리된 작업/커밋으로 진행 권장 | ~~S~~ **M** (2026-07-16 재평가: 최초 추정보다 마이그레이션 대상이 많음) |
 
 ### Phase E — 대시보드 백엔드 마무리
 

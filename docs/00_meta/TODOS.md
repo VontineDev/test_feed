@@ -19,6 +19,12 @@ re-export 심을 남김.
 - `analysis/backtest_engine.py`(79줄 순수 심) — 소비자(telegram_bot,
   paper_jobs, strategy_compose, scripts/, tests/)를 analysis.backtest.*
   직접 import로 점진 전환 후 삭제 검토.
+- **재평가(2026-07-16, Phase D 실행 중 재탐색):** 아직 둘 다 삭제 불가 —
+  5개 별칭 전부와 backtest_engine 심 전부 실제 소비자가 남아있음(별칭은
+  주로 alias-regression 테스트, backtest_engine은 프로덕션 6곳도). 최초
+  Effort 추정(S)을 M으로 정정, 마이그레이션(테스트/소비자 canonical 전환)
+  → zero-importer 재확인 → 삭제의 2단계로 분리. 상세는
+  [refactoring-roadmap.md](refactoring-roadmap.md) Phase D 참조.
 
 **범위 제외로 남긴 것:**
 - ~~`dashboard/backend/main.py:2374` psycopg2 직접 연결 → core.db_sync 미적용~~
@@ -35,6 +41,9 @@ re-export 심을 남김.
 `96bfb3c`~`7b31706` 5커밋. 이후의 리팩토링 후속 계획(Phase D~G: 저위험 정리 →
 대시보드 마무리 → 백필 플러밍 통합 → run_scheduler 분해)과 방법론 원칙은
 [refactoring-roadmap.md](refactoring-roadmap.md)로 이관.
+
+**후속(2026-07-16, Phase D 실행):** test_scan_cmd.py 교체, jobs/_common.py
+추출, core/db_schema.py 분리 3건 완료. 심 삭제만 위 재평가대로 디스코프.
 
 ---
 
