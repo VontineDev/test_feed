@@ -10,6 +10,7 @@
 - `ARCHITECTURE.md`: 시스템 아키텍처 및 전체 기술 스택 규정
 - `DESIGN.md`: 핵심 디자인 패턴 및 컴포넌트 설계 방식
 - `TODOS.md`: 현재 개발 진행 상황 및 백로그 관리
+- `refactoring-roadmap.md`: 구조 리팩토링 완료 기록(Phase A~C, 대시보드 라우터, core/db.py 분리) 및 향후 로드맵(Phase D~G)·방법론 원칙
 - `USER_MANUAL.md`: 프로그램 실행 및 조작법
 - `name-resolution.md`: 종목명 DB 조회 우선순위 및 SQL COALESCE 패턴 표준 (ticker_names → krx_listings → chart_signals → youtube_mention_raw 폴백 체인)
 - `차트분석가이드.md`: 차트 분석 개념 교육 자료 — 캔들·이평선·구름대 직관 가이드 (코드 스크리닝 조건이 아닌 배경 지식용)
