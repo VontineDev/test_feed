@@ -58,6 +58,27 @@ from core.article_fetcher import fetch_article_body
 from telegram.telegram_bot import bot_polling_loop, init_bot
 from data.market_data import MacroContext, get_macro_context, get_resolution_miss_report
 from jobs.scheduler_collect import fetch_feed, _url_hash
+from jobs.scheduler_wrappers import (
+    _build_watchlist_entries,
+    _watchlist_brief_job,
+    _daily_krx_refresh_job,
+    _youtube_narrative_sync_job,
+    _youtube_attention_score_job,
+    _youtube_forward_return_job,
+    _daily_market_snap_job,
+    _daily_aftermarket_sync_job,
+    _daily_flow_sync_job,
+    _daily_ohlcv_warm_job,
+    _sector_stats_job,
+    _daily_dart_disclosure_job,
+    _monthly_dart_xbrl_job,
+    _annual_dart_extractor_job,
+    _dart_screened_sync_job,
+    _paper_exit_checker_job,
+    _paper_eod_sampler_job,
+    _paper_open_entry_job,
+    _compose_paper_entry_job,
+)
 
 # ── 로깅 설정 ────────────────────────────────────────────────
 _LOG_DIR = Path(__file__).parent / "logs"
@@ -405,27 +426,6 @@ async def _daily_stage_job() -> None:
     await _dart_screened_sync_job()
 
 
-async def _build_watchlist_entries(pool) -> dict:
-    """워치리스트 데이터 조회·조합 — jobs/watchlist_job.py 위임."""
-    from jobs.watchlist_job import build_watchlist_entries
-    return await build_watchlist_entries(pool)
-
-
-async def _watchlist_brief_job() -> None:
-    """거래대금 워치리스트 일보 — jobs/watchlist_job.py 위임."""
-    from jobs.watchlist_job import watchlist_brief_job
-    await watchlist_brief_job(_db_pool)
-
-
-# ── 인프라 잡 ────────────────────────────────────────────────
-
-async def _daily_krx_refresh_job():
-    if not _db_pool:
-        return
-    from jobs.infra_jobs import daily_krx_refresh_job
-    await daily_krx_refresh_job(_db_pool)
-
-
 async def _weekly_screener_job():
     global _screener_tickers
     if not _db_pool:
@@ -435,111 +435,6 @@ async def _weekly_screener_job():
     _screener_tickers = await weekly_screener_job(_db_pool)
     # 스크리닝 완료 후 신규 종목 DART 분석 자동 실행
     await _dart_screened_sync_job()
-
-
-async def _youtube_narrative_sync_job():
-    from jobs.infra_jobs import youtube_narrative_sync_job
-    await youtube_narrative_sync_job()
-
-
-async def _youtube_attention_score_job():
-    from jobs.infra_jobs import youtube_attention_score_job
-    await youtube_attention_score_job()
-
-
-async def _youtube_forward_return_job():
-    from jobs.infra_jobs import youtube_forward_return_job
-    await youtube_forward_return_job()
-
-
-async def _daily_market_snap_job():
-    from jobs.infra_jobs import daily_market_snap_job
-    await daily_market_snap_job()
-
-
-async def _daily_aftermarket_sync_job():
-    from jobs.infra_jobs import daily_aftermarket_sync_job
-    await daily_aftermarket_sync_job()
-
-
-async def _daily_flow_sync_job():
-    from jobs.infra_jobs import daily_flow_sync_job
-    await daily_flow_sync_job()
-
-
-async def _daily_ohlcv_warm_job():
-    from jobs.infra_jobs import daily_ohlcv_warm_job
-    await daily_ohlcv_warm_job()
-
-
-async def _sector_stats_job():
-    from jobs.sector_stats_job import sector_stats_job
-    await sector_stats_job(_db_pool)
-
-
-async def _daily_dart_disclosure_job():
-    if not _db_pool:
-        return
-    from jobs.infra_jobs import daily_dart_disclosure_job
-    await daily_dart_disclosure_job(_db_pool)
-
-
-async def _monthly_dart_xbrl_job():
-    if not _db_pool:
-        return
-    from jobs.infra_jobs import monthly_dart_xbrl_job
-    await monthly_dart_xbrl_job(_db_pool)
-
-
-async def _annual_dart_extractor_job():
-    if not _db_pool:
-        return
-    from jobs.infra_jobs import annual_dart_extractor_job
-    await annual_dart_extractor_job(_db_pool)
-
-
-async def _dart_screened_sync_job():
-    """스크리닝 종목 DART 동기화 — 스크리너/Stage 잡 이후 또는 독립 실행."""
-    if not _db_pool:
-        return
-    from jobs.infra_jobs import dart_screened_sync_job
-    await dart_screened_sync_job(_db_pool, days=30, limit=30)
-
-
-# ── 모의투자 잡 래퍼 ─────────────────────────────────────────
-
-async def _paper_exit_checker_job() -> None:
-    if not _db_pool or not _paper_trader:
-        return
-    from jobs.paper_jobs import paper_exit_checker_job
-    await paper_exit_checker_job(_db_pool, _paper_trader)
-
-
-async def _paper_eod_sampler_job() -> None:
-    if not _db_pool or not _paper_trader:
-        logger.debug("[paper-sampler] 미초기화 — 스킵")
-        return
-    from jobs.paper_jobs import paper_eod_sampler_job
-    await paper_eod_sampler_job(_db_pool, _paper_trader)
-
-
-async def _paper_open_entry_job() -> None:
-    if not _db_pool or not _paper_trader:
-        return
-    from jobs.paper_jobs import paper_open_entry_job
-    await paper_open_entry_job(_db_pool, _paper_trader)
-
-
-async def _compose_paper_entry_job() -> None:
-    if not _db_pool:
-        return
-    from core.db import get_dsn as _get_dsn
-    from jobs.compose_paper_job import compose_paper_entry_job
-    dsn = _get_dsn()
-    if not dsn:
-        logger.warning("[compose-paper] DSN 없음 — 스킵")
-        return
-    await compose_paper_entry_job(dsn, _db_pool)
 
 
 # ── 대시보드 → 스케줄러 트리거 폴러 ─────────────────────────
