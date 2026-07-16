@@ -21,6 +21,7 @@ from database import get_pool
 from common import (
     _HEATMAP_CACHE,
     _HEATMAP_LOCK,
+    _NAME_RESOLUTION_JOIN,
     _bg_refresh,
     _cache_is_valid,
     _compute_cache_ttl,
@@ -263,7 +264,7 @@ async def get_positions():
     try:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                """
+                f"""
                 SELECT p.id, p.ticker,
                        COALESCE(tn.name_ko, k.name_ko,
                                 cs.name, SPLIT_PART(p.ticker, '.', 1)) AS name,
@@ -271,12 +272,7 @@ async def get_positions():
                        p.entry_actual, p.qty, p.status,
                        p.tp1_pct, p.trail_pct
                 FROM   paper_positions p
-                LEFT JOIN ticker_names tn ON tn.ticker = p.ticker
-                LEFT JOIN krx_listings k  ON k.yfinance_symbol = p.ticker
-                LEFT JOIN LATERAL (
-                    SELECT name FROM chart_signals
-                    WHERE  ticker = p.ticker ORDER BY screened_at DESC LIMIT 1
-                ) cs ON TRUE
+                {_NAME_RESOLUTION_JOIN}
                 WHERE  p.status IN ('open', 'pending')
                 ORDER  BY p.signal_date DESC
                 """

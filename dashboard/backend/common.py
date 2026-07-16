@@ -20,6 +20,18 @@ logger = logging.getLogger(__name__)
 
 _KST = ZoneInfo("Asia/Seoul")
 
+# ── 종목명 해석 JOIN 공통 프래그먼트 ──────────────────────────
+# paper_positions p 기준 3단계 폴백(ticker_names → krx_listings → chart_signals
+# LATERAL) — docs/00_meta/name-resolution.md 표준 체인의 앞 3단계.
+# routers_heatmap/routers_paper/routers_report에서 byte-identical로 반복되던
+# JOIN 블록을 통일. f-string으로 쿼리 문자열에 삽입해 사용.
+_NAME_RESOLUTION_JOIN = """LEFT JOIN ticker_names tn ON tn.ticker = p.ticker
+                LEFT JOIN krx_listings k  ON k.yfinance_symbol = p.ticker
+                LEFT JOIN LATERAL (
+                    SELECT name FROM chart_signals
+                    WHERE  ticker = p.ticker ORDER BY screened_at DESC LIMIT 1
+                ) cs ON TRUE"""
+
 # ── 외부 API 전용 스레드 풀 ──────────────────────────────────
 # yfinance/Kiwoom/KRX 호출을 기본 executor와 분리.
 # max_workers=4: 외부 API가 느려도 이벤트 루프와 일반 요청에 영향 없음.

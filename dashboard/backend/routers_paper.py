@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
 from database import get_pool
-from common import _fetch_current_prices
+from common import _fetch_current_prices, _NAME_RESOLUTION_JOIN
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ async def get_paper_ticker_history(ticker: str):
     try:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                """
+                f"""
                 SELECT
                     p.id, p.model, p.ticker,
                     COALESCE(tn.name_ko, k.name_ko,
@@ -45,12 +45,7 @@ async def get_paper_ticker_history(ticker: str):
                     p.blended_return, p.created_at,
                     o.close AS current_price
                 FROM   paper_positions p
-                LEFT JOIN ticker_names tn ON tn.ticker = p.ticker
-                LEFT JOIN krx_listings k  ON k.yfinance_symbol = p.ticker
-                LEFT JOIN LATERAL (
-                    SELECT name FROM chart_signals
-                    WHERE  ticker = p.ticker ORDER BY screened_at DESC LIMIT 1
-                ) cs ON TRUE
+                {_NAME_RESOLUTION_JOIN}
                 LEFT JOIN LATERAL (
                     SELECT close FROM daily_ohlcv
                     WHERE  symbol = p.ticker ORDER BY date DESC LIMIT 1
@@ -153,17 +148,12 @@ async def get_paper_curve():
 
             # Query 4: open 포지션 (미실현 계산용)
             open_rows = await conn.fetch(
-                """
+                f"""
                 SELECT p.ticker, p.model, p.entry_actual, p.qty,
                        COALESCE(tn.name_ko, k.name_ko,
                                 cs.name, SPLIT_PART(p.ticker, '.', 1)) AS name
                 FROM   paper_positions p
-                LEFT JOIN ticker_names tn ON tn.ticker = p.ticker
-                LEFT JOIN krx_listings k  ON k.yfinance_symbol = p.ticker
-                LEFT JOIN LATERAL (
-                    SELECT name FROM chart_signals
-                    WHERE  ticker = p.ticker ORDER BY screened_at DESC LIMIT 1
-                ) cs ON TRUE
+                {_NAME_RESOLUTION_JOIN}
                 WHERE  p.status IN ('open', 'pending')
                 ORDER  BY p.signal_date
                 """

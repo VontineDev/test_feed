@@ -18,7 +18,7 @@ from datetime import date
 from fastapi import APIRouter
 
 from database import get_pool
-from common import _fetch_current_prices
+from common import _fetch_current_prices, _NAME_RESOLUTION_JOIN
 from report_queries import (
     _UNIFIED_TODAY_SQL, _UNIFIED_HISTORY_SQL, _AS_OF_SQL, _AS_OF_HISTORY_SQL,
 )
@@ -280,7 +280,7 @@ async def get_paper_report():
 
         # 최근 청산 이력 (30건)
         closed = await conn.fetch(
-            """
+            f"""
             SELECT p.ticker,
                    COALESCE(tn.name_ko, k.name_ko,
                             cs.name, SPLIT_PART(p.ticker, '.', 1)) AS name,
@@ -288,12 +288,7 @@ async def get_paper_report():
                    p.exit_date, p.exit_price, p.exit_type,
                    p.blended_return, p.tp1_date
             FROM   paper_positions p
-            LEFT JOIN ticker_names tn ON tn.ticker = p.ticker
-            LEFT JOIN krx_listings k  ON k.yfinance_symbol = p.ticker
-            LEFT JOIN LATERAL (
-                SELECT name FROM chart_signals
-                WHERE  ticker = p.ticker ORDER BY screened_at DESC LIMIT 1
-            ) cs ON TRUE
+            {_NAME_RESOLUTION_JOIN}
             WHERE  p.status = 'closed' AND p.blended_return IS NOT NULL
             ORDER  BY p.exit_date DESC NULLS LAST, p.id DESC
             LIMIT  30
@@ -302,18 +297,13 @@ async def get_paper_report():
 
         # 현재 오픈 포지션
         open_pos = await conn.fetch(
-            """
+            f"""
             SELECT p.ticker,
                    COALESCE(tn.name_ko, k.name_ko,
                             cs.name, SPLIT_PART(p.ticker, '.', 1)) AS name,
                    p.model, p.signal_date, p.entry_actual, p.qty, p.status
             FROM   paper_positions p
-            LEFT JOIN ticker_names tn ON tn.ticker = p.ticker
-            LEFT JOIN krx_listings k  ON k.yfinance_symbol = p.ticker
-            LEFT JOIN LATERAL (
-                SELECT name FROM chart_signals
-                WHERE  ticker = p.ticker ORDER BY screened_at DESC LIMIT 1
-            ) cs ON TRUE
+            {_NAME_RESOLUTION_JOIN}
             WHERE  p.status IN ('open', 'pending')
             ORDER  BY p.signal_date DESC
             """
