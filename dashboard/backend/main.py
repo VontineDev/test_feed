@@ -45,6 +45,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from database import close_pool, get_pool
 from common import (  # noqa: F401 — 공용 인프라 (재수출 겸용)
+    _HEATMAP_CACHE,
+    _HEATMAP_LOCK,
     _KST,
     _AFTERMARKET_TTL,
     _NXT_TTL,
@@ -69,19 +71,15 @@ from data.kiwoom_aftermarket_sync import KiwoomClient, _parse_int, _parse_float,
 from analysis.macro_tracker import MacroTracker, DEFAULT_TICKERS as _MACRO_TICKERS  # noqa: E402
 from data.market_data import _fetch_fundamental  # noqa: E402
 
+from market_snap import (  # noqa: E402
+    _fetch_aftermarket_snap_top_async,
+    _fetch_daily_snap_top_async,
+    _fetch_nxt_live,
+    _fetch_top_kiwoom,
+)
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-
-# ── 캐시 (히트맵/Top 5분) ────────────────────────────────────
-# market_open: 캐시 생성 시점의 _is_market_open() 값 — 케이스 전환 감지용
-# 캐시 dict는 재대입 금지 — health/_warmup_caches가 참조를 공유함.
-_HEATMAP_CACHE: dict = {"data": None, "expires": 0.0, "market_open": None, "is_nxt": None}
-_HEATMAP_LOCK = asyncio.Lock()
-
-# ── 키움 토큰 캐시 (au10001 반복 호출 방지, 토큰 유효기간 24h) ──
-_KIWOOM_TOKEN: str | None = None
-_KIWOOM_TOKEN_TS: float = 0.0
-_KIWOOM_TOKEN_TTL = 82800  # 23시간
 
 # ── Top 캐시 (5분) ────────────────────────────────────────────
 # 캐시는 n=20 기준 단일 슬롯. n이 다른 요청은 캐시된 데이터를 그대로 반환.
@@ -308,12 +306,14 @@ app.add_middleware(_BasicAuthMiddleware)
 import routers_feedback  # noqa: E402
 import routers_history  # noqa: E402
 import routers_report  # noqa: E402
+import routers_heatmap  # noqa: E402
 import routers_paper  # noqa: E402
 import routers_portfolio  # noqa: E402
 import routers_scheduler  # noqa: E402
 import routers_signals  # noqa: E402
 import routers_youtube  # noqa: E402
 app.include_router(routers_feedback.router)
+app.include_router(routers_heatmap.router)
 app.include_router(routers_history.router)
 app.include_router(routers_paper.router)
 app.include_router(routers_portfolio.router)
@@ -351,490 +351,17 @@ from routers_paper import (  # noqa: E402,F401
     get_paper_ticker_history,
 )
 from routers_signals import signals_stream  # noqa: E402,F401
+from routers_heatmap import (  # noqa: E402,F401
+    _build_heatmap_data,
+    get_heatmap,
+    get_positions,
+)
 from routers_scheduler import (  # noqa: E402,F401
     TriggerBody,
     scheduler_status,
     scheduler_stream,
     trigger_job,
 )
-
-
-# ── daily_market_snap에서 거래대금 상위 N 조회 (장마감 1순위) ──────
-async def _fetch_daily_snap_top_async(n: int) -> dict | None:
-    """daily_market_snap 최신 영업일 거래대금 상위 N 종목.
-
-    aftermarket_snap 대비 장점:
-      - NXT 거래 여부와 무관하게 전 종목 커버 (ka10032 top100)
-      - amount = KRX+NXT 합산 당일 최종값
-      - change_pct = 정규장 기준 당일 등락률
-    데이터 없으면 None 반환.
-    """
-    try:
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT d.ticker,
-                       COALESCE(tn.name_ko, d.name,
-                                SPLIT_PART(d.ticker, '.', 1)) AS name,
-                       d.price, d.change_pct, d.amount,
-                       d.market, d.trade_date
-                FROM   daily_market_snap d
-                LEFT JOIN ticker_names tn ON tn.ticker = d.ticker
-                WHERE  d.trade_date = (SELECT MAX(trade_date) FROM daily_market_snap)
-                  AND  d.amount > 0
-                ORDER  BY d.amount DESC
-                LIMIT  $1
-                """,
-                n,
-            )
-        if not rows:
-            return None
-        trade_date = str(rows[0]["trade_date"])
-        items = []
-        for i, r in enumerate(rows, 1):
-            items.append({
-                "rank":       i,
-                "ticker":     r["ticker"],
-                "name":       r["name"] or r["ticker"],
-                "price":      int(r["price"]) if r["price"] else 0,
-                "change_pct": float(r["change_pct"]) if r["change_pct"] is not None else 0.0,
-                "amount":     int(r["amount"]),
-                "market":     r["market"] or "",
-            })
-        return {"items": items, "fetched_at": trade_date, "is_aftermarket": True}
-    except Exception as e:
-        logger.warning("[daily-snap] 조회 실패: %s", e)
-        return None
-
-
-# ── aftermarket_snap에서 합산(KRX+NXT) 거래대금 상위 N 조회 ──────
-async def _fetch_aftermarket_snap_top_async(n: int) -> dict | None:
-    """aftermarket_snap 최근 영업일 거래대금 상위 N 종목 반환.
-
-    정렬/표시 기준:
-      reg_value 있음 → reg_value (ka10032 KRX+NXT 당일 최종, NXT 시간외 포함 여부 미확정이므로
-                        after_value를 더하지 않아 이중계산 위험 제거)
-      reg_value NULL → after_value (NXT 시간외 전용 폴백)
-    데이터 없으면 None 반환.
-    """
-    try:
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT a.ticker,
-                       COALESCE(tn.name_ko, k.name_ko, SPLIT_PART(a.ticker, '.', 1)) AS name,
-                       a.reg_close,
-                       a.after_close,
-                       a.after_value,
-                       a.reg_value,
-                       COALESCE(a.reg_value, a.after_value, 0) AS total_value,
-                       a.after_chg_pct,
-                       a.trade_date,
-                       CASE WHEN a.ticker LIKE '%.KS' THEN 'KOSPI'
-                            WHEN a.ticker LIKE '%.KQ' THEN 'KOSDAQ'
-                            ELSE '' END AS market
-                FROM   aftermarket_snap a
-                LEFT JOIN ticker_names tn ON tn.ticker = a.ticker
-                LEFT JOIN krx_listings k  ON k.yfinance_symbol = a.ticker
-                WHERE  a.trade_date = (SELECT MAX(trade_date) FROM aftermarket_snap)
-                  AND  COALESCE(a.reg_value, a.after_value, 0) > 0
-                ORDER  BY total_value DESC
-                LIMIT  $1
-                """,
-                n,
-            )
-        if not rows:
-            return None
-        trade_date = str(rows[0]["trade_date"])
-        items = []
-        for i, r in enumerate(rows, 1):
-            price = int(r["after_close"]) if r["after_close"] else (int(r["reg_close"]) if r["reg_close"] else 0)
-            change_pct = float(r["after_chg_pct"]) if r["after_chg_pct"] is not None else 0.0
-            items.append({
-                "rank":       i,
-                "ticker":     r["ticker"],
-                "name":       r["name"] or r["ticker"],
-                "price":      price,
-                "change_pct": change_pct,
-                "amount":     int(r["total_value"]),
-                "market":     r["market"] or "",
-            })
-        return {"items": items, "fetched_at": trade_date, "is_aftermarket": True}
-    except Exception as e:
-        logger.warning("[aftermarket] snap 조회 실패: %s", e)
-        return None
-
-
-# ── 히트맵 데이터 빌드 (Kiwoom 거래대금 Top 50 + Stage 오버레이) ──
-# TODO [엣지 1] 평일 08:00~09:00 프리마켓 케이스:
-#   장전 단일가(08:00~09:00) + 전일 합산 표시가 필요하지만
-#   Kiwoom 장전 단일가 API(코드 미확인)가 없어 미구현.
-#   확인 후 별도 케이스(_is_premarket()) 분기 추가 필요.
-#
-# TODO [엣지 2] 주말 08:00~09:00:
-#   위 프리마켓 케이스 구현 시 weekday < 5 체크 반드시 포함할 것.
-#   현재는 _is_market_open()이 weekday >= 5 → False 반환하므로 장마감 경로로 처리됨.
-#
-# TODO [엣지 5] ka10032의 장전 단일가(08:00~09:00) 포함 여부:
-#   09:00 직전/직후 trde_prica 실측으로 확인 필요.
-#   포함되면 "08시부터" 자연 충족, 미포함이면 별도 장전 API 보완 필요.
-#
-# TODO [엣지 8] 15:30~15:40 NXT 미시작 공백:
-#   정규장 마감(15:30) 직후 NXT 시간외는 15:40 시작.
-#   이 10분간은 _is_market_open()=False이지만 aftermarket_snap에
-#   오늘 데이터가 없음 → MAX(trade_date)가 어제 데이터로 표시됨.
-#   16:05 수집 잡이 완료되기 전까지 동일 현상 지속.
-#   개선 방법: 15:30~16:05 구간에 ka10032 frozen 스냅샷 별도 캐시 유지.
-#
-# TODO [엣지 3·12] 종목 구성 불연속:
-#   장마감 → 장전 전환(07:59→08:00) 시 daily_market_snap top100(장중) vs
-#   daily_market_snap 전날 데이터가 그대로 유지되므로 연속성 개선됨.
-#   단, 스냅샷 수집(16:10) 전 15:30~16:10 구간은 어제 데이터로 표시.
-async def _build_heatmap_data() -> dict:
-    """{"items": list[dict], "fetched_at": str|None, "is_nxt": bool} 반환.
-    fetched_at: 장마감 시 trade_date(YYYY-MM-DD), 장중/NXT 시 None.
-
-    데이터 소스 우선순위:
-      NXT 시간외 (15:40~16:05): ka10098 실시간
-      장 마감 1순위: daily_market_snap — ka10032 top100, KRX+NXT 합산, 전 종목 커버
-      장 마감 2순위: aftermarket_snap  — NXT 거래 종목만, 폴백
-    """
-    pool = await get_pool()
-
-    # NXT 시간외 (15:40~16:05): ka10098 실시간
-    if _is_nxt_open():
-        try:
-            nxt_data = await _ext_thread(_fetch_nxt_live, 50, timeout=15.0)
-            nxt_items = nxt_data.get("items", [])
-        except Exception as e:
-            logger.warning("[heatmap] NXT 조회 실패, 스냅샷 폴백: %s", e)
-            nxt_items = []
-        if nxt_items:
-            tickers = [it["ticker"] for it in nxt_items]
-            async with pool.acquire() as conn:
-                stage_rows = await conn.fetch(
-                    """
-                    SELECT ticker, stage FROM stage_classifications
-                    WHERE classified_date = (SELECT MAX(classified_date) FROM stage_classifications)
-                      AND ticker = ANY($1::text[])
-                    """,
-                    tickers,
-                )
-                name_rows = await conn.fetch(
-                    "SELECT ticker, name_ko FROM ticker_names WHERE ticker = ANY($1::text[])",
-                    tickers,
-                )
-            stage_map = {r["ticker"]: r["stage"] for r in stage_rows}
-            name_map  = {r["ticker"]: r["name_ko"] for r in name_rows}
-            items = [
-                {
-                    "ticker":     it["ticker"],
-                    "name":       name_map.get(it["ticker"]) or it["name"],
-                    "stage":      stage_map.get(it["ticker"]),
-                    "amount":     it["amount"],
-                    "change_pct": it["change_pct"],
-                    "market":     it.get("market", ""),
-                    "is_nxt":     True,
-                }
-                for it in nxt_items
-            ]
-            return {"items": items, "fetched_at": None, "is_nxt": True}
-        # NXT 데이터 없으면 아래 스냅샷 경로로 폴백
-
-    # 장 마감 시: daily_market_snap 우선, aftermarket_snap 폴백
-    if not _is_market_open():
-        snap_data = await _fetch_daily_snap_top_async(50)
-        if not snap_data or not snap_data.get("items"):
-            snap_data = await _fetch_aftermarket_snap_top_async(50)
-        if snap_data and snap_data.get("items"):
-            tickers = [it["ticker"] for it in snap_data["items"]]
-            async with pool.acquire() as conn:
-                stage_rows = await conn.fetch(
-                    """
-                    SELECT ticker, stage FROM stage_classifications
-                    WHERE classified_date = (SELECT MAX(classified_date) FROM stage_classifications)
-                      AND ticker = ANY($1::text[])
-                    """,
-                    tickers,
-                )
-            stage_map = {r["ticker"]: r["stage"] for r in stage_rows}
-            items = [
-                {
-                    "ticker":        it["ticker"],
-                    "name":          it["name"],
-                    "stage":         stage_map.get(it["ticker"]),
-                    "amount":        it["amount"],
-                    "change_pct":    it["change_pct"],
-                    "market":        it.get("market", ""),
-                    "is_aftermarket": True,
-                }
-                for it in snap_data["items"]
-            ]
-            return {"items": items, "fetched_at": snap_data.get("fetched_at")}
-
-    # 1. Kiwoom top 50 조회 (15초 타임아웃)
-    try:
-        top_data = await _ext_thread(_fetch_top_kiwoom, 50, timeout=15.0)
-        kiwoom_items = top_data.get("items", [])
-    except (asyncio.TimeoutError, Exception) as e:
-        logger.warning("[heatmap] Kiwoom 조회 실패, Stage 분류 폴백: %s", e)
-        kiwoom_items = []
-
-    today = date.today()
-
-    if kiwoom_items:
-        tickers = [i["ticker"] for i in kiwoom_items]
-        async with pool.acquire() as conn:
-            stage_rows = await conn.fetch(
-                """
-                SELECT ticker, stage FROM stage_classifications
-                WHERE classified_date = $1 AND ticker = ANY($2::text[])
-                """,
-                today, tickers,
-            )
-        stage_map = {r["ticker"]: r["stage"] for r in stage_rows}
-        items = [
-            {
-                "ticker":     it["ticker"],
-                "name":       it["name"],
-                "stage":      stage_map.get(it["ticker"]),
-                "amount":     it["amount"],
-                "change_pct": it["change_pct"],
-                "market":     it.get("market", ""),
-            }
-            for it in kiwoom_items
-        ]
-        return {"items": items, "fetched_at": None}
-
-    # ── Stage 분류 폴백 (Kiwoom 미응답 시) ──────────────────────
-    logger.info("[heatmap] Stage 분류 데이터로 폴백")
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT sc.ticker, sc.stage, sc.s1_high, sc.s1_volume,
-                   COALESCE(tn.name_ko, k.name_ko, SPLIT_PART(sc.ticker, '.', 1)) AS name,
-                   CASE WHEN sc.ticker LIKE '%.KS' THEN 'KOSPI'
-                        WHEN sc.ticker LIKE '%.KQ' THEN 'KOSDAQ'
-                        ELSE '' END AS market
-            FROM stage_classifications sc
-            LEFT JOIN ticker_names tn ON tn.ticker = sc.ticker
-            LEFT JOIN krx_listings k  ON k.yfinance_symbol = sc.ticker
-            WHERE sc.classified_date = $1
-            """,
-            today,
-        )
-    result = []
-    for r in rows:
-        s1_high = float(r["s1_high"]) if r["s1_high"] else 0.0
-        s1_vol  = float(r["s1_volume"]) if r["s1_volume"] else 0.0
-        amount  = s1_high * s1_vol if s1_high and s1_vol else 1.0
-        result.append({
-            "ticker":     r["ticker"],
-            "name":       r["name"],
-            "stage":      r["stage"],
-            "amount":     amount,
-            "change_pct": 0.0,
-            "market":     r["market"] or "",
-        })
-    items = sorted(result, key=lambda x: x["amount"], reverse=True)
-    return {"items": items, "fetched_at": None}
-
-
-# ── GET /api/heatmap ──────────────────────────────────────────
-def _heatmap_response(cache_data: dict, cached: bool, stale: bool = False) -> dict:
-    items = cache_data.get("items") or []
-    fetched_at = cache_data.get("fetched_at")
-    is_aftermarket = bool(items and items[0].get("is_aftermarket"))
-    r: dict = {"data": items, "cached": cached, "is_aftermarket": is_aftermarket}
-    if fetched_at:
-        r["fetched_at"] = fetched_at   # YYYY-MM-DD (장마감 trade_date)
-    if stale:
-        r["stale"] = True
-    return r
-
-
-@app.get("/api/heatmap")
-async def get_heatmap():
-    if _cache_is_valid(_HEATMAP_CACHE):
-        return _heatmap_response(_HEATMAP_CACHE["data"], cached=True)
-    if _HEATMAP_CACHE["data"]:
-        # stale 또는 market_open/is_nxt 상태 전환 — 즉시 반환하고 백그라운드에서 갱신
-        if not _HEATMAP_LOCK.locked():
-            asyncio.create_task(_bg_refresh(
-                _HEATMAP_CACHE, _HEATMAP_LOCK, _build_heatmap_data, _compute_cache_ttl, "heatmap"
-            ))
-        return _heatmap_response(_HEATMAP_CACHE["data"], cached=True, stale=True)
-    # 최초 기동: 데이터 없음 — 한 번만 대기
-    async with _HEATMAP_LOCK:
-        if _cache_is_valid(_HEATMAP_CACHE):
-            return _heatmap_response(_HEATMAP_CACHE["data"], cached=True)
-        try:
-            cache_data = await _build_heatmap_data()
-            _HEATMAP_CACHE["data"] = cache_data
-            _HEATMAP_CACHE["expires"] = _time_module.time() + _compute_cache_ttl(cache_data)
-            _HEATMAP_CACHE["market_open"] = _is_market_open()
-            _HEATMAP_CACHE["is_nxt"] = _is_nxt_open()
-            return _heatmap_response(cache_data, cached=False)
-        except Exception as e:
-            logger.error("[heatmap] 빌드 실패: %s", e)
-            raise HTTPException(status_code=500, detail="heatmap unavailable")
-
-
-# ── GET /api/positions ────────────────────────────────────────
-@app.get("/api/positions")
-async def get_positions():
-    pool = await get_pool()
-    try:
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT p.id, p.ticker,
-                       COALESCE(tn.name_ko, k.name_ko,
-                                cs.name, SPLIT_PART(p.ticker, '.', 1)) AS name,
-                       p.model, p.signal_date,
-                       p.entry_actual, p.qty, p.status,
-                       p.tp1_pct, p.trail_pct
-                FROM   paper_positions p
-                LEFT JOIN ticker_names tn ON tn.ticker = p.ticker
-                LEFT JOIN krx_listings k  ON k.yfinance_symbol = p.ticker
-                LEFT JOIN LATERAL (
-                    SELECT name FROM chart_signals
-                    WHERE  ticker = p.ticker ORDER BY screened_at DESC LIMIT 1
-                ) cs ON TRUE
-                WHERE  p.status IN ('open', 'pending')
-                ORDER  BY p.signal_date DESC
-                """
-            )
-
-        tickers = list({r["ticker"] for r in rows})
-        prices = await _fetch_current_prices(tickers)
-
-        positions = []
-        for r in rows:
-            d = dict(r)
-            for k in ("entry_actual", "tp1_pct", "trail_pct"):
-                if d.get(k) is not None:
-                    d[k] = float(d[k])
-            curr = prices.get(d["ticker"])
-            d["current_price"] = curr
-            entry = d.get("entry_actual")
-            d["unrealized_pct"] = (
-                round((curr / entry - 1) * 100, 2)
-                if curr and entry else None
-            )
-            positions.append(d)
-        return {"data": positions}
-    except Exception as e:
-        logger.error("[positions] 조회 실패: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ── 키움 토큰 관리 ────────────────────────────────────────────
-
-def _get_kiwoom_token() -> str:
-    """키움 OAuth 토큰 반환 (23h 캐시, 만료 시 재발급)."""
-    global _KIWOOM_TOKEN, _KIWOOM_TOKEN_TS
-    now = _time_module.time()
-    if _KIWOOM_TOKEN and now - _KIWOOM_TOKEN_TS < _KIWOOM_TOKEN_TTL:
-        return _KIWOOM_TOKEN
-    appkey = os.environ.get("KIWOOM_APPKEY")
-    secretkey = os.environ.get("KIWOOM_SECRETKEY")
-    if not appkey or not secretkey:
-        raise RuntimeError("KIWOOM_APPKEY / KIWOOM_SECRETKEY 환경변수 미설정")
-    client = KiwoomClient(use_mock=False)
-    _KIWOOM_TOKEN = client.issue_token(appkey, secretkey)
-    _KIWOOM_TOKEN_TS = now
-    logger.info("[top] 키움 토큰 재발급 완료")
-    return _KIWOOM_TOKEN
-
-
-def _invalidate_kiwoom_token() -> None:
-    global _KIWOOM_TOKEN, _KIWOOM_TOKEN_TS
-    _KIWOOM_TOKEN = None
-    _KIWOOM_TOKEN_TS = 0.0
-
-
-def _fetch_nxt_live(n: int) -> dict:
-    """ka10098으로 NXT 시간외 실시간 상위 N 종목 조회 (동기 — asyncio.to_thread에서 호출).
-
-    401 수신 시 토큰을 무효화하고 1회 재시도합니다.
-    반환 형식은 _fetch_top_kiwoom과 동일 (rank, ticker, name, price, change_pct, amount, market).
-    """
-    import requests as _requests
-    for attempt in range(2):
-        try:
-            client = KiwoomClient(use_mock=False)
-            client.inject_token(_get_kiwoom_token())
-            all_items: list[dict] = []
-            for mrkt_tp, suffix, market_label in [
-                ("001", ".KS", "KOSPI"),
-                ("101", ".KQ", "KOSDAQ"),
-            ]:
-                rows = client.fetch_aftermarket_bulk(mrkt_tp=mrkt_tp)
-                for row in rows:
-                    krx_code = str(row.get("stk_cd", "")).strip().zfill(6)
-                    if not krx_code or krx_code == "000000":
-                        continue
-                    after_volume = _parse_int(row.get("acc_trde_qty"))
-                    if not after_volume:
-                        continue
-                    raw_val    = _parse_int(row.get("acc_trde_prica"))
-                    after_value = (raw_val * _VALUE_UNIT) if raw_val else 0
-                    if not after_value:
-                        continue
-                    reg_close   = _parse_int(row.get("tdy_close_pric"))
-                    after_close = abs(_parse_int(row.get("cur_prc")) or 0)
-                    flu_raw     = _parse_float(row.get("flu_rt"))
-                    if flu_raw is not None:
-                        change_pct = round(flu_raw, 2)
-                    elif reg_close and after_close and reg_close > 0:
-                        change_pct = round((after_close / reg_close - 1.0) * 100, 2)
-                    else:
-                        change_pct = 0.0
-                    all_items.append({
-                        "ticker":     f"{krx_code}{suffix}",
-                        "name":       str(row.get("stk_nm") or krx_code).strip(),
-                        "price":      after_close,
-                        "change_pct": change_pct,
-                        "amount":     after_value,
-                        "market":     market_label,
-                    })
-            all_items.sort(key=lambda x: x["amount"], reverse=True)
-            for i, it in enumerate(all_items[:n], 1):
-                it["rank"] = i
-            return {
-                "items":      all_items[:n],
-                "fetched_at": _time_module.strftime("%H:%M:%S"),
-                "is_nxt":     True,
-            }
-        except _requests.HTTPError as e:
-            if e.response is not None and e.response.status_code == 401 and attempt == 0:
-                logger.warning("[nxt] 401 수신 — 토큰 무효화 후 재시도")
-                _invalidate_kiwoom_token()
-                continue
-            raise
-
-
-def _fetch_top_kiwoom(n: int) -> dict:
-    """Kiwoom REST API로 거래대금 상위 N 조회 (동기 — asyncio.to_thread에서 호출).
-
-    401 수신 시 토큰을 무효화하고 1회 재시도합니다.
-    """
-    import requests as _requests
-    for attempt in range(2):
-        try:
-            client = KiwoomClient(use_mock=False)
-            client.inject_token(_get_kiwoom_token())
-            items = client.fetch_top_volume(n=n)
-            return {"items": items, "fetched_at": _time_module.strftime("%H:%M:%S")}
-        except _requests.HTTPError as e:
-            if e.response is not None and e.response.status_code == 401 and attempt == 0:
-                logger.warning("[top] 401 수신 — 토큰 무효화 후 재시도")
-                _invalidate_kiwoom_token()
-                continue
-            raise
 
 
 # ── GET /api/top ──────────────────────────────────────────────

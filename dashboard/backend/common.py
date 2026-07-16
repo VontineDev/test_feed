@@ -138,6 +138,13 @@ _AFTERMARKET_TTL = 1800   # 장 마감 후 30분 (aftermarket_snap은 하루 종
 # ── 포지션 현재가 캐시 — {ticker: current_price_float} (5분) ──
 _POS_PRICE_CACHE: dict = {"data": {}, "expires": 0.0}
 
+# ── 히트맵 캐시 (5분) ────────────────────────────────────────
+# market_open: 캐시 생성 시점의 _is_market_open() 값 — 케이스 전환 감지용
+# routers_heatmap이 채우고, routers_macro(_run_macro_analysis)가 오늘 TOP 종목
+# 소스로 읽으며, main의 health/_warmup_caches도 참조 — 그래서 common 소유.
+_HEATMAP_CACHE: dict = {"data": None, "expires": 0.0, "market_open": None, "is_nxt": None}
+_HEATMAP_LOCK = asyncio.Lock()
+
 # ── SSE 연결 카운터 ──────────────────────────────────────────
 _SSE_CONNECTIONS: dict[str, int] = {"signals": 0, "scheduler": 0}
 
