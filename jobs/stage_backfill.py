@@ -64,16 +64,14 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from jobs._common import bootstrap, get_pool
+from jobs.stage_shared import normalize_ohlcv, load_listed_shares, build_row  # noqa: F401
 
 bootstrap(ROOT)
 
 import asyncpg
 
 from analysis.chart_screener import get_all_tickers
-from analysis.stage_classifier import (
-    classify_stage_v15, check_peakout,
-    compute_foreign_chg_pct, compute_flow_score,
-)
+from analysis.stage_classifier import classify_stage_v15, check_peakout
 from core.db import (
     save_stage_classifications, get_stage1_history, get_stage2_history,
 )
@@ -86,14 +84,6 @@ _MIN_DAILY_BARS = 60
 _FETCH_LOOKBACK_DAYS = 200
 # Stage 2/3 직전 S1 조회 윈도우 (라이브 14d와 동일).
 _S1_HISTORY_DAYS = 14
-
-
-# ── DB 연결 ────────────────────────────────────────────────────
-async def get_pool() -> asyncpg.Pool:
-    # core.db.create_pool 사용 (2026-07 Phase B): DATABASE_URL 지원과
-    # statement_cache_size=0(PgBouncer 호환)을 얻음. 풀 사이즈는 기존값 유지.
-    from core.db import create_pool
-    return await create_pool(min_size=2, max_size=5)
 
 
 # ── ISO 주차 유틸 ─────────────────────────────────────────────
@@ -133,11 +123,7 @@ def fetch_daily_ohlcv(ticker: str, fetch_start: date, fetch_end: date) -> Option
         )
         if df.empty or df["Close"].notna().sum() < _MIN_DAILY_BARS:
             return None
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
-        df.index = pd.to_datetime(df.index, utc=True)
-        return df
+        return normalize_ohlcv(df)
     except Exception as e:
         logger.debug("[stage백필] %s 일봉 수집 실패: %s", ticker, e)
         return None
@@ -195,20 +181,6 @@ async def load_flow_range(
     return out
 
 
-async def load_listed_shares(pool: asyncpg.Pool) -> dict[str, int]:
-    """krx_listings 에서 yfinance_symbol → listed_shares 1회 bulk 로드.
-
-    classify_stage_v15의 유통주식수 0.2% 수급 조건(Stage1/3)에 사용.
-    """
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT yfinance_symbol, listed_shares FROM krx_listings WHERE listed_shares IS NOT NULL"
-        )
-    out = {r["yfinance_symbol"]: r["listed_shares"] for r in rows}
-    logger.info("[stage백필] listed_shares 로드: %d종목", len(out))
-    return out
-
-
 # ── 슬라이스 헬퍼 ─────────────────────────────────────────────
 def slice_until(df: pd.DataFrame, as_of: date) -> pd.DataFrame:
     """index 날짜가 as_of(포함) 이하인 행만 반환. tz 유무 모두 처리."""
@@ -217,39 +189,6 @@ def slice_until(df: pd.DataFrame, as_of: date) -> pd.DataFrame:
     if getattr(idx, "tz", None) is not None:
         cutoff = cutoff.tz_localize(idx.tz) if cutoff.tzinfo is None else cutoff.tz_convert(idx.tz)
     return df[idx < cutoff]
-
-
-def build_row(
-    ticker: str,
-    stage: int,
-    peakout: bool,
-    price_slice: pd.DataFrame,
-    friday: date,
-    flow_slice: Optional[pd.DataFrame] = None,
-    listed_shares: Optional[int] = None,
-) -> dict:
-    """classify 결과 → save_stage_classifications upsert 행 (live job과 동일 매핑)."""
-    s1_high = s1_vol = s1_txamt = None
-    if stage == 1 and not price_slice.empty:
-        last = price_slice.iloc[-1]
-        s1_high  = float(last.get("High") or last.get("Close") or 0) or None
-        _vol     = int(last.get("Volume") or 0)
-        _close   = float(last.get("Close") or 0)
-        s1_vol   = _vol or None
-        s1_txamt = int(_vol * _close) or None
-    flow_for_score = flow_slice if flow_slice is not None else pd.DataFrame()
-    return {
-        "ticker":               ticker,
-        "classified_date":      friday,
-        "stage":                stage,
-        "s1_entry_date":        friday if stage == 1 else None,
-        "s1_high":              s1_high,
-        "s1_volume":            s1_vol,
-        "s1_txamt":             s1_txamt,
-        "peakout_flag":         peakout,
-        "foreign_chg_14d_pct":  compute_foreign_chg_pct(flow_for_score, listed_shares),
-        "flow_score":           compute_flow_score(flow_for_score, price_slice),
-    }
 
 
 # ── 단일 주차 분류 ────────────────────────────────────────────

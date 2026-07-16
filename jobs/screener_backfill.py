@@ -41,6 +41,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from jobs._common import bootstrap, get_pool
+from jobs.stage_shared import normalize_ohlcv
 
 bootstrap(ROOT)
 
@@ -88,11 +89,7 @@ def _fetch_ohlcv(ticker: str) -> Optional[pd.DataFrame]:
         df = tkr.history(period="3y", interval="1wk", auto_adjust=True)
         if df.empty:
             return None
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
-        df.index = pd.to_datetime(df.index, utc=True)
-        return df
+        return normalize_ohlcv(df)
     except Exception as e:
         logger.debug("[프리페치] %s 오류: %s", ticker, e)
         return None

@@ -16,10 +16,7 @@ import pandas as pd
 import yfinance as yf
 
 from analysis.chart_screener import get_all_tickers
-from analysis.stage_classifier import (
-    classify_stage_v15, check_peakout,
-    compute_foreign_chg_pct, compute_flow_score,
-)
+from analysis.stage_classifier import classify_stage_v15, check_peakout
 from core.db import (
     load_chart_signals_latest,
     get_stage1_history,
@@ -27,6 +24,7 @@ from core.db import (
     save_stage_classifications,
     get_active_stage_tickers,
 )
+from jobs.stage_shared import normalize_ohlcv, load_listed_shares, build_row
 from telegram.telegram_notify import send_screener_comparison as tg_send_screener_comparison
 
 logger = logging.getLogger(__name__)
@@ -37,11 +35,7 @@ def _fetch_daily_ohlcv(ticker: str):
         df = yf.Ticker(ticker).history(period="60d", interval="1d", auto_adjust=True)
         if df.empty or len(df) < 21:
             return None
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
-        df.index = pd.to_datetime(df.index, utc=True)
-        return df
+        return normalize_ohlcv(df)
     except Exception:
         return None
 
@@ -123,12 +117,7 @@ async def daily_stage_job(db_pool) -> set[str]:
     # 3b. listed_shares 배치 로드 (krx_listings, yfinance_symbol 기준)
     listed_shares_map: dict[str, int] = {}
     try:
-        async with db_pool.acquire() as conn:
-            share_rows = await conn.fetch(
-                "SELECT yfinance_symbol, listed_shares FROM krx_listings WHERE listed_shares IS NOT NULL"
-            )
-        for r in share_rows:
-            listed_shares_map[r["yfinance_symbol"]] = r["listed_shares"]
+        listed_shares_map = await load_listed_shares(db_pool)
         logger.info("[3단계] listed_shares 로드: %d종목", len(listed_shares_map))
     except Exception as e:
         logger.warning("[3단계] listed_shares 로드 실패: %s", e)
@@ -170,33 +159,14 @@ async def daily_stage_job(db_pool) -> set[str]:
                     if peakout:
                         peakout_flags.add(ticker)
 
-                    s1_high = s1_vol = s1_txamt = None
-                    if stage == 1:
-                        pdf = price_map.get(ticker)
-                        if pdf is not None and not pdf.empty:
-                            last_row = pdf.iloc[-1]
-                            s1_high  = float(last_row.get("High") or last_row.get("Close") or 0) or None
-                            _vol     = int(last_row.get("Volume") or 0)
-                            _close   = float(last_row.get("Close") or 0)
-                            s1_vol   = _vol or None
-                            s1_txamt = int(_vol * _close) or None  # 거래대금 = Volume × Close
-
-                    flow_df_for_score = flow_map.get(ticker, pd.DataFrame())
                     price_df_for_score = price_map.get(ticker)
-                    lshares = listed_shares_map.get(ticker)
-
-                    upsert_rows.append({
-                        "ticker":               ticker,
-                        "classified_date":      today,
-                        "stage":                stage,
-                        "s1_entry_date":        today if stage == 1 else None,
-                        "s1_high":              s1_high,
-                        "s1_volume":            s1_vol,
-                        "s1_txamt":             s1_txamt,
-                        "peakout_flag":         peakout,
-                        "foreign_chg_14d_pct":  compute_foreign_chg_pct(flow_df_for_score, lshares),
-                        "flow_score":           compute_flow_score(flow_df_for_score, price_df_for_score),
-                    })
+                    upsert_rows.append(build_row(
+                        ticker, stage, peakout,
+                        price_df_for_score if price_df_for_score is not None else pd.DataFrame(),
+                        today,
+                        flow_slice=flow_map.get(ticker, pd.DataFrame()),
+                        listed_shares=listed_shares_map.get(ticker),
+                    ))
             except Exception as e:
                 logger.debug("[3단계] 분류 오류: %s", e)
 
