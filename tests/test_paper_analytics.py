@@ -71,7 +71,7 @@ def _row(**kwargs):
 @pytest.mark.asyncio
 async def test_curve_happy_path():
     """closed 포지션 + open 포지션 → series/model_stats/open_positions 반환."""
-    import dashboard.backend.main as main_mod
+    import routers_paper as paper_mod  # 라우터 분리(2026-07) — patch는 소유 모듈에
 
     # Query 1: 누적 시계열 (stage 모델, 2건)
     series_rows = [
@@ -99,12 +99,12 @@ async def test_curve_happy_path():
     async def _get_pool():
         return pool
 
-    with patch.object(main_mod, 'get_pool', side_effect=_get_pool):
+    with patch.object(paper_mod, 'get_pool', side_effect=_get_pool):
         async def fake_prices(tickers, *, update_cache=True):
             return {'000660.KS': 160000.0}
 
-        with patch.object(main_mod, '_fetch_current_prices', side_effect=fake_prices):
-            response = await main_mod.get_paper_curve()
+        with patch.object(paper_mod, '_fetch_current_prices', side_effect=fake_prices):
+            response = await paper_mod.get_paper_curve()
 
     d = response['data']
     assert 'stage' in d['series']
@@ -128,18 +128,18 @@ async def test_curve_happy_path():
 @pytest.mark.asyncio
 async def test_curve_no_closed_positions():
     """closed 포지션 없음 → series={}, model_stats={}, open_positions=[]."""
-    import dashboard.backend.main as main_mod
+    import routers_paper as paper_mod  # 라우터 분리(2026-07) — patch는 소유 모듈에
 
     pool, conn = _make_pool([], [], [], [])  # 4개 쿼리 모두 빈 결과
 
     async def _get_pool():
         return pool
 
-    with patch.object(main_mod, 'get_pool', side_effect=_get_pool):
+    with patch.object(paper_mod, 'get_pool', side_effect=_get_pool):
         async def fake_prices(tickers, *, update_cache=True):
             return {}
-        with patch.object(main_mod, '_fetch_current_prices', side_effect=fake_prices):
-            response = await main_mod.get_paper_curve()
+        with patch.object(paper_mod, '_fetch_current_prices', side_effect=fake_prices):
+            response = await paper_mod.get_paper_curve()
 
     d = response['data']
     assert d['series'] == {}
@@ -150,7 +150,7 @@ async def test_curve_no_closed_positions():
 @pytest.mark.asyncio
 async def test_curve_no_open_positions_skips_yfinance():
     """open 포지션 없음 → _fetch_current_prices 미호출."""
-    import dashboard.backend.main as main_mod
+    import routers_paper as paper_mod  # 라우터 분리(2026-07) — patch는 소유 모듈에
 
     series_rows = [
         _row(model='kosdaq', date='2026-05-01', cumulative=Decimal('0.03')),
@@ -174,9 +174,9 @@ async def test_curve_no_open_positions_skips_yfinance():
     async def _get_pool():
         return pool
 
-    with patch.object(main_mod, 'get_pool', side_effect=_get_pool):
-        with patch.object(main_mod, '_fetch_current_prices', side_effect=spy_prices):
-            response = await main_mod.get_paper_curve()
+    with patch.object(paper_mod, 'get_pool', side_effect=_get_pool):
+        with patch.object(paper_mod, '_fetch_current_prices', side_effect=spy_prices):
+            response = await paper_mod.get_paper_curve()
 
     # open_positions가 없으니 yfinance 호출 없어야 함
     assert called == [], f"_fetch_current_prices called unexpectedly: {called}"
@@ -188,7 +188,7 @@ async def test_curve_no_open_positions_skips_yfinance():
 @pytest.mark.asyncio
 async def test_export_happy_path():
     """정상 데이터 → CSV 헤더 + 데이터 행, utf-8-sig BOM 포함."""
-    import dashboard.backend.main as main_mod
+    import routers_paper as paper_mod  # 라우터 분리(2026-07) — patch는 소유 모듈에
 
     rows = [
         _row(
@@ -208,8 +208,8 @@ async def test_export_happy_path():
     async def _get_pool():
         return pool
 
-    with patch.object(main_mod, 'get_pool', side_effect=_get_pool):
-        response = await main_mod.get_paper_export()
+    with patch.object(paper_mod, 'get_pool', side_effect=_get_pool):
+        response = await paper_mod.get_paper_export()
 
     # utf-8-sig BOM 확인
     assert response.body[:3] == b'\xef\xbb\xbf', "BOM 없음"
@@ -232,15 +232,15 @@ async def test_export_happy_path():
 @pytest.mark.asyncio
 async def test_export_empty_table():
     """빈 테이블 → 헤더만 있는 CSV."""
-    import dashboard.backend.main as main_mod
+    import routers_paper as paper_mod  # 라우터 분리(2026-07) — patch는 소유 모듈에
 
     pool, _ = _make_pool([])  # 빈 결과
 
     async def _get_pool():
         return pool
 
-    with patch.object(main_mod, 'get_pool', side_effect=_get_pool):
-        response = await main_mod.get_paper_export()
+    with patch.object(paper_mod, 'get_pool', side_effect=_get_pool):
+        response = await paper_mod.get_paper_export()
 
     text = response.body.decode('utf-8-sig')
     lines = [l for l in text.strip().split('\n') if l]
