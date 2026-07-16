@@ -22,6 +22,7 @@
 | 2026-07-16 | 대시보드 백엔드 라우터 분리: main.py → routers_* 10개 + market_snap 데이터 계층 | L | `b591f19`~`54d5001` (7커밋) |
 | 2026-07-16 | core/db.py 도메인 분리 (아래 상세) | M | `96bfb3c`~`7b31706` (5커밋) |
 | 2026-07-16 | Phase D 저위험 정리 4/4 항목 완료 (아래 상세) | S+M | test_scan_cmd.py 교체 + jobs/_common.py + db_schema 분리 + 심 삭제 (5커밋) |
+| 2026-07-17 | Phase E 대시보드 백엔드 마무리 3/4 항목 완료 (아래 상세) | M | routers_portfolio 분리 + report_queries 추출 + JOIN 헬퍼 (3커밋) |
 
 ### 2026-07-16 core/db.py 도메인 분리 상세
 
@@ -59,6 +60,16 @@
    - **backtest_engine 심**: 프로덕션 6곳(`jobs/paper_jobs.py`, `telegram/telegram_bot.py`×2, `scripts/` 4개)과 테스트 6곳을 `analysis.backtest.{config,models,helpers,fetch,replay,exit_models,engine}` 직접 import로 전환 후 심 파일 삭제. **핵심 위험 포인트**: `telegram_bot.py`의 함수-로컬 import와 `test_backtest_compose_bot.py`의 `mock.patch` 문자열 타깃은 반드시 같은 커밋에서 함께 이동 — 따로 옮기면 패치가 조용히 무효화돼 테스트가 실제 `run_backtest`를 호출하는 위험(탐색 단계에서 발견, lockstep으로 처리해 회피). `test_backtest_reexports.py`(심의 re-export 완전성만 검증하던 33개 테스트)는 심 삭제와 함께 제거. 결과: 793 passed(826→33개 제거, 신규 실패 0).
    - 최초 Effort 추정(S)이 실제로는 M 상당이었음 — 탐색에 두 서브에이전트, 마이그레이션에 파일 15개 이상 관여.
 
+### 2026-07-17 Phase E 대시보드 백엔드 마무리 (3/4 완료)
+
+4개 항목 중 3개 실행, 가격조회 로직 통합은 탐색 결과 순수 리팩토링 대상이 아님이 확인돼 디스코프.
+
+1. **routers_portfolio.py 분리**: `/api/ticker/lookup` → `routers_ticker.py`, `/api/dart/summary/{ticker}` → `routers_dart.py`로 byte-identical 이동. routers_portfolio.py는 포트폴리오 CRUD 3개 엔드포인트만 남음. main.py에 두 라우터 import+include_router+재수출 추가(기존 sibling 라우터와 동일 컨벤션). 유일한 importer가 main.py였고 직접 테스트하는 파일도 없어 저위험 확인 후 진행.
+2. **가격조회 로직 통합 — 디스코프**: `common._fetch_current_prices`(paper trading용, yfinance 배치 조회+공유 TTL 캐시, KR-only, yfinance 형식 티커 전제)와 `routers_portfolio._get_current_prices`(수동 포트폴리오용, DB aftermarket_snap 우선+yfinance 폴백, 캐시 없음, KR+US 지원, bare 티커 코드 전제)를 비교한 결과 **의도적으로 다른 구현** — 티커 포맷·가격 소스 우선순위·시장 커버리지 3가지가 전부 실제 요구사항 차이. 강제 통합은 순수 이동이 아니라 새 로직 작성이 필요하고, 두 함수 모두 직접 테스트가 없어 회귀 위험만 키움. "순수 코드 이동" 원칙에 어긋나 범위에서 제외 — 필요해지면 별도 기능 작업(새 테스트 포함)으로 재검토.
+3. **routers_report.py SQL 추출**: `_UNIFIED_TAIL`/`_UNIFIED_TODAY_SQL`/`_UNIFIED_HISTORY_SQL`/`_AS_OF_SQL`/`_AS_OF_HISTORY_SQL`(~130줄, `get_unified_screener` 전용) → `report_queries.py` byte-identical 이동(git diff로 확인).
+4. **krx_listings JOIN 헬퍼**: 탐색 결과 종목명 해석 JOIN 패턴이 그룹별로 실제 다름을 확인 — byte-identical한 3-way JOIN(`ticker_names`→`krx_listings`→`chart_signals` LATERAL, `p.ticker` 기준)만 5곳(routers_heatmap.py get_positions, routers_paper.py×2, routers_report.py×2)에서 발견돼 `common._NAME_RESOLUTION_JOIN` 상수로 통합. 나머지는 의도적으로 범위 제외: `routers_report._STAGE_QUERY`(섹터까지 해석, superset), `_UNIFIED_TAIL`의 kl CTE(4단계 폴백+정규화, 별개 패턴), `routers_portfolio.lookup_ticker`(JOIN이 아닌 Python 순차 조회), `routers_paper.py`의 "krx_listings는 이 환경에서 항상 비어있어 제외"라는 주석이 달린 예외 케이스(전제가 최신인지 별도 확인 필요). 검증: whitespace 정규화 SQL 텍스트 비교로 3개 파일 무변화 확인.
+5. 결과: 전체 pytest 793 passed(3개 커밋 전부 신규 실패 0).
+
 ---
 
 ## 향후 로드맵
@@ -69,14 +80,14 @@
 
 위 완료 기록 참조. 다음은 Phase E부터.
 
-### Phase E — 대시보드 백엔드 마무리
+### Phase E — 대시보드 백엔드 마무리 — ✅ 완료 (3/4)
+
+위 완료 기록 참조. 남은 항목(순수 리팩토링이 아니라 별도 기능 작업으로 재분류):
 
 | 항목 | What | 제약 | Effort |
 |---|---|---|---|
-| routers_portfolio.py 분리 | 3개 도메인 혼재 해소: 포트폴리오 CRUD + `/api/ticker/lookup` + `/api/dart/summary/{ticker}` → 뒤 2개를 별도 라우터로 | 없음 (라우터 등록만 main.py에서 갱신) | M |
-| 가격 조회 로직 통합 | portfolio 자체 `_get_current_prices`(aftermarket_snap→yfinance 폴백)가 common의 `_fetch_current_prices`와 다른 구현 — 요구사항 차이 분석 후 common으로 단일화 | 동작 차이가 의도적인지 먼저 확인 (순수 이동 아님 — 동작 통합) | M |
-| routers_report.py SQL 추출 | 통합 스크리너 SQL 상수 ~130줄(`_UNIFIED_*`, `_AS_OF_*`) → `report_queries.py` | 없음 | S |
-| krx_listings JOIN 헬퍼 | `LEFT JOIN krx_listings k ON k.yfinance_symbol=...` 종목명 해석 패턴이 report×2·paper×2·heatmap×3·portfolio·market_snap에 반복 — 공용 SQL 프래그먼트/헬퍼로 | name-resolution.md의 COALESCE 폴백 체인 표준 준수 | S |
+| 가격 조회 로직 통합 | `common._fetch_current_prices`(paper, 배치+캐시, KR-only)와 `routers_portfolio._get_current_prices`(portfolio, DB우선+폴백, KR+US)를 하나로 — 통합하려면 pool 파라미터·US 분기·캐시 키 분리 등 **새 로직 작성 필요**(순수 이동 아님) | 둘 다 현재 테스트 커버리지 0 — 통합 전 회귀 테스트부터 작성 권장 | M(기능 작업) |
+| 나머지 krx_listings 패턴 조정 | `_STAGE_QUERY`(섹터 해석 superset), `_UNIFIED_TAIL`(4단계 폴백), `routers_paper.py`의 "krx_listings 항상 비어있음" 예외 주석(전제 재확인 필요) | 각각 실제 동작이 달라 case-by-case 판단 필요 | S~M |
 
 ### Phase F — 백필 플러밍 통합
 
