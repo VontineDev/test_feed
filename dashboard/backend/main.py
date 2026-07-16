@@ -310,12 +310,16 @@ import routers_history  # noqa: E402
 import routers_report  # noqa: E402
 import routers_paper  # noqa: E402
 import routers_portfolio  # noqa: E402
+import routers_scheduler  # noqa: E402
+import routers_signals  # noqa: E402
 import routers_youtube  # noqa: E402
 app.include_router(routers_feedback.router)
 app.include_router(routers_history.router)
 app.include_router(routers_paper.router)
 app.include_router(routers_portfolio.router)
 app.include_router(routers_report.router)
+app.include_router(routers_scheduler.router)
+app.include_router(routers_signals.router)
 app.include_router(routers_youtube.router)
 
 # 하위호환 재수출 — monkeypatch는 각 라우터 모듈에 해야 함
@@ -345,6 +349,13 @@ from routers_paper import (  # noqa: E402,F401
     get_paper_curve,
     get_paper_export,
     get_paper_ticker_history,
+)
+from routers_signals import signals_stream  # noqa: E402,F401
+from routers_scheduler import (  # noqa: E402,F401
+    TriggerBody,
+    scheduler_status,
+    scheduler_stream,
+    trigger_job,
 )
 
 
@@ -718,189 +729,6 @@ async def get_positions():
     except Exception as e:
         logger.error("[positions] 조회 실패: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# ── GET /api/signals/stream  (SSE) ────────────────────────────
-async def _signal_generator(request: Request) -> AsyncGenerator[str, None]:
-    pool = await get_pool()
-    last_id: int = 0
-
-    # 초기 20건 전송
-    try:
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT s.id, s.direction, s.strength, s.tickers,
-                       s.detected_at, s.article_type,
-                       a.title_en, a.summary_ko
-                FROM   trade_signals s
-                JOIN   news_articles a ON a.id = s.article_id
-                ORDER  BY s.detected_at DESC LIMIT 20
-                """
-            )
-        if rows:
-            last_id = rows[0]["id"]
-            payload = [_signal_to_dict(r) for r in rows]
-            yield f"data: {json.dumps(payload, default=str)}\n\n"
-    except Exception as e:
-        logger.warning("[sse] 초기 신호 조회 실패: %s", e)
-
-    # 15초 폴링
-    while True:
-        try:
-            if await request.is_disconnected():
-                break
-        except Exception:
-            break
-        await asyncio.sleep(15)
-        try:
-            async with pool.acquire() as conn:
-                rows = await conn.fetch(
-                    """
-                    SELECT s.id, s.direction, s.strength, s.tickers,
-                           s.detected_at, s.article_type,
-                           a.title_en, a.summary_ko
-                    FROM   trade_signals s
-                    JOIN   news_articles a ON a.id = s.article_id
-                    WHERE  s.id > $1
-                    ORDER  BY s.detected_at DESC LIMIT 10
-                    """,
-                    last_id,
-                )
-            if rows:
-                last_id = rows[0]["id"]
-                payload = [_signal_to_dict(r) for r in rows]
-                yield f"data: {json.dumps(payload, default=str)}\n\n"
-        except Exception as e:
-            logger.warning("[sse] 폴링 실패: %s", e)
-
-
-def _signal_to_dict(r) -> dict:
-    d = dict(r)
-    d["detected_at"] = d["detected_at"].isoformat() if d.get("detected_at") else None
-    if d.get("tickers") and not isinstance(d["tickers"], list):
-        d["tickers"] = list(d["tickers"])
-    return d
-
-
-@app.get("/api/signals/stream")
-async def signals_stream(request: Request):
-    _SSE_CONNECTIONS["signals"] += 1
-    try:
-        return StreamingResponse(
-            _signal_generator(request),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-            },
-        )
-    finally:
-        _SSE_CONNECTIONS["signals"] = max(0, _SSE_CONNECTIONS["signals"] - 1)
-
-
-# ── POST /api/scheduler/trigger ───────────────────────────────
-_VALID_JOBS = {"stage", "screener", "paper_sample", "dart_screened", "youtube", "flow"}
-
-
-class TriggerBody(BaseModel):
-    job: str
-
-
-@app.post("/api/scheduler/trigger")
-async def trigger_job(request: Request, body: TriggerBody):
-    if getattr(request.state, "role", "admin") != "admin":
-        raise HTTPException(status_code=403, detail="관리자 권한이 필요합니다")
-    if body.job not in _VALID_JOBS:
-        raise HTTPException(status_code=400, detail=f"unknown job: {body.job}")
-    pool = await get_pool()
-    try:
-        async with pool.acquire() as conn:
-            # 이미 pending/running 중인 동일 잡 중복 방지
-            existing = await conn.fetchval(
-                "SELECT id FROM scheduler_triggers"
-                " WHERE job_name=$1 AND status IN ('pending','running') LIMIT 1",
-                body.job,
-            )
-            if existing:
-                return {"status": "already_queued", "job": body.job}
-            trig_id = await conn.fetchval(
-                "INSERT INTO scheduler_triggers (job_name) VALUES ($1) RETURNING id",
-                body.job,
-            )
-        return {"status": "queued", "job": body.job, "id": trig_id}
-    except Exception as e:
-        logger.error("[trigger] INSERT 실패: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ── GET /api/scheduler/status ─────────────────────────────────
-@app.get("/api/scheduler/status")
-async def scheduler_status():
-    """최근 10개 트리거 이력 반환 (대시보드 상태 표시용)."""
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT id, job_name, requested_at, executed_at, status
-            FROM   scheduler_triggers
-            ORDER  BY requested_at DESC LIMIT 10
-            """,
-        )
-    return {"data": [dict(r) for r in rows]}
-
-
-# ── GET /api/scheduler/stream  (SSE) ──────────────────────────
-async def _scheduler_stream_generator(request: Request) -> AsyncGenerator[str, None]:
-    pool = await get_pool()
-    last_payload: str = ""
-
-    async def _fetch() -> str:
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT id, job_name, requested_at, executed_at, status
-                FROM   scheduler_triggers
-                ORDER  BY requested_at DESC LIMIT 10
-                """
-            )
-        return json.dumps([dict(r) for r in rows], default=str)
-
-    # 초기 전송
-    try:
-        last_payload = await _fetch()
-        yield f"data: {last_payload}\n\n"
-    except Exception as e:
-        logger.warning("[scheduler-sse] 초기 조회 실패: %s", e)
-
-    # 3초마다 변경 시에만 push
-    while True:
-        try:
-            if await request.is_disconnected():
-                break
-        except Exception:
-            break
-        await asyncio.sleep(10)
-        try:
-            payload = await _fetch()
-            if payload != last_payload:
-                last_payload = payload
-                yield f"data: {payload}\n\n"
-        except Exception as e:
-            logger.warning("[scheduler-sse] 조회 실패: %s", e)
-
-
-@app.get("/api/scheduler/stream")
-async def scheduler_stream(request: Request):
-    _SSE_CONNECTIONS["scheduler"] += 1
-    try:
-        return StreamingResponse(
-            _scheduler_stream_generator(request),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
-    finally:
-        _SSE_CONNECTIONS["scheduler"] = max(0, _SSE_CONNECTIONS["scheduler"] - 1)
 
 
 # ── 키움 토큰 관리 ────────────────────────────────────────────
