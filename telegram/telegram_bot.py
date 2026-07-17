@@ -37,6 +37,9 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
 
+# 모의투자 모델별 아이콘 (/paper, /paper_perf 공용)
+MODEL_ICON = {"stage": "🔵", "kosdaq": "🟣", "cross": "⭐", "ichimoku": "🌊"}
+
 # 마지막으로 처리한 update_id (중복 처리 방지)
 _last_update_id: int = 0
 # 크롤러 시작 시각 (uptime 계산용)
@@ -904,7 +907,6 @@ async def _handle_paper(http: httpx.AsyncClient, chat_id: str, pool) -> None:
     for r in rows:
         by_model[r["model"]].append(r)
 
-    MODEL_ICON = {"stage": "🔵", "kosdaq": "🟣", "cross": "⭐", "ichimoku": "🌊"}
     lines = ["📊 *모의투자 포지션 현황*", ""]
 
     for model, pos_list in sorted(by_model.items()):
@@ -977,8 +979,6 @@ async def _handle_paper_perf(http: httpx.AsyncClient, chat_id: str, pool) -> Non
     total_closed = sum(r["closed"] for r in model_stats)
     total_open   = sum(r["open_cnt"] for r in model_stats)
     total_pend   = sum(r["pending_cnt"] for r in model_stats)
-
-    MODEL_ICON = {"stage": "🔵", "kosdaq": "🟣", "cross": "⭐", "ichimoku": "🌊"}
 
     lines = [
         "📈 *모의투자 누적 성과*",

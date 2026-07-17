@@ -52,6 +52,18 @@ TYPE_BADGE = {
 }
 
 
+def esc(text: str) -> str:
+    """MarkdownV2 특수문자 이스케이프. (send_* 함수들에 중첩 정의돼 있던 사본 5개 통합)"""
+    for ch in r"\_*[]()~`>#+-=|{}.!":
+        text = text.replace(ch, f"\\{ch}")
+    return text
+
+
+def esc_code(text: str) -> str:
+    """MarkdownV2 인라인 코드 내부 — 백틱과 백슬래시만 이스케이프."""
+    return text.replace("\\", "\\\\").replace("`", "\\`")
+
+
 def _get_token() -> str:
     token = os.environ.get("TELEGRAM_TOKEN", "")
     if not token:
@@ -77,12 +89,6 @@ def _build_message(art: dict, summary_ko: str) -> str:
     title    = art["title"]
     pub      = art["published"]
     url      = art["url"]
-
-    # MarkdownV2 특수문자 이스케이프
-    def esc(text: str) -> str:
-        for ch in r"\_*[]()~`>#+-=|{}.!":
-            text = text.replace(ch, f"\\{ch}")
-        return text
 
     lines = [
         f"{emoji} *\\[{esc(source)}\\/{esc(category)}\\]*",
@@ -150,11 +156,6 @@ async def send_admin_alert(text: str, http: Optional[httpx.AsyncClient] = None) 
     except ValueError as e:
         logger.warning("[Telegram] 관리자 알림 설정 오류: %s", e)
         return False
-
-    def esc(s: str) -> str:
-        for ch in r"\_*[]()~`>#+-=|{}.!":
-            s = s.replace(ch, f"\\{ch}")
-        return s
 
     message = f"⚠️ *운영 알림*\n{esc(text)}"
 
@@ -243,11 +244,6 @@ async def send_signal(
     icon = {"BUY": "🟢", "SELL": "🔴", "WATCH": "🟡"}.get(signal.direction, "📊")
     bar  = "⬛" * signal.strength + "⬜" * (5 - signal.strength)
 
-    def esc(text: str) -> str:
-        for ch in r"\_*[]()~`>#+-=|{}.!":
-            text = text.replace(ch, f"\\{ch}")
-        return text
-
     # ticker_symbols: {LLM추출명 → yfinance 심볼} — 심볼이 있으면 한글명+코드 표시
     from core.ticker_cache import ticker_cache as _tc
     def _fmt_ticker(name: str) -> str:
@@ -314,15 +310,6 @@ async def send_weekly_screener(
     except ValueError as e:
         logger.warning("[Telegram] 설정 오류: %s", e)
         return False
-
-    def esc(text: str) -> str:
-        for ch in r"\_*[]()~`>#+-=|{}.!":
-            text = text.replace(ch, f"\\{ch}")
-        return text
-
-    def esc_code(text: str) -> str:
-        """MarkdownV2 인라인 코드 내부 — 백틱과 백슬래시만 이스케이프."""
-        return text.replace("\\", "\\\\").replace("`", "\\`")
 
     from analysis.chart_screener import current_week_of
     week = current_week_of()
@@ -405,14 +392,6 @@ async def send_screener_comparison(
     except ValueError as e:
         logger.warning("[Telegram] 설정 오류: %s", e)
         return False
-
-    def esc(text: str) -> str:
-        for ch in r"\_*[]()~`>#+-=|{}.!":
-            text = text.replace(ch, f"\\{ch}")
-        return text
-
-    def esc_code(text: str) -> str:
-        return text.replace("\\", "\\\\").replace("`", "\\`")
 
     from datetime import date as _date
     today_str = esc(_date.today().strftime("%Y-%m-%d"))
