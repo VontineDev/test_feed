@@ -41,7 +41,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from jobs._common import bootstrap, get_pool
-from jobs.stage_shared import normalize_ohlcv
+from jobs.stage_shared import normalize_ohlcv, prefetch_ohlcv
 
 bootstrap(ROOT)
 
@@ -99,25 +99,11 @@ def prefetch_all(
     tickers: list[tuple[str, str, str]],
     workers: int,
 ) -> dict[str, pd.DataFrame]:
-    """모든 티커 OHLCV를 병렬로 1회씩 다운로드. {ticker: df} 반환."""
+    """모든 티커 OHLCV를 병렬로 1회씩 다운로드. {ticker: df} 반환.
+
+    스켈레톤은 stage_shared.prefetch_ohlcv."""
     logger.info("[프리페치] %d종목 주봉 OHLCV 다운로드 중 (workers=%d)...", len(tickers), workers)
-    result: dict[str, pd.DataFrame] = {}
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = {ex.submit(_fetch_ohlcv, t): t for t, _, _ in tickers}
-        done = 0
-        for fut in as_completed(futs):
-            done += 1
-            if done % 200 == 0:
-                logger.info("[프리페치] %d/%d 완료 (데이터 있음: %d)", done, len(tickers), len(result))
-            ticker = futs[fut]
-            try:
-                df = fut.result()
-                if df is not None:
-                    result[ticker] = df
-            except Exception as e:
-                logger.debug("[프리페치] %s: %s", ticker, e)
-    logger.info("[프리페치] 완료 — %d/%d 종목 데이터 확보", len(result), len(tickers))
-    return result
+    return prefetch_ohlcv([t for t, _, _ in tickers], _fetch_ohlcv, workers, "[프리페치]")
 
 
 # ── 단일 종목×주차 스크리닝 (프리페치 데이터 사용) ──────────────

@@ -24,7 +24,7 @@ from core.db import (
     save_stage_classifications,
     get_active_stage_tickers,
 )
-from jobs.stage_shared import normalize_ohlcv, load_listed_shares, build_row
+from jobs.stage_shared import normalize_ohlcv, load_listed_shares, build_row, load_flow_range
 from telegram.telegram_notify import send_screener_comparison as tg_send_screener_comparison
 
 logger = logging.getLogger(__name__)
@@ -86,31 +86,11 @@ async def daily_stage_job(db_pool) -> set[str]:
                 pass
     logger.info("[3단계] OHLCV 수집: %d/%d종목", len(price_map), len(all_tickers))
 
-    # 3. daily_flow 20일 배치 로드
+    # 3. daily_flow 20일 배치 로드 (실패해도 빈 map으로 계속 — 라이브 잡 생존 우선)
     since_20d = today - timedelta(days=20)
-    flow_map: dict[str, object] = {}
+    flow_map: dict[str, pd.DataFrame] = {}
     try:
-        async with db_pool.acquire() as conn:
-            rows_flow = await conn.fetch(
-                """
-                SELECT ticker, trade_date, foreign_net, inst_net,
-                       foreign_streak, inst_streak, personal_net
-                FROM   daily_flow
-                WHERE  trade_date >= $1
-                ORDER  BY trade_date ASC
-                """,
-                since_20d,
-            )
-        for row in rows_flow:
-            t = row["ticker"]
-            if t not in flow_map:
-                flow_map[t] = []
-            flow_map[t].append(dict(row))
-        for t, rows_list in flow_map.items():
-            df_f = pd.DataFrame(rows_list)
-            df_f = df_f.set_index("trade_date")
-            df_f.index = pd.to_datetime(df_f.index)
-            flow_map[t] = df_f
+        flow_map = await load_flow_range(db_pool, since_20d, today)
     except Exception as e:
         logger.warning("[3단계] flow_map 로드 실패: %s", e)
 

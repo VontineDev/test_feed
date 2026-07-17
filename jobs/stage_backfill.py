@@ -64,7 +64,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from jobs._common import bootstrap, get_pool
-from jobs.stage_shared import normalize_ohlcv, load_listed_shares, build_row  # noqa: F401
+from jobs.stage_shared import (  # noqa: F401
+    normalize_ohlcv, load_listed_shares, build_row, prefetch_ohlcv, load_flow_range,
+)
 
 bootstrap(ROOT)
 
@@ -132,53 +134,11 @@ def fetch_daily_ohlcv(ticker: str, fetch_start: date, fetch_end: date) -> Option
 def batch_fetch_ohlcv(
     tickers: list[str], fetch_start: date, fetch_end: date, workers: int
 ) -> dict[str, pd.DataFrame]:
-    """티커 목록 일봉 병렬 수집 (fetch-once)."""
-    result: dict[str, pd.DataFrame] = {}
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = {ex.submit(fetch_daily_ohlcv, t, fetch_start, fetch_end): t for t in tickers}
-        done = 0
-        for fut in as_completed(futures):
-            done += 1
-            if done % 200 == 0:
-                logger.info("[stage백필] OHLCV 진행: %d/%d (성공 %d)", done, len(tickers), len(result))
-            t = futures[fut]
-            df = fut.result()
-            if df is not None:
-                result[t] = df
-    logger.info("[stage백필] OHLCV 수집 완료: %d/%d종목", len(result), len(tickers))
-    return result
-
-
-async def load_flow_range(
-    pool: asyncpg.Pool, window_start: date, window_end: date
-) -> dict[str, pd.DataFrame]:
-    """daily_flow 를 윈도우 전체에 대해 1회 bulk 로드 → 종목별 DataFrame.
-
-    columns: foreign_net, inst_net, foreign_streak, inst_streak, personal_net
-    (DatetimeIndex). personal_net은 classify_stage_v15(Stage1/2 개인 수급 조건)용.
-    """
-    flow_map: dict[str, list[dict]] = {}
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT ticker, trade_date, foreign_net, inst_net,
-                   foreign_streak, inst_streak, personal_net
-            FROM   daily_flow
-            WHERE  trade_date >= $1 AND trade_date <= $2
-            ORDER  BY trade_date ASC
-            """,
-            window_start, window_end,
-        )
-    for row in rows:
-        flow_map.setdefault(row["ticker"], []).append(dict(row))
-
-    out: dict[str, pd.DataFrame] = {}
-    for t, rlist in flow_map.items():
-        df = pd.DataFrame(rlist).set_index("trade_date")
-        df.index = pd.to_datetime(df.index)
-        out[t] = df
-    logger.info("[stage백필] daily_flow 로드: %d종목 (%s ~ %s)", len(out), window_start, window_end)
-    return out
+    """티커 목록 일봉 병렬 수집 (fetch-once). 스켈레톤은 stage_shared.prefetch_ohlcv."""
+    return prefetch_ohlcv(
+        tickers, lambda t: fetch_daily_ohlcv(t, fetch_start, fetch_end),
+        workers, "[stage백필]",
+    )
 
 
 # ── 슬라이스 헬퍼 ─────────────────────────────────────────────
