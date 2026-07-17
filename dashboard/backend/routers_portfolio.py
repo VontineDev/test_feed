@@ -21,7 +21,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from database import get_pool
-from common import _ext_thread
+from common import _ext_thread, fetch_current_prices
 
 logger = logging.getLogger(__name__)
 
@@ -43,67 +43,12 @@ class _HoldingInput(BaseModel):
 
 
 async def _get_current_prices(pool, tickers: list[str]) -> dict[str, float]:
-    """aftermarket_snap 최신 종가 조회 → 미수록 종목은 yfinance 폴백.
+    """(호환 별칭) common.fetch_current_prices 위임 (2026-07-17 통합).
 
-    한국주식: aftermarket_snap (reg_close) → yfinance .KS/.KQ
-    미국주식: yfinance 직접 조회 (숫자 없는 티커 = US 주식 판별)
+    bare 티커 전제: KR(숫자 포함)은 aftermarket_snap 우선 → yfinance .KS/.KQ
+    폴백, US(숫자 없음)는 yfinance 직접. 통합으로 티커별 5분 캐시가 적용됨.
     """
-    if not tickers:
-        return {}
-    prices: dict[str, float] = {}
-
-    # aftermarket_snap은 한국주식 전용
-    kr_tickers = [t for t in tickers if any(c.isdigit() for c in t)]
-    if kr_tickers:
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT DISTINCT ON (ticker) ticker, reg_close
-                FROM aftermarket_snap
-                WHERE ticker = ANY($1::text[])
-                  AND reg_close IS NOT NULL
-                ORDER BY ticker, trade_date DESC
-                """,
-                kr_tickers,
-            )
-        for r in rows:
-            if r["reg_close"]:
-                prices[r["ticker"]] = float(r["reg_close"])
-
-    missing = [t for t in tickers if t not in prices]
-    if missing:
-        def _yf_fetch():
-            import yfinance as yf
-            result: dict[str, float] = {}
-            for t in missing:
-                # 미국주식 판별: 티커에 숫자가 없으면 US
-                if not any(c.isdigit() for c in t):
-                    try:
-                        info = yf.Ticker(t).fast_info
-                        price = getattr(info, "last_price", None) or getattr(info, "regular_market_price", None)
-                        if price:
-                            result[t] = float(price)
-                            continue
-                    except Exception:
-                        pass
-                else:
-                    for suffix in (".KS", ".KQ"):
-                        try:
-                            info = yf.Ticker(t + suffix).fast_info
-                            price = getattr(info, "last_price", None) or getattr(info, "regular_market_price", None)
-                            if price:
-                                result[t] = float(price)
-                                break
-                        except Exception:
-                            continue
-            return result
-        try:
-            yf_prices = await _ext_thread(_yf_fetch, timeout=15.0)
-            prices.update(yf_prices)
-        except Exception as e:
-            logger.warning("[portfolio] yfinance 폴백 실패: %s", e)
-
-    return prices
+    return await fetch_current_prices(tickers, pool=pool)
 
 
 async def _get_usdkrw_rate() -> float:

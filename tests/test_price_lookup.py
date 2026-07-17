@@ -1,17 +1,14 @@
 """
-test_price_lookup.py — 가격조회 2계통 특성화(characterization) 테스트
+test_price_lookup.py — 통합 가격조회(common.fetch_current_prices) 테스트
 
-통합 전 회귀 스냅샷 (refactoring-roadmap.md Phase E 잔여 항목의 선행 작업):
-  common._fetch_current_prices        — paper trading용. yfinance 배치(1d/1m)
-                                        + 공유 TTL 캐시(5분), yfinance 형식 티커 전제.
-  routers_portfolio._get_current_prices — 수동 포트폴리오용. aftermarket_snap 우선
-                                        + yfinance 폴백, 캐시 없음, bare 티커 전제,
-                                        KR(숫자 포함)/US(숫자 없음) 판별.
+2026-07-17 통합: common._fetch_current_prices(paper)와
+routers_portfolio._get_current_prices(포트폴리오)가 단일 구현
+common.fetch_current_prices(tickers, *, pool=None, use_cache=True)로 합쳐짐.
+두 기존 이름은 얇은 위임 wrapper로 유지 (호출부/패치 타깃 보존).
 
-여기 기록된 동작은 "현재 그렇다"이지 "그래야 한다"가 아니다 — 통합 작업이
-의도적으로 바꾸는 동작은 해당 테스트를 함께 갱신할 것. 특히 quirk 2건:
-  - _fetch_current_prices의 캐시는 티커 목록과 무관하게 히트한다 (전역 스냅샷).
-  - 단일 티커 응답(플랫 컬럼)은 티커 컬럼 매칭 실패로 빈 결과가 된다.
+통합하면서 고친 quirk 2건 (이전 특성화 테스트가 기록했던 동작):
+  - 캐시가 티커 목록과 무관한 전역 스냅샷 → 티커별 (price, expires) 엔트리
+  - 단일 티커 플랫 컬럼 응답이 빈 결과 → Close 컬럼을 티커로 정규화해 반환
 """
 
 from __future__ import annotations
@@ -57,15 +54,13 @@ def _row(**kwargs):
     return FakeRow(kwargs)
 
 
-@pytest.fixture
-def clean_price_cache():
-    """common._POS_PRICE_CACHE 초기화 (dict 재대입 금지 — 참조 공유)."""
+@pytest.fixture(autouse=True)
+def price_cache():
+    """티커별 공유 캐시 초기화 (모든 테스트 — dict 재대입 금지, clear만)."""
     import common
-    common._POS_PRICE_CACHE["data"] = {}
-    common._POS_PRICE_CACHE["expires"] = 0.0
+    common._POS_PRICE_CACHE.clear()
     yield common._POS_PRICE_CACHE
-    common._POS_PRICE_CACHE["data"] = {}
-    common._POS_PRICE_CACHE["expires"] = 0.0
+    common._POS_PRICE_CACHE.clear()
 
 
 def _multiindex_hist(closes: dict[str, list[float]]) -> pd.DataFrame:
@@ -78,119 +73,6 @@ def _multiindex_hist(closes: dict[str, list[float]]) -> pd.DataFrame:
     df.columns = pd.MultiIndex.from_tuples(df.columns)
     return df
 
-
-# ═════════════════════════════════════════════════════════════
-# common._fetch_current_prices (paper trading 계열)
-# ═════════════════════════════════════════════════════════════
-
-class TestFetchCurrentPrices:
-
-    @pytest.mark.asyncio
-    async def test_empty_tickers_returns_empty(self, clean_price_cache):
-        from common import _fetch_current_prices
-        assert await _fetch_current_prices([]) == {}
-        assert clean_price_cache["data"] == {}  # 캐시 미기록
-
-    @pytest.mark.asyncio
-    async def test_batch_fetch_takes_last_close_per_ticker(self, clean_price_cache):
-        """MultiIndex 배치 응답 → 티커별 마지막 비-NaN Close, float 변환."""
-        from common import _fetch_current_prices
-        hist = _multiindex_hist({
-            "005930.KS": [70000.0, 71000.0],
-            "000660.KS": [150000.0, float("nan")],  # 마지막이 NaN → 직전 값
-        })
-        with patch("yfinance.download", MagicMock(return_value=hist)):
-            prices = await _fetch_current_prices(["005930.KS", "000660.KS"])
-        assert prices == {"005930.KS": 71000.0, "000660.KS": 150000.0}
-        assert all(isinstance(v, float) for v in prices.values())
-
-    @pytest.mark.asyncio
-    async def test_missing_ticker_omitted(self, clean_price_cache):
-        """응답에 없는 티커는 결과에서 제외 (예외 없이 skip)."""
-        from common import _fetch_current_prices
-        hist = _multiindex_hist({"005930.KS": [71000.0]})
-        with patch("yfinance.download", MagicMock(return_value=hist)):
-            prices = await _fetch_current_prices(["005930.KS", "999999.KQ"])
-        assert prices == {"005930.KS": 71000.0}
-
-    @pytest.mark.asyncio
-    async def test_cache_write_and_ttl(self, clean_price_cache):
-        """update_cache=True(기본): 결과와 만료시각(now+300s)을 공유 캐시에 기록."""
-        from common import _fetch_current_prices
-        hist = _multiindex_hist({"005930.KS": [71000.0]})
-        before = time.time()
-        with patch("yfinance.download", MagicMock(return_value=hist)):
-            await _fetch_current_prices(["005930.KS"])
-        assert clean_price_cache["data"] == {"005930.KS": 71000.0}
-        assert before + 290 < clean_price_cache["expires"] <= time.time() + 300
-
-    @pytest.mark.asyncio
-    async def test_cache_hit_ignores_requested_tickers(self, clean_price_cache):
-        """[quirk] 캐시는 티커 목록과 무관한 전역 스냅샷 — 유효하면 요청 티커가
-        달라도 그대로 반환하고 yfinance를 호출하지 않는다."""
-        from common import _fetch_current_prices
-        clean_price_cache["data"] = {"CACHED.KS": 123.0}
-        clean_price_cache["expires"] = time.time() + 100
-        dl = MagicMock()
-        with patch("yfinance.download", dl):
-            prices = await _fetch_current_prices(["005930.KS"])
-        assert prices == {"CACHED.KS": 123.0}
-        dl.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_update_cache_false_skips_cache_write(self, clean_price_cache):
-        """update_cache=False: 단일 종목 조회가 공유 캐시를 오염시키지 않는다."""
-        from common import _fetch_current_prices
-        hist = _multiindex_hist({"005930.KS": [71000.0]})
-        with patch("yfinance.download", MagicMock(return_value=hist)):
-            prices = await _fetch_current_prices(["005930.KS"], update_cache=False)
-        assert prices == {"005930.KS": 71000.0}
-        assert clean_price_cache["data"] == {}
-        assert clean_price_cache["expires"] == 0.0
-
-    @pytest.mark.asyncio
-    async def test_expired_cache_refetches(self, clean_price_cache):
-        """만료된 캐시는 무시하고 재조회한다."""
-        from common import _fetch_current_prices
-        clean_price_cache["data"] = {"STALE.KS": 1.0}
-        clean_price_cache["expires"] = time.time() - 1
-        hist = _multiindex_hist({"005930.KS": [71000.0]})
-        with patch("yfinance.download", MagicMock(return_value=hist)):
-            prices = await _fetch_current_prices(["005930.KS"])
-        assert prices == {"005930.KS": 71000.0}
-
-    @pytest.mark.asyncio
-    async def test_yfinance_error_returns_empty(self, clean_price_cache):
-        """yfinance 예외는 삼키고 빈 dict 반환 (요청은 죽지 않음)."""
-        from common import _fetch_current_prices
-        with patch("yfinance.download", MagicMock(side_effect=RuntimeError("boom"))):
-            prices = await _fetch_current_prices(["005930.KS"])
-        assert prices == {}
-
-    @pytest.mark.asyncio
-    async def test_timeout_returns_empty(self, clean_price_cache):
-        """외부풀 타임아웃(20s) → 빈 dict 반환."""
-        import asyncio
-        import common
-        with patch.object(common, "_ext_thread",
-                          AsyncMock(side_effect=asyncio.TimeoutError)):
-            prices = await common._fetch_current_prices(["005930.KS"])
-        assert prices == {}
-
-    @pytest.mark.asyncio
-    async def test_flat_columns_yield_empty(self, clean_price_cache):
-        """[quirk] 플랫 컬럼(OHLCV) 응답 — 단일 티커 형태 — 은 티커 컬럼
-        매칭에 실패해 빈 결과가 된다 (현재 동작 기록)."""
-        from common import _fetch_current_prices
-        hist = pd.DataFrame({"Open": [1.0], "Close": [71000.0]})
-        with patch("yfinance.download", MagicMock(return_value=hist)):
-            prices = await _fetch_current_prices(["005930.KS"])
-        assert prices == {}
-
-
-# ═════════════════════════════════════════════════════════════
-# routers_portfolio._get_current_prices (수동 포트폴리오 계열)
-# ═════════════════════════════════════════════════════════════
 
 def _fake_ticker_factory(fast_infos: dict):
     """yf.Ticker mock: {symbol: SimpleNamespace(...)} — 미등록 심볼은 예외."""
@@ -212,7 +94,149 @@ def _fi(last_price=None, regular_market_price=None):
     )
 
 
-class TestGetCurrentPrices:
+# ═════════════════════════════════════════════════════════════
+# yfinance 배치 경로 (yfinance 형식 티커 — 구 _fetch_current_prices 계열)
+# ═════════════════════════════════════════════════════════════
+
+class TestBatchPath:
+
+    @pytest.mark.asyncio
+    async def test_empty_tickers_returns_empty(self, price_cache):
+        from common import fetch_current_prices
+        assert await fetch_current_prices([]) == {}
+        assert price_cache == {}
+
+    @pytest.mark.asyncio
+    async def test_batch_fetch_takes_last_close_per_ticker(self):
+        """MultiIndex 배치 응답 → 티커별 마지막 비-NaN Close, float 변환."""
+        from common import fetch_current_prices
+        hist = _multiindex_hist({
+            "005930.KS": [70000.0, 71000.0],
+            "000660.KS": [150000.0, float("nan")],  # 마지막이 NaN → 직전 값
+        })
+        with patch("yfinance.download", MagicMock(return_value=hist)):
+            prices = await fetch_current_prices(["005930.KS", "000660.KS"])
+        assert prices == {"005930.KS": 71000.0, "000660.KS": 150000.0}
+        assert all(isinstance(v, float) for v in prices.values())
+
+    @pytest.mark.asyncio
+    async def test_missing_ticker_omitted(self):
+        """응답에 없는 티커는 결과에서 제외 (예외 없이 skip)."""
+        from common import fetch_current_prices
+        hist = _multiindex_hist({"005930.KS": [71000.0]})
+        with patch("yfinance.download", MagicMock(return_value=hist)):
+            prices = await fetch_current_prices(["005930.KS", "999999.KQ"])
+        assert prices == {"005930.KS": 71000.0}
+
+    @pytest.mark.asyncio
+    async def test_flat_columns_single_ticker_normalized(self):
+        """[quirk 수정] 단일 티커 플랫 컬럼(OHLCV) 응답도 Close를 반환한다.
+        (통합 전에는 티커 컬럼 매칭 실패로 빈 결과였음.)"""
+        from common import fetch_current_prices
+        hist = pd.DataFrame({"Open": [70500.0], "Close": [71000.0]})
+        with patch("yfinance.download", MagicMock(return_value=hist)):
+            prices = await fetch_current_prices(["005930.KS"])
+        assert prices == {"005930.KS": 71000.0}
+
+    @pytest.mark.asyncio
+    async def test_yfinance_error_returns_empty(self):
+        """yfinance 예외는 삼키고 빈 dict 반환 (요청은 죽지 않음)."""
+        from common import fetch_current_prices
+        with patch("yfinance.download", MagicMock(side_effect=RuntimeError("boom"))):
+            prices = await fetch_current_prices(["005930.KS"])
+        assert prices == {}
+
+    @pytest.mark.asyncio
+    async def test_timeout_returns_empty(self):
+        """외부풀 타임아웃(20s) → 빈 dict 반환."""
+        import asyncio
+        import common
+        with patch.object(common, "_ext_thread",
+                          AsyncMock(side_effect=asyncio.TimeoutError)):
+            prices = await common.fetch_current_prices(["005930.KS"])
+        assert prices == {}
+
+
+# ═════════════════════════════════════════════════════════════
+# 티커별 캐시 (quirk 수정: 전역 스냅샷 → per-ticker 엔트리)
+# ═════════════════════════════════════════════════════════════
+
+class TestPerTickerCache:
+
+    @pytest.mark.asyncio
+    async def test_cache_write_per_ticker_with_ttl(self, price_cache):
+        """조회 결과는 티커별 (price, expires=now+300s) 엔트리로 기록."""
+        from common import fetch_current_prices
+        hist = _multiindex_hist({"005930.KS": [71000.0]})
+        before = time.time()
+        with patch("yfinance.download", MagicMock(return_value=hist)):
+            await fetch_current_prices(["005930.KS"])
+        price, expires = price_cache["005930.KS"]
+        assert price == 71000.0
+        assert before + 290 < expires <= time.time() + 300
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_skips_fetch(self, price_cache):
+        """[quirk 수정] 캐시는 요청한 티커에 대해서만 히트한다."""
+        from common import fetch_current_prices
+        price_cache["005930.KS"] = (71000.0, time.time() + 100)
+        dl = MagicMock()
+        with patch("yfinance.download", dl):
+            prices = await fetch_current_prices(["005930.KS"])
+        assert prices == {"005930.KS": 71000.0}
+        dl.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_partial_cache_fetches_only_missing(self, price_cache):
+        """[quirk 수정] 일부만 캐시 유효 → 나머지 티커만 조회한다.
+        (통합 전에는 캐시가 유효하면 다른 티커 요청에도 캐시 전체를 반환.)"""
+        from common import fetch_current_prices
+        price_cache["005930.KS"] = (71000.0, time.time() + 100)
+        hist = _multiindex_hist({"000660.KS": [150000.0]})
+        dl = MagicMock(return_value=hist)
+        with patch("yfinance.download", dl):
+            prices = await fetch_current_prices(["005930.KS", "000660.KS"])
+        assert prices == {"005930.KS": 71000.0, "000660.KS": 150000.0}
+        # 다운로드는 캐시 미스 티커만
+        assert dl.call_args.args[0] == ["000660.KS"]
+
+    @pytest.mark.asyncio
+    async def test_expired_entry_refetches(self, price_cache):
+        """만료된 엔트리는 무시하고 재조회한다."""
+        from common import fetch_current_prices
+        price_cache["005930.KS"] = (1.0, time.time() - 1)
+        hist = _multiindex_hist({"005930.KS": [71000.0]})
+        with patch("yfinance.download", MagicMock(return_value=hist)):
+            prices = await fetch_current_prices(["005930.KS"])
+        assert prices == {"005930.KS": 71000.0}
+
+    @pytest.mark.asyncio
+    async def test_use_cache_false_bypasses_read_and_write(self, price_cache):
+        """use_cache=False: 캐시를 읽지도 쓰지도 않는다 (항상 신선)."""
+        from common import fetch_current_prices
+        price_cache["005930.KS"] = (1.0, time.time() + 100)  # 유효한 엔트리 무시돼야 함
+        hist = _multiindex_hist({"005930.KS": [71000.0]})
+        with patch("yfinance.download", MagicMock(return_value=hist)):
+            prices = await fetch_current_prices(["005930.KS"], use_cache=False)
+        assert prices == {"005930.KS": 71000.0}
+        assert price_cache["005930.KS"] == (1.0, pytest.approx(price_cache["005930.KS"][1]))
+
+    @pytest.mark.asyncio
+    async def test_legacy_wrapper_update_cache_false(self, price_cache):
+        """(호환) _fetch_current_prices(update_cache=False) → use_cache=False 매핑."""
+        from common import _fetch_current_prices
+        hist = _multiindex_hist({"005930.KS": [71000.0]})
+        with patch("yfinance.download", MagicMock(return_value=hist)):
+            prices = await _fetch_current_prices(["005930.KS"], update_cache=False)
+        assert prices == {"005930.KS": 71000.0}
+        assert price_cache == {}
+
+
+# ═════════════════════════════════════════════════════════════
+# bare 티커 경로 (aftermarket_snap + fast_info — 구 _get_current_prices 계열)
+# ═════════════════════════════════════════════════════════════
+
+class TestBareTickerPath:
 
     @pytest.mark.asyncio
     async def test_empty_tickers_returns_empty(self):
@@ -232,7 +256,6 @@ class TestGetCurrentPrices:
         assert prices == {"005930": 71000.0}
         assert isinstance(prices["005930"], float)
         assert tk.calls == []
-        # DB 쿼리에 KR 티커만 전달됐는지
         assert conn.fetch.call_args.args[1] == ["005930"]
 
     @pytest.mark.asyncio
@@ -292,12 +315,14 @@ class TestGetCurrentPrices:
 
     @pytest.mark.asyncio
     async def test_yf_fallback_failure_returns_db_partial(self):
-        """폴백 스레드 자체가 실패해도 DB에서 얻은 부분 결과는 반환."""
-        import routers_portfolio as mod
+        """폴백 스레드 자체가 실패해도 DB에서 얻은 부분 결과는 반환.
+        (통합으로 구현이 common으로 이동 — 패치 타깃도 common._ext_thread.)"""
+        import common
+        from routers_portfolio import _get_current_prices
         pool, _ = _make_pool([_row(ticker="005930", reg_close=71000)])
-        with patch.object(mod, "_ext_thread",
+        with patch.object(common, "_ext_thread",
                           AsyncMock(side_effect=RuntimeError("pool down"))):
-            prices = await mod._get_current_prices(pool, ["005930", "000660"])
+            prices = await _get_current_prices(pool, ["005930", "000660"])
         assert prices == {"005930": 71000.0}
 
     @pytest.mark.asyncio
@@ -320,3 +345,66 @@ class TestGetCurrentPrices:
             prices = await _get_current_prices(pool, ["005930"])
         assert prices == {"005930": 71000.0}
         assert tk.calls == ["005930.KS"]
+
+    @pytest.mark.asyncio
+    async def test_portfolio_now_cached(self, price_cache):
+        """(통합 신규 동작) 포트폴리오 경로도 티커별 5분 캐시 적용 —
+        두 번째 호출은 DB/yfinance를 다시 치지 않는다."""
+        from routers_portfolio import _get_current_prices
+        pool1, conn1 = _make_pool([_row(ticker="005930", reg_close=71000)])
+        with patch("yfinance.Ticker", _fake_ticker_factory({})):
+            first = await _get_current_prices(pool1, ["005930"])
+        assert first == {"005930": 71000.0}
+
+        pool2, _ = _make_pool([])
+        with patch("yfinance.Ticker", _fake_ticker_factory({})):
+            second = await _get_current_prices(pool2, ["005930"])
+        assert second == {"005930": 71000.0}
+        pool2.acquire.assert_not_called()
+
+
+# ═════════════════════════════════════════════════════════════
+# 혼합 형식 (통합 함수 직접 호출)
+# ═════════════════════════════════════════════════════════════
+
+class TestMixedFormats:
+
+    @pytest.mark.asyncio
+    async def test_three_paths_in_one_call(self):
+        """bare KR(DB) + yfinance 형식(배치) + US(fast_info)를 한 호출로."""
+        from common import fetch_current_prices
+        pool, _ = _make_pool([_row(ticker="005930", reg_close=71000)])
+        hist = _multiindex_hist({"000660.KS": [150000.0]})
+        tk = _fake_ticker_factory({"AAPL": _fi(last_price=200.5)})
+        with (
+            patch("yfinance.download", MagicMock(return_value=hist)),
+            patch("yfinance.Ticker", tk),
+        ):
+            prices = await fetch_current_prices(
+                ["005930", "000660.KS", "AAPL"], pool=pool
+            )
+        assert prices == {
+            "005930": 71000.0,
+            "000660.KS": 150000.0,
+            "AAPL": 200.5,
+        }
+
+    @pytest.mark.asyncio
+    async def test_no_pool_bare_kr_goes_straight_to_fast_info(self):
+        """pool 미제공 시 bare KR도 DB 없이 fast_info 폴백만 탄다."""
+        from common import fetch_current_prices
+        tk = _fake_ticker_factory({"005930.KS": _fi(last_price=71000.0)})
+        with patch("yfinance.Ticker", tk):
+            prices = await fetch_current_prices(["005930"])
+        assert prices == {"005930": 71000.0}
+
+    @pytest.mark.asyncio
+    async def test_duplicate_tickers_deduped(self):
+        """중복 티커는 1회만 조회한다."""
+        from common import fetch_current_prices
+        hist = _multiindex_hist({"005930.KS": [71000.0]})
+        dl = MagicMock(return_value=hist)
+        with patch("yfinance.download", dl):
+            prices = await fetch_current_prices(["005930.KS", "005930.KS"])
+        assert prices == {"005930.KS": 71000.0}
+        assert dl.call_args.args[0] == ["005930.KS"]

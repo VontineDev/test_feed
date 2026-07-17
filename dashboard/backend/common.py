@@ -147,8 +147,10 @@ _PRICE_TTL = 300     # 5분
 _NXT_TTL   = 120     # NXT 시간외 2분
 _AFTERMARKET_TTL = 1800   # 장 마감 후 30분 (aftermarket_snap은 하루 종일 불변)
 
-# ── 포지션 현재가 캐시 — {ticker: current_price_float} (5분) ──
-_POS_PRICE_CACHE: dict = {"data": {}, "expires": 0.0}
+# ── 현재가 캐시 — {ticker: (price, expires_ts)} 티커별 엔트리 (5분) ──
+# 과거에는 {"data", "expires"} 전역 스냅샷이라 요청 티커와 무관하게 히트하는
+# 문제가 있었음 (2026-07-17 티커별 캐시로 전환).
+_POS_PRICE_CACHE: dict[str, tuple[float, float]] = {}
 
 # ── 히트맵 캐시 (5분) ────────────────────────────────────────
 # market_open: 캐시 생성 시점의 _is_market_open() 값 — 케이스 전환 감지용
@@ -194,55 +196,154 @@ async def _bg_refresh(cache: dict, lock: asyncio.Lock, fetch_fn, ttl, label: str
             logger.warning("[cache] %s 백그라운드 갱신 실패 — stale 유지: %s", label, e)
 
 
-# ── 포지션 현재가 조회 (yfinance 1d 1m 인터벌, 5분 캐시) ────
-async def _fetch_current_prices(
-    tickers: list[str], *, update_cache: bool = True
+# ── 통합 현재가 조회 (paper + 수동 포트폴리오 공용, 2026-07-17 통합) ──
+async def fetch_current_prices(
+    tickers: list[str],
+    *,
+    pool=None,
+    use_cache: bool = True,
 ) -> dict[str, float]:
-    """종목 리스트의 최신 종가를 yfinance로 조회. {ticker: price} 반환.
+    """현재가 통합 조회. {ticker: price} 반환 (입력 티커 그대로 키잉).
 
-    update_cache=False: 단일 종목 조회 시 공유 캐시 오염 방지용.
+    티커 형식별 조회 경로:
+      - "005930.KS" 등 "." 포함        → yfinance 배치 다운로드 (1d/1m)
+      - "005930" (숫자 포함, "." 없음) → pool 제공 시 aftermarket_snap 우선,
+                                         미수록 시 yfinance .KS→.KQ fast_info
+      - "AAPL" (숫자 없음, "." 없음)   → yfinance fast_info 직접 (US 판별)
+
+    캐시는 티커별 (price, expires) 엔트리 — 유효한 티커만 캐시에서 가져오고
+    나머지만 조회한다. use_cache=False면 읽기/쓰기 모두 건너뛴다(항상 신선).
+    모든 조회 실패는 삼키고 얻은 것만 반환 — 요청을 죽이지 않는다.
     """
     if not tickers:
         return {}
     now = _time_module.time()
-    if _POS_PRICE_CACHE["data"] and now < _POS_PRICE_CACHE["expires"]:
-        return _POS_PRICE_CACHE["data"]
+    prices: dict[str, float] = {}
 
-    def _fetch() -> dict[str, float]:
-        result: dict[str, float] = {}
-        try:
-            import yfinance as _yf
-            import pandas as _pd
-            hist = _yf.download(
-                tickers, period="1d", interval="1m",
-                auto_adjust=True, progress=False, threads=True,
+    remaining = list(dict.fromkeys(tickers))  # 중복 제거, 순서 유지
+    if use_cache:
+        misses = []
+        for t in remaining:
+            entry = _POS_PRICE_CACHE.get(t)
+            if entry and now < entry[1]:
+                prices[t] = entry[0]
+            else:
+                misses.append(t)
+        remaining = misses
+    if not remaining:
+        return prices
+
+    fetched: dict[str, float] = {}
+
+    # 1) aftermarket_snap — bare KR 코드 전용 (한국주식 스냅샷 테이블)
+    bare_kr = [t for t in remaining if "." not in t and any(c.isdigit() for c in t)]
+    if pool is not None and bare_kr:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (ticker) ticker, reg_close
+                FROM aftermarket_snap
+                WHERE ticker = ANY($1::text[])
+                  AND reg_close IS NOT NULL
+                ORDER BY ticker, trade_date DESC
+                """,
+                bare_kr,
             )
-            if hist.empty:
-                return result
-            close_df = hist["Close"] if isinstance(hist.columns, _pd.MultiIndex) else hist
-            for t in tickers:
-                try:
-                    if t not in close_df.columns:
-                        continue
-                    series = close_df[t].dropna()
-                    if len(series) >= 1:
-                        result[t] = float(series.iloc[-1])
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.warning("[prices] 현재가 조회 실패: %s", e)
-        return result
+        for r in rows:
+            if r["reg_close"]:
+                fetched[r["ticker"]] = float(r["reg_close"])
 
-    try:
-        prices = await _ext_thread(_fetch, timeout=20.0)
-    except asyncio.TimeoutError:
-        logger.warning("[prices] yfinance 타임아웃 (20s) — 빈 결과 반환")
-        prices = {}
-    if update_cache:
-        _POS_PRICE_CACHE["data"] = prices
-        _POS_PRICE_CACHE["expires"] = now + _PRICE_TTL
-        logger.info("[prices] 포지션 현재가 갱신: %d종목", len(prices))
+    # 2) yfinance 배치 — yfinance 형식 티커
+    yf_batch = [t for t in remaining if "." in t and t not in fetched]
+    if yf_batch:
+        def _fetch_batch() -> dict[str, float]:
+            result: dict[str, float] = {}
+            try:
+                import yfinance as _yf
+                import pandas as _pd
+                hist = _yf.download(
+                    yf_batch, period="1d", interval="1m",
+                    auto_adjust=True, progress=False, threads=True,
+                )
+                if hist is None or hist.empty:
+                    return result
+                if isinstance(hist.columns, _pd.MultiIndex):
+                    close_df = hist["Close"]
+                elif len(yf_batch) == 1 and "Close" in hist.columns:
+                    # 단일 티커 응답은 플랫 OHLCV 컬럼 — 티커 컬럼으로 정규화
+                    close_df = hist[["Close"]].rename(columns={"Close": yf_batch[0]})
+                else:
+                    close_df = hist
+                for t in yf_batch:
+                    try:
+                        if t not in close_df.columns:
+                            continue
+                        series = close_df[t].dropna()
+                        if len(series) >= 1:
+                            result[t] = float(series.iloc[-1])
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning("[prices] 현재가 배치 조회 실패: %s", e)
+            return result
+
+        try:
+            fetched.update(await _ext_thread(_fetch_batch, timeout=20.0))
+        except asyncio.TimeoutError:
+            logger.warning("[prices] yfinance 배치 타임아웃 (20s)")
+
+    # 3) fast_info 폴백 — bare 코드 (US 직접 / KR .KS→.KQ 순서 시도)
+    singles = [t for t in remaining if "." not in t and t not in fetched]
+    if singles:
+        def _fetch_singles() -> dict[str, float]:
+            import yfinance as yf
+            result: dict[str, float] = {}
+            for t in singles:
+                if not any(c.isdigit() for c in t):
+                    try:
+                        info = yf.Ticker(t).fast_info
+                        price = getattr(info, "last_price", None) or getattr(info, "regular_market_price", None)
+                        if price:
+                            result[t] = float(price)
+                            continue
+                    except Exception:
+                        pass
+                else:
+                    for suffix in (".KS", ".KQ"):
+                        try:
+                            info = yf.Ticker(t + suffix).fast_info
+                            price = getattr(info, "last_price", None) or getattr(info, "regular_market_price", None)
+                            if price:
+                                result[t] = float(price)
+                                break
+                        except Exception:
+                            continue
+            return result
+
+        try:
+            fetched.update(await _ext_thread(_fetch_singles, timeout=15.0))
+        except Exception as e:
+            logger.warning("[prices] fast_info 폴백 실패: %s", e)
+
+    if use_cache and fetched:
+        expires = now + _PRICE_TTL
+        for t, p in fetched.items():
+            _POS_PRICE_CACHE[t] = (p, expires)
+        logger.info("[prices] 현재가 갱신: %d종목 (캐시 엔트리 %d)", len(fetched), len(_POS_PRICE_CACHE))
+
+    prices.update(fetched)
     return prices
+
+
+async def _fetch_current_prices(
+    tickers: list[str], *, update_cache: bool = True
+) -> dict[str, float]:
+    """(호환 별칭) fetch_current_prices 위임 — 기존 호출부/패치 타깃 보존용.
+
+    update_cache=False는 use_cache=False로 매핑 — 티커별 캐시 전환으로
+    "캐시 오염" 우려는 사라졌지만, 호출부 의도(항상 신선한 값)를 유지한다.
+    """
+    return await fetch_current_prices(tickers, use_cache=update_cache)
 
 
 # ── 시장 개장 여부 ─────────────────────────────────────────────
