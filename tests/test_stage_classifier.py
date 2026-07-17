@@ -1,6 +1,7 @@
 """
-test_stage_classifier.py — stage_classifier.py 전체 코드패스 커버
+test_stage_classifier.py — stage_classifier.py + stage_classifier_legacy.py 전체 코드패스 커버
 25개 코드패스 (Stage 1~3 각 조건 + edge case + peakout).
+구버전 디스패처(classify_stage v1.0, v11~v13)는 analysis.stage_classifier_legacy에서 import.
 """
 
 from __future__ import annotations
@@ -10,8 +11,9 @@ import pytest
 from datetime import date, timedelta
 from typing import Optional
 
-from analysis.stage_classifier import (
-    classify_stage, classify_stage_v11, classify_stage_v12, classify_stage_v13, check_peakout,
+from analysis.stage_classifier import check_peakout
+from analysis.stage_classifier_legacy import (
+    classify_stage, classify_stage_v11, classify_stage_v12, classify_stage_v13,
 )
 
 
