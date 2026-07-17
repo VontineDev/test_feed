@@ -27,6 +27,7 @@
 | 2026-07-17 | Phase G run_scheduler.py 분해, 안전한 부분만 완료 (아래 상세) | L | jobs/scheduler_collect.py + jobs/scheduler_wrappers.py 추출 (2커밋) |
 | 2026-07-17 | Phase F 잔여: 프리페치 스켈레톤 + load_flow_range 정책 통일 (아래 상세) | S | stage_shared.prefetch_ohlcv/load_flow_range 추가 (1커밋) |
 | 2026-07-17 | stage_classifier 레거시 분리 (9단계 계획 잔여, 아래 상세) | S | analysis/stage_classifier_legacy.py 신설 (1커밋) |
+| 2026-07-17 | 텔레그램 계층 정리 (9단계 계획 마지막 항목, 아래 상세) | M | notify 중복 통합 + telegram/bot_handlers.py 분리 (2커밋) |
 
 ### 2026-07-16 core/db.py 도메인 분리 상세
 
@@ -112,6 +113,25 @@
 **의존 방향**: legacy → stage_classifier 단방향(공유 헬퍼 import). 역방향 facade 재수출은 순환 import를 만들므로 두지 않고, 유일한 소비자였던 `test_stage_classifier.py`의 import를 legacy 직접 참조로 전환(Phase D 별칭 마이그레이션과 동일 패턴). `test_compose_parity.py`는 주석 언급뿐 실 의존 없음. 프로덕션 소비자(stage_job/stage_backfill/stage_shared)는 v15/check_peakout/compute_*만 써서 무변경.
 
 검증: AST 비교 8 moved + 15 kept 전부 identical, import 스모크, `test_stage_classifier.py`+`test_compose_parity.py`+`test_stage_backfill.py` 74 passed, 전체 pytest 793 passed(신규 실패 0), pyright 대상 파일 0 errors.
+
+### 2026-07-17 텔레그램 계층 정리 (9단계 계획 마지막 항목)
+
+2단계로 처리. telegram_trade.py는 이미 깨끗한 구조(전역 0, 테스트 타깃 1개)라 무변경.
+
+**1단계 — 파일 내 중복 정리 (1커밋):**
+- telegram_notify: send_* 5개 함수에 중첩 정의돼 있던 byte-identical `esc()` 사본 5개 + `esc_code()` 사본 2개를 모듈 레벨 단일 정의로 통합.
+- telegram_bot: /paper·/paper_perf에 중복된 `MODEL_ICON` dict를 모듈 상수로 호이스팅.
+- **의도적 비통합**: telegram_bot의 `esc()`는 백틱 미포함 charset으로 notify 버전과 동작이 다름 — 강제 통일은 동작 변경이라 제외. `_get_token`/`_send` 계열 3종(bot/notify/trade)도 재시도·parse_mode·시그니처가 서로 달라(의도적) 통합 대상 아님.
+
+**2단계 — telegram_bot.py 핸들러 분리 (1커밋):** 1,272줄 → 293줄 + `telegram/bot_handlers.py`(1,064줄) 신설.
+- 이동: 명령어 핸들러/수동트리거 태스크 21개 + `esc`/`_fmt_kst`/`MODEL_ICON`. telegram_bot이 top-level 재수출(facade)해 `from telegram.telegram_bot import X` 경로(테스트 4파일) 보존.
+- **telegram_bot에 남긴 것**: 폴링 루프·라우팅(`_process_update`)·전송(`_send`/`_send_plain`)·락 5개·전역(`_last_update_id`/`_start_time`/`_seen_hashes_ref`)·config 유틸. 이유: (a) `global` 재바인딩 3개(Phase G와 동일 제약), (b) 테스트가 `mock.patch("telegram.telegram_bot._send_plain/_backtest_lock/_handle_backtest_compose")`로 모듈 속성을 통째로 교체, (c) **test_run_screener_cmd가 `telegram_bot._scan_lock = asyncio.Lock()`으로 락 자체를 재바인딩** — facade 재수출로는 재바인딩이 핸들러에 전파되지 않으므로 락은 반드시 telegram_bot 소유 + 속성 접근이어야 함(탐색 단계에서 발견한 함정).
+- 핸들러는 함수 본문 `import telegram.telegram_bot as bot` 지연 import + `bot._send_plain(...)` 속성 접근으로 항상 최신 바인딩을 읽음 — jobs/scheduler_wrappers.py(Phase G)와 동일 패턴. bot_handlers는 top-level에서 telegram_bot을 import하지 않아 어느 방향으로 먼저 import돼도 순환 없음.
+- 함수-로컬 import(telegram_notify/telegram_trade/run_scheduler/jobs.*)는 함수와 함께 이동 — 패치 문자열이 소스 모듈을 타깃하므로 lockstep 문제 없음.
+
+검증: AST 비교(지연 import 제거 + `bot.` 접두어 정규화 후) 23 moved + 10 kept 전부 identical, 양방향 import 스모크 + facade 동일성 확인, `run_scheduler.py --help`, 텔레그램 테스트 12파일 130 passed, 전체 pytest 793 passed(신규 실패 0), pyright 오류 수 베이스라인 동일. 라이브 스케줄러 프로세스 재시작은 범위 밖.
+
+**이로써 2026-07-15 시작한 구조 리팩토링 9단계 계획 전체 종료.** 남은 것은 위 Phase E/F/G 표의 기능 작업 재분류 항목(가격조회 통합 등)과 비대상 목록뿐.
 
 ---
 

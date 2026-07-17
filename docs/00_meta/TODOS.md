@@ -38,7 +38,11 @@ re-export 심을 남김.
 - `jobs/ohlcv_warm.py`의 주말 스킵 로직 — last_trading_day와 의미가 다름
   (월요일 실행 시 금요일 daily_ohlcv를 채우는 회차가 없는 잠재 커버리지 갭).
   보정 전환은 동작 변경이라 별도 fix로 판단 필요 (코드에 TODO 주석 있음).
-- 전체 9단계 계획의 나머지: 텔레그램 계층 정리,
+- 전체 9단계 계획의 나머지: ~~텔레그램 계층 정리~~ — 완료(2026-07-17,
+  2단계: notify esc/esc_code 중첩 사본 7개 통합 + telegram_bot 핸들러
+  21개를 telegram/bot_handlers.py로 분리(1,272→293줄, facade + 지연
+  import 속성 접근 패턴). 상세는
+  [refactoring-roadmap.md](refactoring-roadmap.md) 참조),
   ~~지표/OHLCV 통합~~ — 완료(2026-07-17, jobs/stage_shared.py, Phase F),
   ~~대시보드 라우터 분리~~ — 완료(2026-07-16, `b591f19`~`54d5001` 7커밋),
   ~~stage_classifier 레거시 분리~~ — 완료(2026-07-17,
