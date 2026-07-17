@@ -151,11 +151,12 @@
 1. 선행 회귀 테스트: `tests/test_price_lookup.py` 특성화 테스트 20개로 두 함수의 현재 동작 고정(quirk 2건 포함).
 2. 통합: `common.fetch_current_prices(tickers, *, pool=None, use_cache=True)` 단일 구현 — ① bare KR+pool → aftermarket_snap, ② yfinance 형식 → 배치 다운로드, ③ 잔여 bare → fast_info(US 직접/KR .KS→.KQ). quirk 2건 수정: 전역 스냅샷 캐시 → **티커별 (price, expires) 엔트리**, 단일 티커 플랫 컬럼 응답 → Close 정규화 반환. 기존 두 이름은 얇은 위임 wrapper로 유지(호출부 5곳·test_paper_analytics patch 타깃 무변경). 부수 동작 변경 2건: `update_cache=False`는 이제 캐시 읽기도 건너뜀(항상 신선), 포트폴리오 경로에 티커별 5분 캐시 신규 적용. 테스트 26개로 갱신, 전체 pytest 819 passed.
 
-남은 항목:
+~~나머지 krx_listings 패턴 조정~~ — **완료(2026-07-17, case-by-case 판정)**:
+- **routers_paper "krx_listings 항상 비어있음" 주석**: 실 DB 확인 결과 **전제가 거짓**(전 종목 2,765행, name_ko/listed_shares 100%). 이 전제로 tn-only로 축소돼 있던 curve 종목명 맵 + export CSV 쿼리 2개를 공용 `_NAME_RESOLUTION_JOIN`으로 승격 — 실측으로 모의투자 종목 62개 중 38개의 한글명 해석이 복구됨.
+- **`_STAGE_QUERY`**: sector까지 해석하는 superset + 별칭 `sc` — 통합하려면 별칭 파라미터화·다른 LATERAL 필요. **의도적 비대상 확정.**
+- **`_UNIFIED_TAIL` kl CTE**: bare 코드 정규화 4단계 폴백, 별개 패턴. **의도적 비대상 확정.**
 
-| 항목 | What | 제약 | Effort |
-|---|---|---|---|
-| 나머지 krx_listings 패턴 조정 | `_STAGE_QUERY`(섹터 해석 superset), `_UNIFIED_TAIL`(4단계 폴백), `routers_paper.py`의 "krx_listings 항상 비어있음" 예외 주석(전제 재확인 필요) | 각각 실제 동작이 달라 case-by-case 판단 필요 | S~M |
+**Phase E 잔여 항목 전부 종료.**
 
 ### Phase F — 백필 플러밍 통합 — ✅ 완료 (범위 재조정)
 
