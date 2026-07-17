@@ -149,7 +149,7 @@
 
 | 항목 | What | 제약 | Effort |
 |---|---|---|---|
-| 가격 조회 로직 통합 | `common._fetch_current_prices`(paper, 배치+캐시, KR-only)와 `routers_portfolio._get_current_prices`(portfolio, DB우선+폴백, KR+US)를 하나로 — 통합하려면 pool 파라미터·US 분기·캐시 키 분리 등 **새 로직 작성 필요**(순수 이동 아님) | 둘 다 현재 테스트 커버리지 0 — 통합 전 회귀 테스트부터 작성 권장 | M(기능 작업) |
+| 가격 조회 로직 통합 | `common._fetch_current_prices`(paper, 배치+캐시, KR-only)와 `routers_portfolio._get_current_prices`(portfolio, DB우선+폴백, KR+US)를 하나로 — 통합하려면 pool 파라미터·US 분기·캐시 키 분리 등 **새 로직 작성 필요**(순수 이동 아님) | ~~둘 다 현재 테스트 커버리지 0~~ — 선행 조건 해소(2026-07-17): `tests/test_price_lookup.py` 특성화 테스트 20개로 현재 동작 고정(quirk 2건 포함 — 티커 무관 전역 캐시 히트, 플랫 컬럼 빈 결과). 통합 시 의도적 동작 변경은 테스트 함께 갱신 | M(기능 작업) |
 | 나머지 krx_listings 패턴 조정 | `_STAGE_QUERY`(섹터 해석 superset), `_UNIFIED_TAIL`(4단계 폴백), `routers_paper.py`의 "krx_listings 항상 비어있음" 예외 주석(전제 재확인 필요) | 각각 실제 동작이 달라 case-by-case 판단 필요 | S~M |
 
 ### Phase F — 백필 플러밍 통합 — ✅ 완료 (범위 재조정)
