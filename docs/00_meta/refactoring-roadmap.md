@@ -143,13 +143,18 @@
 
 위 완료 기록 참조. 다음은 Phase E부터.
 
-### Phase E — 대시보드 백엔드 마무리 — ✅ 완료 (3/4)
+### Phase E — 대시보드 백엔드 마무리 — ✅ 완료 (3/4 + 잔여 통합 완료)
 
-위 완료 기록 참조. 남은 항목(순수 리팩토링이 아니라 별도 기능 작업으로 재분류):
+위 완료 기록 참조.
+
+~~가격 조회 로직 통합~~ — **완료(2026-07-17, 기능 작업)**. 2단계로 처리:
+1. 선행 회귀 테스트: `tests/test_price_lookup.py` 특성화 테스트 20개로 두 함수의 현재 동작 고정(quirk 2건 포함).
+2. 통합: `common.fetch_current_prices(tickers, *, pool=None, use_cache=True)` 단일 구현 — ① bare KR+pool → aftermarket_snap, ② yfinance 형식 → 배치 다운로드, ③ 잔여 bare → fast_info(US 직접/KR .KS→.KQ). quirk 2건 수정: 전역 스냅샷 캐시 → **티커별 (price, expires) 엔트리**, 단일 티커 플랫 컬럼 응답 → Close 정규화 반환. 기존 두 이름은 얇은 위임 wrapper로 유지(호출부 5곳·test_paper_analytics patch 타깃 무변경). 부수 동작 변경 2건: `update_cache=False`는 이제 캐시 읽기도 건너뜀(항상 신선), 포트폴리오 경로에 티커별 5분 캐시 신규 적용. 테스트 26개로 갱신, 전체 pytest 819 passed.
+
+남은 항목:
 
 | 항목 | What | 제약 | Effort |
 |---|---|---|---|
-| 가격 조회 로직 통합 | `common._fetch_current_prices`(paper, 배치+캐시, KR-only)와 `routers_portfolio._get_current_prices`(portfolio, DB우선+폴백, KR+US)를 하나로 — 통합하려면 pool 파라미터·US 분기·캐시 키 분리 등 **새 로직 작성 필요**(순수 이동 아님) | ~~둘 다 현재 테스트 커버리지 0~~ — 선행 조건 해소(2026-07-17): `tests/test_price_lookup.py` 특성화 테스트 20개로 현재 동작 고정(quirk 2건 포함 — 티커 무관 전역 캐시 히트, 플랫 컬럼 빈 결과). 통합 시 의도적 동작 변경은 테스트 함께 갱신 | M(기능 작업) |
 | 나머지 krx_listings 패턴 조정 | `_STAGE_QUERY`(섹터 해석 superset), `_UNIFIED_TAIL`(4단계 폴백), `routers_paper.py`의 "krx_listings 항상 비어있음" 예외 주석(전제 재확인 필요) | 각각 실제 동작이 달라 case-by-case 판단 필요 | S~M |
 
 ### Phase F — 백필 플러밍 통합 — ✅ 완료 (범위 재조정)
