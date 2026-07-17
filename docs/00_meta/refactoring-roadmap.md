@@ -26,6 +26,7 @@
 | 2026-07-17 | Phase F 백필 플러밍 통합, 범위 재조정 후 완료 (아래 상세) | S | jobs/stage_shared.py 추출 (1커밋) |
 | 2026-07-17 | Phase G run_scheduler.py 분해, 안전한 부분만 완료 (아래 상세) | L | jobs/scheduler_collect.py + jobs/scheduler_wrappers.py 추출 (2커밋) |
 | 2026-07-17 | Phase F 잔여: 프리페치 스켈레톤 + load_flow_range 정책 통일 (아래 상세) | S | stage_shared.prefetch_ohlcv/load_flow_range 추가 (1커밋) |
+| 2026-07-17 | stage_classifier 레거시 분리 (9단계 계획 잔여, 아래 상세) | S | analysis/stage_classifier_legacy.py 신설 (1커밋) |
 
 ### 2026-07-16 core/db.py 도메인 분리 상세
 
@@ -97,6 +98,20 @@
 2. **`load_flow_range` → stage_shared로 이동**: 상한 **있는** 형태(stage_backfill 버전)로 통일 — stage_job은 `today` 기준이라 `<= today` 추가는 no-op. **에러 정책은 함수에 박지 않고 호출부에 유지**: stage_job은 호출부 try/except로 "실패 시 빈 map으로 계속"(라이브 잡 생존 우선), stage_backfill은 전파(CLI fail-fast). 이로써 강제 정책 통일 문제 자체가 해소됨. stage_job.py의 27줄 인라인 블록이 7줄로 축소.
 
 검증: 두 백필 CLI `--help` + import 스모크, `test_stage_backfill.py` 19 passed, 전체 pytest 793 passed(신규 실패 0). 세 함수 모두 직접 테스트/mock.patch 타깃 없음을 grep으로 확인(이동 자체의 테스트 파손 위험 0). 라이브 스케줄러 프로세스 재시작은 이번에도 범위 밖.
+
+### 2026-07-17 stage_classifier 레거시 분리 (TODOS.md 9단계 계획 잔여)
+
+859줄 → 573줄(-286) + `analysis/stage_classifier_legacy.py`(339줄) 신설.
+
+**탐색에서 확정한 핵심 사실 — 버전 체인은 누적 구조**: v15는 `_check_stage1_v14→v13→v11→_check_stage1(v1.0)`, `_check_stage2_v13→v12→v11`, `_check_stage3_v12→v11`을 그대로 호출한다. 즉 v11~v14의 조건 헬퍼 대부분은 레거시가 아니라 **v15의 라이브 의존성** — 옮길 수 있는 것은 어떤 라이브 경로도 참조하지 않는 심볼뿐이다.
+
+**legacy로 이동한 8개 (전부 zero 라이브 소비자, AST byte-identical 확인):** 구버전 디스패처 5개(`classify_stage` v1.0, `classify_stage_v11`~`v14`) + v1.0 전용 `_check_stage2`/`_check_stage3` + v1.2 전용 `_check_stage1_v12`(v13이 v11을 직접 호출해 우회하므로 legacy-only).
+
+**본 모듈에 남긴 15개:** `classify_stage_v15`/`check_peakout`/`compute_*`(프로덕션 표면) + v15 누적 체인이 쓰는 조건 헬퍼 전부.
+
+**의존 방향**: legacy → stage_classifier 단방향(공유 헬퍼 import). 역방향 facade 재수출은 순환 import를 만들므로 두지 않고, 유일한 소비자였던 `test_stage_classifier.py`의 import를 legacy 직접 참조로 전환(Phase D 별칭 마이그레이션과 동일 패턴). `test_compose_parity.py`는 주석 언급뿐 실 의존 없음. 프로덕션 소비자(stage_job/stage_backfill/stage_shared)는 v15/check_peakout/compute_*만 써서 무변경.
+
+검증: AST 비교 8 moved + 15 kept 전부 identical, import 스모크, `test_stage_classifier.py`+`test_compose_parity.py`+`test_stage_backfill.py` 74 passed, 전체 pytest 793 passed(신규 실패 0), pyright 대상 파일 0 errors.
 
 ---
 

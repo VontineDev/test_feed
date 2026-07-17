@@ -41,7 +41,10 @@ re-export 심을 남김.
 - 전체 9단계 계획의 나머지: 텔레그램 계층 정리,
   ~~지표/OHLCV 통합~~ — 완료(2026-07-17, jobs/stage_shared.py, Phase F),
   ~~대시보드 라우터 분리~~ — 완료(2026-07-16, `b591f19`~`54d5001` 7커밋),
-  stage_classifier 레거시 분리,
+  ~~stage_classifier 레거시 분리~~ — 완료(2026-07-17,
+  analysis/stage_classifier_legacy.py — 구버전 디스패처 5개 + v1.0 전용 헬퍼만
+  분리. v11~v14 조건 헬퍼는 v15의 누적 체인 라이브 의존성이라 본 모듈에 유지,
+  상세는 [refactoring-roadmap.md](refactoring-roadmap.md) 참조),
   ~~run_scheduler 분해~~ — 완료(2026-07-17, 안전한 부분만, Phase G).
 
 **후속(2026-07-16):** core/db.py(1,689줄) 도메인 분리 완료 — facade + 6모듈,
