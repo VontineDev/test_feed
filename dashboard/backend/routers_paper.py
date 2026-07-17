@@ -134,14 +134,17 @@ async def get_paper_curve():
                 """
             )
 
-            # Query 3: 청산 종목명 맵 (krx_listings는 이 환경에서 항상 비어 있으므로 제외)
+            # Query 3: 청산 종목명 맵
+            # (과거 "krx_listings는 이 환경에서 항상 비어 있음" 전제로 tn만 조인했으나,
+            #  2026-07-17 확인 결과 전 종목 2,765행 적재 — 공용 해석 조인으로 승격)
             name_rows = await conn.fetch(
-                """
+                f"""
                 SELECT DISTINCT
                     p.ticker,
-                    COALESCE(tn.name_ko, SPLIT_PART(p.ticker, '.', 1)) AS name
+                    COALESCE(tn.name_ko, k.name_ko,
+                             cs.name, SPLIT_PART(p.ticker, '.', 1)) AS name
                 FROM   paper_positions p
-                LEFT JOIN ticker_names tn ON tn.ticker = p.ticker
+                {_NAME_RESOLUTION_JOIN}
                 WHERE  p.status = 'closed'
                 """
             )
@@ -244,10 +247,11 @@ async def get_paper_export():
     try:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                """
+                f"""
                 SELECT
                     p.model, p.ticker,
-                    COALESCE(tn.name_ko, SPLIT_PART(p.ticker, '.', 1)) AS name,
+                    COALESCE(tn.name_ko, k.name_ko,
+                             cs.name, SPLIT_PART(p.ticker, '.', 1)) AS name,
                     p.signal_date, p.entry_theory, p.entry_actual, p.slippage_pct,
                     p.qty, p.status,
                     p.tp1_pct, p.tp1_ratio, p.tp1_date, p.tp1_price,
@@ -255,7 +259,7 @@ async def get_paper_export():
                     p.exit_date, p.exit_price, p.exit_type,
                     p.blended_return, p.created_at
                 FROM   paper_positions p
-                LEFT JOIN ticker_names tn ON tn.ticker = p.ticker
+                {_NAME_RESOLUTION_JOIN}
                 ORDER  BY p.model, p.exit_date DESC NULLS LAST, p.id DESC
                 """
             )
