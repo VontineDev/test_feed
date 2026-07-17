@@ -25,6 +25,7 @@
 | 2026-07-17 | Phase E 대시보드 백엔드 마무리 3/4 항목 완료 (아래 상세) | M | routers_portfolio 분리 + report_queries 추출 + JOIN 헬퍼 (3커밋) |
 | 2026-07-17 | Phase F 백필 플러밍 통합, 범위 재조정 후 완료 (아래 상세) | S | jobs/stage_shared.py 추출 (1커밋) |
 | 2026-07-17 | Phase G run_scheduler.py 분해, 안전한 부분만 완료 (아래 상세) | L | jobs/scheduler_collect.py + jobs/scheduler_wrappers.py 추출 (2커밋) |
+| 2026-07-17 | Phase F 잔여: 프리페치 스켈레톤 + load_flow_range 정책 통일 (아래 상세) | S | stage_shared.prefetch_ohlcv/load_flow_range 추가 (1커밋) |
 
 ### 2026-07-16 core/db.py 도메인 분리 상세
 
@@ -88,6 +89,15 @@
 
 검증: AST 비교로 `build_row`/`load_listed_shares` 로직 무변화 확인, 두 백필 CLI `--help` 스모크, `test_stage_backfill.py` 19 passed, 전체 pytest 793 passed(신규 실패 0).
 
+### 2026-07-17 Phase F 잔여 항목 정리 (judgment call 2건 해소)
+
+범위 제외로 남겨뒀던 "같은 목적, 다른 안전장치" 2건을 정책 결정 후 통일. byte-identical 이동이 아니라 정책 결정을 동반한 통합이므로 별도 작업으로 처리.
+
+1. **프리페치 스켈레톤 → `stage_shared.prefetch_ohlcv(tickers, fetch_fn, workers, log_tag)`**: try/except **있는** 형태(screener 정책)로 통일. stage_backfill의 `fut.result()` bare 호출은 잠재 버그였음 — 현재는 두 fetcher가 예외를 삼켜 발현 안 되지만, fetcher가 바뀌면 한 종목 실패가 전체 백필을 죽이는 구조. `batch_fetch_ohlcv`/`prefetch_all`은 시그니처를 유지한 채 위임 wrapper로 전환(호출부 무변경). 종목별 수집 로직(일봉 윈도우 vs 주봉 3y)은 `fetch_fn` 주입으로 분리 — cadence 차이는 의도대로 유지.
+2. **`load_flow_range` → stage_shared로 이동**: 상한 **있는** 형태(stage_backfill 버전)로 통일 — stage_job은 `today` 기준이라 `<= today` 추가는 no-op. **에러 정책은 함수에 박지 않고 호출부에 유지**: stage_job은 호출부 try/except로 "실패 시 빈 map으로 계속"(라이브 잡 생존 우선), stage_backfill은 전파(CLI fail-fast). 이로써 강제 정책 통일 문제 자체가 해소됨. stage_job.py의 27줄 인라인 블록이 7줄로 축소.
+
+검증: 두 백필 CLI `--help` + import 스모크, `test_stage_backfill.py` 19 passed, 전체 pytest 793 passed(신규 실패 0). 세 함수 모두 직접 테스트/mock.patch 타깃 없음을 grep으로 확인(이동 자체의 테스트 파손 위험 0). 라이브 스케줄러 프로세스 재시작은 이번에도 범위 밖.
+
 ---
 
 ## 향후 로드맵
@@ -111,12 +121,10 @@
 
 위 완료 기록 참조. 원래 가정("두 백필 스크립트 간 중복")은 탐색 결과 대부분 false lead였음 — 실제 중복은 stage_backfill.py와 라이브 stage_job.py 사이에 있었고, 그 부분만 `jobs/stage_shared.py`로 추출 완료.
 
-남은 항목(judgment call 필요, 순수 이동 아님):
+남은 항목: ~~ThreadPoolExecutor 프리페치 통합~~, ~~`load_flow_range` 윈도우 정책 통일~~ — 둘 다 2026-07-17 후속 세션에서 정책 결정 후 완료(위 "Phase F 잔여 항목 정리" 상세 참조). 채택 정책: 프리페치는 try/except 통일(`stage_shared.prefetch_ohlcv`), load_flow_range는 상한 통일 + 에러 정책은 호출부 유지.
 
 | 항목 | What | 제약 | Effort |
 |---|---|---|---|
-| ThreadPoolExecutor 프리페치 통합 | `batch_fetch_ohlcv`(stage_backfill, 예외처리 없음)와 `prefetch_all`(screener_backfill, try/except 있음)의 스켈레톤은 동일하지만 안전장치 유무가 다름 | 통합하려면 안전장치 정책을 먼저 통일해야 함 | S |
-| `load_flow_range` 윈도우 정책 통일 | stage_backfill(상한 있음, try/except 없음) vs stage_job(상한 없음, try/except 있음) — SQL은 근접 동일 | 상한 추가가 실질적 영향 없어 보이지만 검증 필요 | S |
 | OHLCV fetch cadence | 일봉(daily/60d) vs 주봉(3y/1wk) — 의도적으로 다른 그레인이라 통합 대상 아님 | 통합 시도하지 말 것 | — |
 
 ### Phase G — run_scheduler.py 분해 (최후순위 · 최고위험) — ✅ 완료 (안전한 부분만)
