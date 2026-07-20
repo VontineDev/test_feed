@@ -4,9 +4,7 @@ test_ohlcv_warm.py  —  jobs/ohlcv_warm.py 단위 테스트
 from __future__ import annotations
 
 from datetime import date
-from unittest.mock import MagicMock, patch, call
-
-import pytest
+from unittest.mock import patch
 
 
 # ── _weekdays ────────────────────────────────────────────────
@@ -106,39 +104,76 @@ def test_backfill_delay_called():
     mock_sleep.assert_called_once_with(0.1)
 
 
+def test_backfill_min_rows_passed_to_filled_dates():
+    """min_rows가 _get_filled_dates까지 관통 — 부분 적재일 재수집 대상 포함"""
+    from jobs.ohlcv_warm import backfill_ohlcv
+
+    start = date(2025, 1, 2)
+    end = date(2025, 1, 3)
+
+    with patch("jobs.ohlcv_warm._get_filled_dates", return_value=set()) as mock_filled, \
+         patch("jobs.ohlcv_warm.time.sleep"), \
+         patch("core.ohlcv_cache.fill_daily_from_krx", return_value=100):
+
+        backfill_ohlcv("postgresql://test", start, end, delay_s=0, min_rows=1000)
+
+    mock_filled.assert_called_once_with("postgresql://test", start, end, min_rows=1000)
+
+
 # ── daily_ohlcv_warm_job ─────────────────────────────────────
 
-def test_daily_warm_job_calls_fill_yesterday():
-    from jobs.ohlcv_warm import daily_ohlcv_warm_job
-    from datetime import timedelta
-
-    yesterday = date.today() - timedelta(days=1)
-
-    if yesterday.weekday() >= 5:
-        pytest.skip("전일이 주말 — 스킵 동작 테스트는 별도")
-
-    with patch("core.ohlcv_cache.fill_daily_from_krx", return_value=2700) as mock_fill:
-        n = daily_ohlcv_warm_job("postgresql://test")
-
-    mock_fill.assert_called_once_with("postgresql://test", yesterday)
-    assert n == 2700
-
-
-def test_daily_warm_job_skips_weekend(monkeypatch):
-    from jobs.ohlcv_warm import daily_ohlcv_warm_job
+def _freeze_today(monkeypatch, today: date):
     import jobs.ohlcv_warm as _mod
-
-    # 전일을 토요일로 고정
     monkeypatch.setattr(
         _mod, "date",
         type("FakeDate", (), {
-            "today": staticmethod(lambda: date(2025, 1, 6)),  # 월요일 → 전일=일요일
+            "today": staticmethod(lambda: today),
             "fromisoformat": date.fromisoformat,
         })
     )
 
-    with patch("core.ohlcv_cache.fill_daily_from_krx") as mock_fill:
+
+def test_daily_warm_job_monday_covers_friday(monkeypatch):
+    """월요일 실행 시 직전 금요일이 수집 대상에 포함 (구 '어제 스킵' 갭 해소)"""
+    from jobs.ohlcv_warm import daily_ohlcv_warm_job
+
+    _freeze_today(monkeypatch, date(2025, 1, 6))  # 월요일
+
+    fetched: list[date] = []
+
+    def fake_fill(*args):
+        fetched.append(args[1])
+        return 2700
+
+    with patch("jobs.ohlcv_warm._get_filled_dates", return_value=set()), \
+         patch("jobs.ohlcv_warm.time.sleep"), \
+         patch("core.ohlcv_cache.fill_daily_from_krx", side_effect=fake_fill):
+
         n = daily_ohlcv_warm_job("postgresql://test")
 
-    mock_fill.assert_not_called()
-    assert n == 0
+    # 12/30(월)~1/5(일) 중 주중만: 12/30, 12/31, 1/1, 1/2, 1/3(금)
+    assert date(2025, 1, 3) in fetched          # 금요일 포함
+    assert all(d.weekday() < 5 for d in fetched)  # 주말 미포함
+    assert n == 2700 * len(fetched)
+
+
+def test_daily_warm_job_skips_already_filled(monkeypatch):
+    """기채움 날짜는 재수집하지 않음 — 평시엔 전일 1건만 수집"""
+    from jobs.ohlcv_warm import daily_ohlcv_warm_job
+    from jobs.ohlcv_warm import _DAILY_MIN_ROWS
+
+    _freeze_today(monkeypatch, date(2025, 1, 7))  # 화요일
+
+    # 전일(1/6 월)만 미채움 — 나머지 주중은 전부 채워진 상태
+    filled = {date(2024, 12, 31), date(2025, 1, 1), date(2025, 1, 2), date(2025, 1, 3)}
+
+    with patch("jobs.ohlcv_warm._get_filled_dates", return_value=filled) as mock_filled, \
+         patch("jobs.ohlcv_warm.time.sleep"), \
+         patch("core.ohlcv_cache.fill_daily_from_krx", return_value=2700) as mock_fill:
+
+        n = daily_ohlcv_warm_job("postgresql://test")
+
+    mock_fill.assert_called_once_with("postgresql://test", date(2025, 1, 6))
+    assert n == 2700
+    # 부분 적재 재수집 임계값 적용 확인
+    assert mock_filled.call_args.kwargs["min_rows"] == _DAILY_MIN_ROWS

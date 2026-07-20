@@ -9,7 +9,7 @@ KRX OpenAPI(get_daily_ohlcv_all)를 사용해 날짜별 전 종목 OHLCV를 채�
   python jobs/ohlcv_warm.py --start 2025-01-02 --end 2026-06-14 --delay 0.1
 
 일배치 (run_scheduler에서 호출):
-  daily_ohlcv_warm_job(dsn)  →  전일 1건
+  daily_ohlcv_warm_job(dsn)  →  최근 7일 캐치업 (기채움 날짜 스킵)
 
 필요 환경변수:
   DATABASE_URL   — Postgres DSN
@@ -33,15 +33,22 @@ logger = logging.getLogger(__name__)
 
 # ── 헬퍼 ─────────────────────────────────────────────────────
 
-def _get_filled_dates(dsn: str, start: date, end: date) -> set[date]:
-    """daily_ohlcv에 이미 저장된 날짜 집합"""
+def _get_filled_dates(
+    dsn: str, start: date, end: date, min_rows: int = 1
+) -> set[date]:
+    """daily_ohlcv에 이미 저장된 날짜 집합.
+
+    min_rows: 이 행수 이상인 날짜만 '채워짐'으로 간주 — 부분 적재일
+    (수집 중단 등)을 재수집 대상에 포함시키기 위한 임계값.
+    """
     from core.db_sync import connect
     conn = connect(dsn)
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT DISTINCT date FROM daily_ohlcv WHERE date BETWEEN %s AND %s",
-                (start, end),
+                "SELECT date FROM daily_ohlcv WHERE date BETWEEN %s AND %s"
+                " GROUP BY date HAVING COUNT(*) >= %s",
+                (start, end, min_rows),
             )
             return {row[0] for row in cur.fetchall()}
     finally:
@@ -63,17 +70,19 @@ def backfill_ohlcv(
     start: date,
     end: date,
     delay_s: float = 0.2,
+    min_rows: int = 1,
 ) -> int:
     """start~end 기간 daily_ohlcv 백필.
 
     이미 데이터가 있는 날짜는 스킵하므로 중단 후 재실행 안전.
     KRX 휴장일은 API가 빈 배열을 반환 → 자동 스킵.
+    min_rows: 행수가 이 값 미만인 날짜는 부분 적재로 보고 재수집.
 
     반환: 저장된 총 행 수 (upsert 포함)
     """
     from core.ohlcv_cache import fill_daily_from_krx
 
-    filled = _get_filled_dates(dsn, start, end)
+    filled = _get_filled_dates(dsn, start, end, min_rows=min_rows)
     days = [d for d in _weekdays(start, end) if d not in filled]
 
     logger.info(
@@ -96,24 +105,29 @@ def backfill_ohlcv(
     return total
 
 
+# 정상 거래일의 daily_ohlcv 행수는 전 종목 ~2,700행 — 이보다 크게 적으면
+# 수집이 중간에 끊긴 부분 적재로 보고 재수집한다.
+_DAILY_MIN_ROWS = 1000
+
+
 def daily_ohlcv_warm_job(dsn: str) -> int:
-    """전일 daily_ohlcv 채우기. run_scheduler에서 호출.
+    """최근 7일 daily_ohlcv 캐치업. run_scheduler에서 호출.
+
+    '전일 1건 + 주말 스킵' 방식은 금요일분을 채우는 회차가 없었다
+    (토요일 회차 부재, 월요일엔 전일=일요일이라 스킵). backfill_ohlcv
+    재사용으로 전환 — 기채움 날짜는 스킵되므로 평시엔 전일 1건만
+    수집되고, 주말 갭·최대 7일 장애 결손·부분 적재일은 자동 치유된다.
 
     KRX_OPENAPI_KEY 미설정 시 fill_daily_from_krx 내부에서 경고 후 0 반환.
     """
-    from core.ohlcv_cache import fill_daily_from_krx
-
-    # TODO(core.dates): core.dates.last_trading_day와 의미가 다름 — 여기는
-    # 주말 보정이 아니라 스킵. 월요일 실행 시 '어제'=일요일이라 금요일
-    # 데이터를 채우는 회차가 없다(잠재 커버리지 갭). 보정 전환은 동작
-    # 변경이므로 리팩토링 범위 밖 — 별도 fix로 판단 필요.
-    yesterday = date.today() - timedelta(days=1)
-    if yesterday.weekday() >= 5:
-        logger.debug("[ohlcv-warm] 전일(%s) 주말 — 스킵", yesterday)
-        return 0
-
-    n = fill_daily_from_krx(dsn, yesterday)
-    logger.info("[ohlcv-warm] 일배치 %s %d종목", yesterday, n)
+    today = date.today()
+    n = backfill_ohlcv(
+        dsn,
+        start=today - timedelta(days=7),
+        end=today - timedelta(days=1),
+        min_rows=_DAILY_MIN_ROWS,
+    )
+    logger.info("[ohlcv-warm] 일배치 캐치업 완료 — %d행", n)
     return n
 
 
@@ -146,6 +160,12 @@ if __name__ == "__main__":
         default=0.2,
         help="API 호출 간격(초, 기본 0.2 = 5 req/s)",
     )
+    parser.add_argument(
+        "--min-rows",
+        type=int,
+        default=1,
+        help="이 행수 미만인 날짜는 부분 적재로 보고 재수집 (기본 1 = 기존 동작)",
+    )
     args = parser.parse_args()
 
     try:
@@ -160,5 +180,5 @@ if __name__ == "__main__":
     if start > end:
         raise SystemExit(f"start({start}) > end({end})")
 
-    total = backfill_ohlcv(dsn, start, end, delay_s=args.delay)
+    total = backfill_ohlcv(dsn, start, end, delay_s=args.delay, min_rows=args.min_rows)
     print(f"완료: {total}행 저장 ({start} ~ {end})")
