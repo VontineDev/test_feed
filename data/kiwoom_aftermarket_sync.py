@@ -540,13 +540,12 @@ def _enrich_with_reg_value(client: "KiwoomClient", records: list[AftermarketReco
         return
 
     # _AL/.KS / _AQ/.KQ 변환 → aftermarket_snap ticker와 동일 형식으로 정규화
+    from core.tickers import kiwoom_to_yfinance
+
     def _to_snap_ticker(raw: str) -> str:
-        if raw.endswith("_AL"):
-            return raw[:-3] + ".KS"
-        if raw.endswith("_AQ"):
-            return raw[:-3] + ".KQ"
-        # 이미 .KS/.KQ 형식이거나 알 수 없는 경우 그대로
-        return raw
+        # 매치 안 되면(접미사도 '.'도 없는 원시 코드) raw 그대로 — 알 수 없는
+        # 케이스를 조용히 스킵하기보다 원본 유지해 디버깅 여지를 남긴다.
+        return kiwoom_to_yfinance(raw) or raw
 
     amount_map: dict[str, int] = {
         _to_snap_ticker(it["ticker"]): it["amount"]
@@ -612,13 +611,8 @@ def ensure_daily_snap_table(dsn: str) -> None:
 
 def _raw_to_yf(raw: str) -> str | None:
     """'000660_AL' → '000660.KS', '035720_AQ' → '035720.KQ'. 변환 불가 시 None."""
-    if raw.endswith("_AL"):
-        return raw[:-3] + ".KS"
-    if raw.endswith("_AQ"):
-        return raw[:-3] + ".KQ"
-    if "." in raw:
-        return raw   # 이미 yfinance 포맷
-    return None
+    from core.tickers import kiwoom_to_yfinance
+    return kiwoom_to_yfinance(raw)
 
 
 def save_daily_market_snap(dsn: str, items: list[dict], trade_date: date) -> int:

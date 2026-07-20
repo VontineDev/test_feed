@@ -30,6 +30,7 @@ from common import (
 import sys as _sys
 _sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from analysis.macro_tracker import MacroTracker, DEFAULT_TICKERS as _MACRO_TICKERS  # noqa: E402
+from core.tickers import kiwoom_to_yfinance as _kiwoom_to_yfinance  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -99,26 +100,6 @@ def _fetch_prev_top20_sync() -> dict[str, str] | None:
     except Exception as e:
         logger.warning("[macro] 전일 TOP 조회 실패: %s", e)
         return None
-
-
-def _kiwoom_to_yfinance(ticker: str, market: str = "") -> str | None:
-    """Kiwoom REST API 티커를 yfinance 포맷으로 변환.
-
-    Kiwoom ka10032 응답의 stk_cd 는 'XXXXXX_AL'(KOSPI) / 'XXXXXX_AQ'(KOSDAQ) 형식.
-    yfinance 는 'XXXXXX.KS' / 'XXXXXX.KQ' 형식을 기대.
-    이미 '.' 포함(yfinance 포맷)이면 그대로 반환. 변환 불가 시 None.
-    """
-    if "." in ticker:
-        return ticker
-    if ticker.endswith("_AL"):
-        return ticker[:-3] + ".KS"
-    if ticker.endswith("_AQ"):
-        return ticker[:-3] + ".KQ"
-    if market == "KOSPI":
-        return ticker + ".KS"
-    if market == "KOSDAQ":
-        return ticker + ".KQ"
-    return None
 
 
 def _run_macro_analysis() -> dict:
