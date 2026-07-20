@@ -13,11 +13,17 @@ import 시점에 스냅샷해 이후 재할당을 못 보므로 금지.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from asyncpg import Pool
+    from data.kiwoom_paper_trader import KiwoomPaperTrader
+
 # asyncpg 커넥션 풀 — main()이 기동 시 생성, DB 없으면 None 유지
-db_pool = None
+db_pool: Pool | None = None
 
 # KiwoomPaperTrader (모의투자, KIWOOM_MOCK_APPKEY 설정 시에만)
-paper_trader = None
+paper_trader: KiwoomPaperTrader | None = None
 
 # ── 스크리닝·Stage 캐시 (뉴스 게이팅용) ─────────────────────
 # screener_tickers: 주봉 스크리닝 통과 종목 (일요일 갱신)

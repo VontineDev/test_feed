@@ -75,6 +75,8 @@ async def _daily_ohlcv_warm_job():
 
 
 async def _sector_stats_job():
+    if not state.db_pool:
+        return
     from jobs.sector_stats_job import sector_stats_job
     await sector_stats_job(state.db_pool)
 
