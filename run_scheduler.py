@@ -57,6 +57,7 @@ from analysis.signal_detector import detect_signal
 from core.article_fetcher import fetch_article_body
 from telegram.telegram_bot import bot_polling_loop, init_bot
 from data.market_data import MacroContext, get_macro_context, get_resolution_miss_report
+from jobs import scheduler_state as state
 from jobs.scheduler_collect import fetch_feed, _url_hash
 from jobs.scheduler_wrappers import (
     _build_watchlist_entries,
@@ -101,14 +102,6 @@ logging.basicConfig(
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
-
-# ── 스크리닝·Stage 캐시 (뉴스 게이팅용) ─────────────────────
-# _screener_tickers: 주봉 스크리닝 통과 종목 (일요일 갱신)
-# _active_stage_tickers: 최근 7일 이내 Stage 1/2/3 분류 종목 (일봉 분류기 갱신)
-# 둘 다 비어 있으면 게이팅 비활성 (초기 실행 방어).
-_screener_tickers: set[str]      = set()
-_active_stage_tickers: set[str]  = set()
-
 
 # ── 피드 목록 ────────────────────────────────────────────────
 FEEDS = [
@@ -188,10 +181,10 @@ HEADERS = {
 }
 
 # ── 공유 상태 ─────────────────────────────────────────────────
+# db_pool/paper_trader/게이팅 캐시는 jobs/scheduler_state.py로 이동 —
+# state.<name> 속성 접근으로 읽고 쓴다. 아래 둘은 이 모듈 전용이라 남김.
 _seen_hashes: set[str] = set()       # 중복 방지 (인메모리)
 _summary_queue: asyncio.Queue = None # 수집 → 요약 워커 전달용
-_db_pool = None                      # asyncpg 커넥션 풀
-_paper_trader = None                 # KiwoomPaperTrader (모의투자, 선택적)
 
 # ── 매크로 컨텍스트 TTL 캐시 (5분) ──────────────────────────
 _macro_cache: Optional[MacroContext] = None
@@ -224,8 +217,8 @@ async def collect_job() -> None:
     logger.info("▶ [수집] 시작  %s", run_at)
 
     # ── DB 해시 선로딩 (재시작 후 첫 실행 시에만) ────────────
-    if not _seen_hashes and _db_pool is not None:
-        loaded = await load_seen_hashes(_db_pool)
+    if not _seen_hashes and state.db_pool is not None:
+        loaded = await load_seen_hashes(state.db_pool)
         _seen_hashes.update(loaded)
         logger.info("  [중복방지] DB에서 %d건 해시 로드 완료", len(loaded))
 
@@ -328,9 +321,9 @@ async def summary_worker() -> None:
 
                 # ── 2. DB 저장 ────────────────────────────────
                 article_id = None
-                if _db_pool is not None:
+                if state.db_pool is not None:
                     saved = await save_article(
-                        _db_pool,
+                        state.db_pool,
                         url_hash    = art["url_hash"],
                         url         = art["url"],
                         source      = art["source"],
@@ -342,7 +335,7 @@ async def summary_worker() -> None:
                         published_at= art.get("published_dt"),
                     )
                     if saved:
-                        async with _db_pool.acquire() as conn:
+                        async with state.db_pool.acquire() as conn:
                             row = await conn.fetchrow(
                                 "SELECT id FROM news_articles WHERE url_hash = $1",
                                 art["url_hash"],
@@ -369,9 +362,9 @@ async def summary_worker() -> None:
                         if signal.tickers:
                             logger.info("         관련종목: %s", ", ".join(signal.tickers))
 
-                        if _db_pool and article_id:
+                        if state.db_pool and article_id:
                             await save_signal(
-                                _db_pool,
+                                state.db_pool,
                                 article_id      = article_id,
                                 direction       = signal.direction,
                                 strength        = signal.strength,
@@ -387,9 +380,9 @@ async def summary_worker() -> None:
                 if signal and signal.is_actionable:
                     # 게이팅: Ichimoku 스크리너 OR 최근 7일 활성 Stage 종목만 전달
                     signal_syms  = set(signal.ticker_symbols.values())
-                    in_screener  = bool(signal_syms & _screener_tickers)
-                    in_stage     = bool(signal_syms & _active_stage_tickers)
-                    has_any_gate = bool(_screener_tickers or _active_stage_tickers)
+                    in_screener  = bool(signal_syms & state.screener_tickers)
+                    in_stage     = bool(signal_syms & state.active_stage_tickers)
+                    has_any_gate = bool(state.screener_tickers or state.active_stage_tickers)
 
                     if has_any_gate and signal.ticker_symbols and not (in_screener or in_stage):
                         logger.info(
@@ -401,12 +394,12 @@ async def summary_worker() -> None:
                             signal.confidence = "HIGH"
                             logger.info(
                                 "  [HIGH CONFIDENCE] 스크리너 교차 종목: %s",
-                                ", ".join(signal_syms & _screener_tickers),
+                                ", ".join(signal_syms & state.screener_tickers),
                             )
                         elif in_stage:
                             logger.info(
                                 "  [Stage 통과] 최근 7일 활성 종목: %s",
-                                ", ".join(signal_syms & _active_stage_tickers),
+                                ", ".join(signal_syms & state.active_stage_tickers),
                             )
                         await tg_send_signal(art, summary_ko, signal, http=http)
 
@@ -420,19 +413,17 @@ async def summary_worker() -> None:
 
 async def _daily_stage_job() -> None:
     """일봉 3단계 분류기 — jobs/stage_job.py 위임."""
-    global _active_stage_tickers
     from jobs.stage_job import daily_stage_job as _impl
-    _active_stage_tickers = await _impl(_db_pool)
+    state.active_stage_tickers = await _impl(state.db_pool)
     await _dart_screened_sync_job()
 
 
 async def _weekly_screener_job():
-    global _screener_tickers
-    if not _db_pool:
+    if not state.db_pool:
         logger.warning("[차트스크리너] DB 풀 없음 — 스크리닝 건너뜀")
         return
     from jobs.screener_job import weekly_screener_job
-    _screener_tickers = await weekly_screener_job(_db_pool)
+    state.screener_tickers = await weekly_screener_job(state.db_pool)
     # 스크리닝 완료 후 신규 종목 DART 분석 자동 실행
     await _dart_screened_sync_job()
 
@@ -442,10 +433,10 @@ async def _weekly_screener_job():
 # 이 잡이 30초마다 pending 행을 1개씩 꺼내 실행하고 status='done'으로 갱신.
 # FOR UPDATE SKIP LOCKED: 동시 실행 방지 (max_instances=1로도 충분하나 DB 레벨 보장)
 async def _trigger_watcher_job():
-    if not _db_pool:
+    if not state.db_pool:
         return
     try:
-        async with _db_pool.acquire() as conn:
+        async with state.db_pool.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(
                     "SELECT id, job_name FROM scheduler_triggers"
@@ -480,7 +471,7 @@ async def _trigger_watcher_job():
             else:
                 logger.warning("[trigger] 알 수 없는 잡: %s", job_name)
         finally:
-            async with _db_pool.acquire() as conn:
+            async with state.db_pool.acquire() as conn:
                 await conn.execute(
                     "UPDATE scheduler_triggers SET status='done' WHERE id=$1",
                     trig_id
@@ -491,7 +482,7 @@ async def _trigger_watcher_job():
 
 # ── 스케줄러 진입점 ───────────────────────────────────────────
 async def main(interval: int, enable_summary: bool) -> None:
-    global _summary_queue, _db_pool, _paper_trader, _screener_tickers, _active_stage_tickers
+    global _summary_queue
 
     logger.info("뉴스 크롤러 시작 — 수집 %d분 간격", interval)
     logger.info("구조: [수집 잡] → Queue → [요약 워커] (완전 분리)")
@@ -520,59 +511,59 @@ async def main(interval: int, enable_summary: bool) -> None:
 
     # ── DB 초기화 ─────────────────────────────────────────────
     try:
-        _db_pool = await create_pool()
-        await init_db(_db_pool)
+        state.db_pool = await create_pool()
+        await init_db(state.db_pool)
     except Exception as e:
         logger.error("DB 연결 실패: %s", e)
         logger.error("DB 없이 계속 실행합니다 (콘솔 출력만)")
-        _db_pool = None
+        state.db_pool = None
 
     # ── KRX 종목 캐시 초기화 ─────────────────────────────────────
-    if _db_pool:
+    if state.db_pool:
         from data.krx_sync import sync_krx_listings
         from core.ticker_cache import ticker_cache as _ticker_cache
         try:
-            await sync_krx_listings(_db_pool)
+            await sync_krx_listings(state.db_pool)
         except Exception as _krx_e:
             logger.warning("[krx_sync] 초기 동기화 실패: %s — DB에 기존 데이터로 캐시 로드", _krx_e)
         finally:
             try:
-                await asyncio.wait_for(_ticker_cache.load(_db_pool), timeout=60.0)
+                await asyncio.wait_for(_ticker_cache.load(state.db_pool), timeout=60.0)
             except asyncio.TimeoutError:
                 logger.warning("[ticker_cache] 캐시 로드 타임아웃 (60s) — 정적 맵으로 운영")
             except Exception as _cache_e:
                 logger.warning("[ticker_cache] 캐시 로드 실패: %s — 정적 맵으로 운영", _cache_e)
 
     # ── 스크리너 게이팅 캐시 초기화 (DB에서 이번 주 종목 로드) ──
-    if _db_pool:
+    if state.db_pool:
         try:
             from core.db import get_chart_signals_this_week
-            _screener_tickers = await get_chart_signals_this_week(_db_pool)
-            logger.info("[게이팅] 스크리너 캐시 로드 — %d종목", len(_screener_tickers))
+            state.screener_tickers = await get_chart_signals_this_week(state.db_pool)
+            logger.info("[게이팅] 스크리너 캐시 로드 — %d종목", len(state.screener_tickers))
         except Exception as _gt_e:
             logger.warning("[게이팅] 스크리너 캐시 로드 실패: %s", _gt_e)
         try:
             from core.db import get_active_stage_tickers as _get_active_stage
-            _active_stage_tickers = await _get_active_stage(_db_pool, days=7)
-            logger.info("[게이팅] 활성 Stage 캐시 로드 — %d종목", len(_active_stage_tickers))
+            state.active_stage_tickers = await _get_active_stage(state.db_pool, days=7)
+            logger.info("[게이팅] 활성 Stage 캐시 로드 — %d종목", len(state.active_stage_tickers))
         except Exception as _st_e:
             logger.warning("[게이팅] 활성 Stage 캐시 로드 실패: %s", _st_e)
 
     # ── 봇 초기화 ─────────────────────────────────────────────
     init_bot(_seen_hashes)
-    bot_task = asyncio.create_task(bot_polling_loop(_db_pool))
+    bot_task = asyncio.create_task(bot_polling_loop(state.db_pool))
     logger.info("Telegram 봇 시작 — /status /signals /today /help")
 
     # ── 키움 모의투자 클라이언트 초기화 (선택적) ─────────────────
-    if _db_pool and os.environ.get("KIWOOM_MOCK_APPKEY"):
+    if state.db_pool and os.environ.get("KIWOOM_MOCK_APPKEY"):
         try:
             from data.kiwoom_paper_trader import KiwoomPaperTrader, init_paper_positions
-            _paper_trader = KiwoomPaperTrader()
-            await init_paper_positions(_db_pool)
+            state.paper_trader = KiwoomPaperTrader()
+            await init_paper_positions(state.db_pool)
             logger.info("[paper] 모의투자 클라이언트 초기화 완료")
         except Exception as _pe:
             logger.warning("[paper] 모의투자 초기화 실패 (스킵): %s", _pe)
-            _paper_trader = None
+            state.paper_trader = None
     else:
         logger.info("[paper] KIWOOM_MOCK_APPKEY 미설정 — 모의투자 비활성")
 
@@ -724,7 +715,7 @@ async def main(interval: int, enable_summary: bool) -> None:
         misfire_grace_time=3600,
         replace_existing=True,
     )
-    if _paper_trader:
+    if state.paper_trader:
         scheduler.add_job(
             _paper_exit_checker_job,
             CronTrigger(day_of_week="mon-fri", hour=6, minute=20, timezone="UTC"),  # 15:20 KST
@@ -754,7 +745,7 @@ async def main(interval: int, enable_summary: bool) -> None:
         logger.info("[paper] T+1 진입 잡 등록 완료 (09:05 KST)")
 
     # Compose 전략 주간 신호 적재 (Kiwoom 계정 불필요, DB만 필요)
-    if _db_pool:
+    if state.db_pool:
         scheduler.add_job(
             _compose_paper_entry_job,
             CronTrigger(day_of_week="sun", hour=12, minute=15, timezone="UTC"),  # = 21:15 KST
@@ -861,39 +852,37 @@ async def main(interval: int, enable_summary: bool) -> None:
                 await bot_task
             except asyncio.CancelledError:
                 pass
-        if _db_pool:
-            await _db_pool.close()
+        if state.db_pool:
+            await state.db_pool.close()
             logger.info("DB 풀 종료")
         logger.info("종료 — 누적 수집 %d건", len(_seen_hashes))
 
 
 async def _run_once_watchlist() -> None:
     """--once watchlist: DB + 티커 캐시 초기화 후 _watchlist_brief_job() 즉시 실행."""
-    global _db_pool
     try:
-        _db_pool = await create_pool()
-        await init_db(_db_pool)
+        state.db_pool = await create_pool()
+        await init_db(state.db_pool)
     except Exception as e:
         logger.error("DB 연결 실패: %s", e)
         return
     try:
         from core.ticker_cache import ticker_cache as _ticker_cache
         try:
-            await asyncio.wait_for(_ticker_cache.load(_db_pool), timeout=60.0)
+            await asyncio.wait_for(_ticker_cache.load(state.db_pool), timeout=60.0)
         except Exception as _e:
             logger.warning("[워치리스트] ticker_cache 로드 실패: %s — 정적 코드로 진행", _e)
         await _watchlist_brief_job()
     finally:
-        if _db_pool:
-            await _db_pool.close()
+        if state.db_pool:
+            await state.db_pool.close()
 
 
 async def _run_once_stage() -> None:
     """--once stage: DB + 티커 캐시 초기화 후 _daily_stage_job() 즉시 실행."""
-    global _db_pool
     try:
-        _db_pool = await create_pool()
-        await init_db(_db_pool)
+        state.db_pool = await create_pool()
+        await init_db(state.db_pool)
     except Exception as e:
         logger.error("DB 연결 실패: %s", e)
         return
@@ -901,17 +890,17 @@ async def _run_once_stage() -> None:
         from data.krx_sync import sync_krx_listings
         from core.ticker_cache import ticker_cache as _ticker_cache
         try:
-            await sync_krx_listings(_db_pool)
+            await sync_krx_listings(state.db_pool)
         except Exception as _e:
             logger.warning("[stage] krx_sync 실패: %s — DB 캐시로 진행", _e)
         try:
-            await asyncio.wait_for(_ticker_cache.load(_db_pool), timeout=60.0)
+            await asyncio.wait_for(_ticker_cache.load(state.db_pool), timeout=60.0)
         except Exception as _e:
             logger.warning("[stage] ticker_cache 로드 실패: %s — 정적 맵으로 진행", _e)
         await _daily_stage_job()
     finally:
-        if _db_pool:
-            await _db_pool.close()
+        if state.db_pool:
+            await state.db_pool.close()
 
 
 if __name__ == "__main__":
