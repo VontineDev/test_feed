@@ -28,6 +28,8 @@
 | 2026-07-17 | Phase F 잔여: 프리페치 스켈레톤 + load_flow_range 정책 통일 (아래 상세) | S | stage_shared.prefetch_ohlcv/load_flow_range 추가 (1커밋) |
 | 2026-07-17 | stage_classifier 레거시 분리 (9단계 계획 잔여, 아래 상세) | S | analysis/stage_classifier_legacy.py 신설 (1커밋) |
 | 2026-07-17 | 텔레그램 계층 정리 (9단계 계획 마지막 항목, 아래 상세) | M | notify 중복 통합 + telegram/bot_handlers.py 분리 (2커밋) |
+| 2026-07-20 | Phase G 잔여: 공유 state 모듈 + 잡 3개 분리 (아래 상세) | M | jobs/scheduler_state.py + scheduler_jobs.py 신설 (2커밋) |
+| 2026-07-20 | ohlcv_warm 주말 갭 fix — TODOS 범위 제외분, 기능 작업 (아래 상세) | S | 캐치업 전환 + min_rows + 결손 백필 (1커밋) |
 
 ### 2026-07-16 core/db.py 도메인 분리 상세
 
@@ -133,6 +135,28 @@
 
 **이로써 2026-07-15 시작한 구조 리팩토링 9단계 계획 전체 종료.** 남은 것은 위 Phase E/F/G 표의 기능 작업 재분류 항목(가격조회 통합 등)과 비대상 목록뿐.
 
+### 2026-07-20 Phase G 잔여: 공유 state 모듈 + 잡 3개 분리
+
+Phase G에서 "공유 state 모듈 필요"로 범위 제외했던 잔여 항목을 2커밋으로 완료. run_scheduler.py 938→861줄.
+
+**1커밋 — `jobs/scheduler_state.py` 신설 + 사이트 전환:** `_db_pool`/`_paper_trader`/`_screener_tickers`/`_active_stage_tickers`를 모듈 싱글턴 속성(`state.<name>`)으로 이관. 속성 접근은 매번 최신 바인딩을 읽으므로 `main()`의 재할당이 전 모듈에 반영 — Phase G의 `run_scheduler._db_pool` 패턴과 동일 원리를 전용 모듈로 승격. run_scheduler.py 전 사이트 전환 + `global` 선언 4곳 제거, scheduler_wrappers.py의 함수 내 지연 `import run_scheduler` 11곳을 top-level `state` 참조로 단순화.
+- **테스트 결합 사전 확인:** `_db_pool`/`_paper_trader`를 patch하는 테스트 없음. `rs._screener_tickers`를 설정하는 test_news_gating 등은 게이팅 로직의 인라인 복제본이라 전역 이동과 무관.
+- **치환 함정(이번에 발견):** `_active_stage_tickers`→`state.active_stage_tickers` 일괄 치환이 상위 문자열 `get_active_stage_tickers`/`kiwoom_paper_trader`까지 손상시킴 — AST 비교 게이트로 즉시 검출·복구. 서브스트링이 겹치는 식별자 목록을 치환 전에 grep으로 확인할 것.
+
+**2커밋 — `jobs/scheduler_jobs.py` 신설:** 전역 재바인딩 때문에 남아있던 `_daily_stage_job`/`_weekly_screener_job`/`_trigger_watcher_job` 이동. run_scheduler.py가 top-level import로 재수출(facade)해 `add_job`/`--once stage` 경로 불변. 의존 방향: scheduler_jobs → scheduler_wrappers → scheduler_state 단방향, 순환 없음.
+
+**run_scheduler.py에 남은 것:** `main()`·CLI·`collect_job`/`summary_worker`(전용 상태 `_summary_queue`/`_seen_hashes`와 응집)·`_get_macro`+매크로 캐시. 추가 분리는 실익 낮음 — 여기서 종료.
+
+검증: AST 비교(치환 역변환 후 run_scheduler 9 + wrappers 19 함수 본문 동일, 이동 3함수 byte-identical), import/`--help` 스모크, 타깃 테스트 76 passed, 전체 pytest 820 passed(신규 실패 0, 베이스라인 819+ohlcv 테스트 순증 1).
+
+### 2026-07-20 ohlcv_warm 주말 갭 fix (기능 작업)
+
+TODOS.md "범위 제외로 남긴 것"의 코드 TODO 항목. DB 실측으로 **최근 한 달 금요일 daily_ohlcv 전무**(6/19~7/17 금요일 5회) + 평일 결손 6일 + 부분 적재 1일(7/15, 944행)을 확인 — `daily_ohlcv_warm_job`의 "전일 1건 + 주말 스킵" 방식은 금요일을 채우는 회차가 구조적으로 없었다(토요일 회차 부재, 월요일엔 전일=일요일 스킵).
+
+- **fix:** 기존 `backfill_ohlcv`(기채움 스킵, 멱등) 재사용으로 최근 7일 캐치업 전환 — 평시엔 전일 1건만 수집, 주말 갭·최대 7일 장애 결손 자가 치유. `_get_filled_dates`에 `min_rows` 임계값 추가(일배치 1000)로 부분 적재일도 재수집. CLI `--min-rows` 옵션 추가(기본 1, 기존 동작).
+- **결손 백필:** `--start 2026-06-19 --end 2026-07-17 --min-rows 1000` 일회 실행 — 11개 날짜 30,432행 복구, 6/15~7/16 평일 결손 0 확인. 7/17은 KRX API 0행 + daily_flow에도 없음 → 휴장일로 추정(거래일이었다면 캐치업이 자동 재시도).
+- 테스트: 주말 스킵 테스트 2개 → 캐치업 테스트 3개 교체(월요일 실행 시 금요일 포함, 기채움 스킵, min_rows 관통).
+
 ---
 
 ## 향후 로드맵
@@ -168,7 +192,7 @@
 |---|---|---|---|
 | OHLCV fetch cadence | 일봉(daily/60d) vs 주봉(3y/1wk) — 의도적으로 다른 그레인이라 통합 대상 아님 | 통합 시도하지 말 것 | — |
 
-### Phase G — run_scheduler.py 분해 (최후순위 · 최고위험) — ✅ 완료 (안전한 부분만)
+### Phase G — run_scheduler.py 분해 (최후순위 · 최고위험) — ✅ 완료 (2026-07-20 공유 state 모듈 잔여분까지 종료)
 
 938줄로 축소(1,130→938, -192줄). 탐색 결과 전역 상태 **재할당**(global 재바인딩)이 여러 함수·모듈 경계에 걸쳐 있어 순수 이동만으로는 위험(다른 모듈로 옮긴 뒤 `from x import y`로 이름을 가져오면 재할당이 반영 안 돼 조용히 깨짐)함을 확인 — 사용자와 논의해 범위를 "안전한 부분만"으로 확정.
 
@@ -183,14 +207,13 @@
 
 **검증**: AST 비교로 8개 byte-identical + 11개는 `run_scheduler.` 치환 외 무변화 확인, import/`--help` 스모크, 타깃 테스트 6개 파일(`test_macro_signal`/`test_news_gating`/`test_telegram_routing`/`test_watchlist_features`/`test_high_confidence`/`test_p3_remaining`) 76 passed, 전체 pytest 793 passed(신규 실패 0). Task Scheduler 진입점(`register_tasks.ps1`→`start_crawler.bat`→`python run_scheduler.py --interval N [--no-summary]`) 파일명·CLI 불변. **실제 스케줄러 프로세스 재시작은 이번 범위 밖** — 코드/테스트 검증까지만.
 
-**범위 제외(추가 분리하려면 공유 state 모듈 필요):**
-`_db_pool`/`_paper_trader` 재할당까지 다른 모듈로 옮기려면 `import state; state.x = ...` 패턴의 공유 state 모듈을 도입해 ~30-40군데 read/write 사이트를 전부 고쳐야 함 — 기계적이지만 광범위한 수정이라 이번 범위에서 제외. `_daily_stage_job`/`_weekly_screener_job`/`_trigger_watcher_job`/`collect_job`/`summary_worker`는 그런 이유로 run_scheduler.py에 남아있음.
+~~**범위 제외(추가 분리하려면 공유 state 모듈 필요)**~~ — **완료(2026-07-20)**. `jobs/scheduler_state.py` 도입 후 `_daily_stage_job`/`_weekly_screener_job`/`_trigger_watcher_job`을 `jobs/scheduler_jobs.py`로 분리(위 "Phase G 잔여" 상세 참조). `collect_job`/`summary_worker`는 전용 상태와 응집이라 run_scheduler.py에 유지 — 의도적 종료점.
 
 ### 비대상 (현상 유지)
 
 | 모듈 | 사유 |
 |---|---|
-| dashboard/backend/common.py (277줄) | 의도적으로 스코프된 공유 인프라 허브 — 의존 규칙 문서화됨(라우터→common 단방향). 캐시 dict는 main.py가 참조를 공유하므로 재할당 금지 |
+| dashboard/backend/common.py (390줄, 가격조회 통합으로 증가) | 의도적으로 스코프된 공유 인프라 허브 — 의존 규칙 문서화됨(라우터→common 단방향). 캐시 dict는 main.py가 참조를 공유하므로 재할당 금지 |
 | core/article_fetcher.py (355줄) | 응집도 양호 — 소스별 파서 10개 + 단일 공개 함수. 파서가 더 늘면 그때 분리 |
 | dashboard/backend/routers_macro.py (416줄) | 단일 도메인으로 응집. `_kiwoom_to_yfinance`만 공용화 후보 (기회적) |
 | core/ohlcv_cache.py (434줄) | OHLCV 캐시 vs flow/aftermarket 로더 두 책임이지만 데이터소스 기준으로는 응집 — 낮은 우선순위 |

@@ -35,9 +35,13 @@ re-export 심을 남김.
 - ~~`dashboard/backend/main.py:2374` psycopg2 직접 연결 → core.db_sync 미적용~~
   — 완료(2026-07-16, 대시보드 라우터 분리 작업에서 `core.db_sync.connect()`로 전환).
 - `scripts/*`의 psycopg2/DSN 중복 — 일회성 스크립트라 기회적 정리.
-- `jobs/ohlcv_warm.py`의 주말 스킵 로직 — last_trading_day와 의미가 다름
+- ~~`jobs/ohlcv_warm.py`의 주말 스킵 로직 — last_trading_day와 의미가 다름
   (월요일 실행 시 금요일 daily_ohlcv를 채우는 회차가 없는 잠재 커버리지 갭).
-  보정 전환은 동작 변경이라 별도 fix로 판단 필요 (코드에 TODO 주석 있음).
+  보정 전환은 동작 변경이라 별도 fix로 판단 필요 (코드에 TODO 주석 있음).~~
+  — 완료(2026-07-20). DB 실측으로 갭 실재 확인(최근 한 달 금요일 행 전무)
+  → 일배치를 최근 7일 캐치업(backfill_ohlcv 재사용, min_rows=1000)으로
+  전환 + 결손 11일 30,432행 백필. 상세는
+  [refactoring-roadmap.md](refactoring-roadmap.md) 2026-07-20 항목 참조.
 - 전체 9단계 계획의 나머지: ~~텔레그램 계층 정리~~ — 완료(2026-07-17,
   2단계: notify esc/esc_code 중첩 사본 7개 통합 + telegram_bot 핸들러
   21개를 telegram/bot_handlers.py로 분리(1,272→293줄, facade + 지연
