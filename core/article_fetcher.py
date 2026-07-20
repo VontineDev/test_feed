@@ -43,102 +43,43 @@ HEADERS = {
 }
 
 
-# ── 소스별 파서 ───────────────────────────────────────────────
+# ── 소스별 파서 (셀렉터만 다르고 순회 로직은 공용) ───────────────
 
-def _parse_cnbc(soup: BeautifulSoup) -> str:
-    """CNBC 본문 파서"""
-    selectors = [
+_SELECTOR_PARSERS: dict[str, list[str]] = {
+    "cnbc": [
         "div.ArticleBody-articleBody",
         "div[class*='ArticleBody']",
         "div.article-body",
-    ]
-    for sel in selectors:
-        container = soup.select_one(sel)
-        if container:
-            paras = container.find_all("p")
-            text = " ".join(p.get_text(strip=True) for p in paras if p.get_text(strip=True))
-            if len(text) > 200:
-                return text
-    return ""
-
-
-def _parse_investing(soup: BeautifulSoup) -> str:
-    """Investing.com 본문 파서"""
-    selectors = [
+    ],
+    "investing": [
         "div.WYSIWYG.articlePage",
         "div[class*='articlePage']",
         "div.articlePage",
-    ]
-    for sel in selectors:
-        container = soup.select_one(sel)
-        if container:
-            paras = container.find_all("p")
-            text = " ".join(p.get_text(strip=True) for p in paras if p.get_text(strip=True))
-            if len(text) > 200:
-                return text
-    return ""
-
-
-def _parse_reuters(soup: BeautifulSoup) -> str:
-    """Reuters 본문 파서 (Google News 우회 URL은 실패 가능)"""
-    selectors = [
+    ],
+    "reuters": [
         "div[class*='article-body']",
         "div[class*='ArticleBody']",
         "div[data-testid='ArticleBody']",
-    ]
-    for sel in selectors:
-        container = soup.select_one(sel)
-        if container:
-            paras = container.find_all("p")
-            text = " ".join(p.get_text(strip=True) for p in paras if p.get_text(strip=True))
-            if len(text) > 200:
-                return text
-    return ""
-
-
-
-def _parse_yahoo(soup: BeautifulSoup) -> str:
-    """Yahoo Finance 본문 파서"""
-    selectors = [
+    ],
+    "yahoo": [
         "div.caas-body",
         "div[class*='caas-body']",
         "article",
-    ]
-    for sel in selectors:
-        container = soup.select_one(sel)
-        if container:
-            paras = container.find_all("p")
-            text = " ".join(p.get_text(strip=True) for p in paras if p.get_text(strip=True))
-            if len(text) > 200:
-                return text
-    return ""
-
-
-def _parse_marketwatch(soup: BeautifulSoup) -> str:
-    """MarketWatch 본문 파서"""
-    selectors = [
+    ],
+    "marketwatch": [
         "div.article__body",
         "div[class*='article__body']",
         "div.region.region--primary",
-    ]
-    for sel in selectors:
-        container = soup.select_one(sel)
-        if container:
-            paras = container.find_all("p")
-            text = " ".join(p.get_text(strip=True) for p in paras if p.get_text(strip=True))
-            if len(text) > 200:
-                return text
-    return ""
-
-
-
-def _parse_bloomberg(soup: BeautifulSoup) -> str:
-    """Bloomberg 본문 파서"""
-    selectors = [
+    ],
+    "bloomberg": [
         "div.body-content",
         "div[class*='body-content']",
         "article",
-    ]
+    ],
+}
+
+
+def _parse_by_selectors(soup: BeautifulSoup, selectors: list[str]) -> str:
     for sel in selectors:
         container = soup.select_one(sel)
         if container:
@@ -147,6 +88,30 @@ def _parse_bloomberg(soup: BeautifulSoup) -> str:
             if len(text) > 200:
                 return text
     return ""
+
+
+def _parse_cnbc(soup: BeautifulSoup) -> str:
+    return _parse_by_selectors(soup, _SELECTOR_PARSERS["cnbc"])
+
+
+def _parse_investing(soup: BeautifulSoup) -> str:
+    return _parse_by_selectors(soup, _SELECTOR_PARSERS["investing"])
+
+
+def _parse_reuters(soup: BeautifulSoup) -> str:
+    return _parse_by_selectors(soup, _SELECTOR_PARSERS["reuters"])
+
+
+def _parse_yahoo(soup: BeautifulSoup) -> str:
+    return _parse_by_selectors(soup, _SELECTOR_PARSERS["yahoo"])
+
+
+def _parse_marketwatch(soup: BeautifulSoup) -> str:
+    return _parse_by_selectors(soup, _SELECTOR_PARSERS["marketwatch"])
+
+
+def _parse_bloomberg(soup: BeautifulSoup) -> str:
+    return _parse_by_selectors(soup, _SELECTOR_PARSERS["bloomberg"])
 
 
 def _parse_yonhap(soup: BeautifulSoup) -> str:
