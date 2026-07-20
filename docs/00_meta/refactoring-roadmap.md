@@ -214,6 +214,15 @@ TODOS.md "범위 제외로 남긴 것"의 코드 TODO 항목. DB 실측으로 **
 | 모듈 | 사유 |
 |---|---|
 | dashboard/backend/common.py (390줄, 가격조회 통합으로 증가) | 의도적으로 스코프된 공유 인프라 허브 — 의존 규칙 문서화됨(라우터→common 단방향). 캐시 dict는 main.py가 참조를 공유하므로 재할당 금지 |
-| core/article_fetcher.py (355줄) | 응집도 양호 — 소스별 파서 10개 + 단일 공개 함수. 파서가 더 늘면 그때 분리 |
-| dashboard/backend/routers_macro.py (416줄) | 단일 도메인으로 응집. `_kiwoom_to_yfinance`만 공용화 후보 (기회적) |
+| core/article_fetcher.py (355줄→320줄) | 응집도 양호 — 소스별 파서 10개 + 단일 공개 함수. 2026-07-20: 셀렉터만 다르던 6개 파서의 중복 로직은 `_SELECTOR_PARSERS`+`_parse_by_selectors`로 통합(아래 상세) — 파일 자체는 여전히 비대상 유지 |
+| dashboard/backend/routers_macro.py (416줄) | 단일 도메인으로 응집. ~~`_kiwoom_to_yfinance`만 공용화 후보 (기회적)~~ — **완료(2026-07-20)**, `core/tickers.py`로 통합(아래 상세) |
 | core/ohlcv_cache.py (434줄) | OHLCV 캐시 vs flow/aftermarket 로더 두 책임이지만 데이터소스 기준으로는 응집 — 낮은 우선순위 |
+
+### 2026-07-20 신규 발견 2건 완료 (로드맵 미기재분 정리)
+
+로드맵 종료 후 코드베이스 재탐색으로 발견한 새 중복 2건 — 둘 다 기존 테스트 0건이라 특성화 테스트를 먼저 추가한 뒤 진행(로드맵 Phase E 가격조회 통합과 동일 순서).
+
+1. **kiwoom→yfinance 티커 변환 3중 구현 통합**: `routers_macro._kiwoom_to_yfinance` / `kiwoom_aftermarket_sync._raw_to_yf` / `_to_snap_ticker`(nested, `_enrich_with_reg_value` 내부) — `_AL`/`_AQ`→`.KS`/`.KQ` 핵심 로직은 같으나 폴백이 다름(None 반환 vs raw 그대로 vs market 파라미터 폴백). `core/tickers.py::kiwoom_to_yfinance(raw, market="")`로 통합(가장 완전한 routers_macro 버전을 canonical 채택), 3개 호출부는 각자 폴백 quirk를 wrapper에서 보존하는 얇은 위임으로 전환(`_to_snap_ticker`는 `kiwoom_to_yfinance(raw) or raw`). 특성화 테스트(`tests/test_kiwoom_ticker_convert.py`) 15개로 3개 구현 동작 고정 후 무변화 확인.
+2. **article_fetcher 파서 6개 중복 제거**: `_parse_cnbc`/`_parse_investing`/`_parse_reuters`/`_parse_yahoo`/`_parse_marketwatch`/`_parse_bloomberg`가 셀렉터 리스트만 다르고 순회 로직 100% 동일 — `_SELECTOR_PARSERS` 맵 + 공용 `_parse_by_selectors`로 축약. 6개 named 함수는 얇은 위임으로 유지(fetch_article_body 디스패치·테스트 양쪽 무변경 호환). 연합뉴스/한경/매경/fallback/JSON-LD 파서는 로직이 달라 대상 제외. 특성화 테스트(`tests/test_article_fetcher_parsers.py`) 24개로 무변화 확인.
+
+검증: 두 항목 모두 pyright 신규 오류 0, 전체 pytest 859 passed(신규 실패 0).
