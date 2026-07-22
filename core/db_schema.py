@@ -348,6 +348,7 @@ _RLS_ALWAYS: list[str] = [
 _RLS_IF_EXISTS: list[str] = [
     "aftermarket_snap",   # krx/kiwoom_aftermarket_sync.py ensure_table()에서 생성
     "paper_positions",    # kiwoom_paper_trader.init_paper_positions()에서 생성
+    "apscheduler_jobs",   # run_scheduler.py SQLAlchemyJobStore가 scheduler.start() 시 생성
 ]
 
 
