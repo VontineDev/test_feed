@@ -33,5 +33,8 @@
       "Bash(~/.claude/skills/gstack/bin/gstack-learnings-log '{\"skill\":\"review\",\"type\":\"pitfall\",\"key\":\"iloc-off-by-one-vol-avg\",\"insight\":\"iloc[-N:-1] gives N-1 elements, not N. For a 20-day average excluding today use iloc[-21:-1]. check_peakout used [-20:-1] \\(19 days\\) while _check_stage1 correctly used [-21:-1] \\(20 days\\).\",\"confidence\":10,\"source\":\"observed\",\"files\":[\"stage_classifier.py\"]}')",
       "Bash(rtk read *)"
     ]
+  },
+  "enabledPlugins": {
+    "andrej-karpathy-skills@karpathy-skills": false
   }
 }
