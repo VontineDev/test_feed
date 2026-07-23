@@ -72,15 +72,14 @@ function Register-AftermarketTask {
     $RunMinute     = 5
 
     # "@ 는 반드시 열 0에 위치해야 함
+    # .env는 kiwoom_aftermarket_sync.py 자체가 load_dotenv()로 읽으므로 배치에서
+    # 재파싱하지 않음 — 괄호 포함 주석 줄에서 for/if 블록이 깨지는 버그가 있었음
+    # (2026-07-23 확인: 이 패턴으로 KiwoomAftermarketSync 태스크가 매일 exit=255).
+    # -m 모듈 실행으로 PYTHONPATH 없이도 core.* 임포트가 되도록 함.
     @"
 @echo off
 cd /d $ProjectDir
-for /f "usebackq tokens=1,* delims==" %%a in (".env") do (
-    if not "%%a"=="" if not "%%b"=="" (
-        if not "%%a:~0,1%"=="#" set "%%a=%%b"
-    )
-)
-"$PythonExe" "$ScriptFile" --incremental >> "$LogDir\aftermarket_sync.log" 2>&1
+"$PythonExe" -m data.kiwoom_aftermarket_sync --incremental >> "$LogDir\aftermarket_sync.log" 2>&1
 "@ | Set-Content -Path $WrapperScript -Encoding UTF8
 
     $existing = schtasks /Query /TN $TaskName 2>$null

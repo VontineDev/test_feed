@@ -160,13 +160,14 @@ async def daily_aftermarket_sync_job() -> None:
     """
     logger.info("[aftermarket-sync] kiwoom_aftermarket_sync --incremental 시작")
     try:
-        import os as _os
-        cwd = _os.path.join(_os.path.dirname(__file__), "..", "data")
+        _root   = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
+        _script = os.path.join(_root, "data", "kiwoom_aftermarket_sync.py")
+        _env    = {**os.environ, "PYTHONPATH": _root}
         proc = await asyncio.create_subprocess_exec(
-            sys.executable, "kiwoom_aftermarket_sync.py", "--incremental",
+            sys.executable, _script, "--incremental",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            cwd=cwd,
+            env=_env,
         )
         out, _ = await proc.communicate()
         if proc.returncode == 0:

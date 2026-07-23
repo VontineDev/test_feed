@@ -386,5 +386,11 @@ def _compute_cache_ttl(data: dict) -> float:
         return _NXT_TTL
     fetched = str(data.get("fetched_at", ""))
     if fetched and "-" in fetched:   # YYYY-MM-DD 형식 → aftermarket snap
+        # daily_market_snap_job(16:10)과의 레이스: 잡이 끝나기 전에 요청이
+        # 들어오면 MAX(trade_date)가 어제 날짜로 잡힌다. 이걸 30분 TTL로
+        # 캐싱하면 잡 완료 후에도 최대 30분간 하루 전 데이터가 노출되므로,
+        # 오늘 날짜가 아닌 스냅샷은 짧은 TTL로 재시도한다.
+        if fetched != str(datetime.now(_KST).date()):
+            return _NXT_TTL
         return _AFTERMARKET_TTL
     return _PRICE_TTL
