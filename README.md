@@ -125,7 +125,7 @@ scripts/                  # 운영 스크립트
   register_tasks.ps1      # Windows 작업 스케줄러 통합 등록 (-Task all|crawler|aftermarket|dashboard)
   start_dashboard_service.bat  # 대시보드 서비스 래퍼 (Task Scheduler용)
 sql/                      # DB 스키마 마이그레이션
-  rls_policies.sql        # RLS 정책 마이그레이션 (14 테이블 backend_all, pgAdmin/Supabase SQL 에디터 실행)
+  rls_policies.sql        # RLS 정책 마이그레이션 (26 테이블 backend_all, service_role 전용, pgAdmin/Supabase SQL 에디터 실행)
 logs/                     # 로그 파일
 ```
 

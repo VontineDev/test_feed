@@ -267,7 +267,9 @@ async def init_paper_positions(pool) -> None:
                 SELECT 1 FROM pg_policies
                 WHERE schemaname='public' AND tablename='paper_positions' AND policyname='backend_all'
               ) THEN
-                CREATE POLICY backend_all ON paper_positions FOR ALL USING (true) WITH CHECK (true);
+                CREATE POLICY backend_all ON paper_positions FOR ALL TO service_role USING (true) WITH CHECK (true);
+              ELSE
+                ALTER POLICY backend_all ON paper_positions TO service_role;
               END IF;
             END $$;
         """)

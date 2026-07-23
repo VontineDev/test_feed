@@ -1087,7 +1087,7 @@ test_feed/
 │
 ├── sql/
 │   ├── pgadmin_queries.sql        # DB 관리 쿼리
-│   └── rls_policies.sql           # RLS 정책 마이그레이션 (14 테이블 backend_all)
+│   └── rls_policies.sql           # RLS 정책 마이그레이션 (26 테이블 backend_all, service_role 전용)
 │
 ├── logs/                          # 로그 파일 (로테이션 포함)
 │
@@ -1227,7 +1227,7 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 | 신호는 참고용임을 메시지에 항상 명시 | ✅ |
 | 실거래 자동 주문 기능 없음 | ✅ |
 | Supabase RLS 활성화 — 전 테이블 PostgREST anon 노출 차단 | ✅ (v0.9.0.0~) |
-| RLS `backend_all` 정책 — 14개 테이블 명시적 allow-all 정책, Security Advisor 경고 해소 | ✅ (v0.9.7.0~) |
+| RLS `backend_all` 정책 — 26개 테이블 `TO service_role` 스코프, anon/authenticated 접근 차단 + Security Advisor(`rls_policy_always_true`) 경고 해소 | ✅ (v0.9.7.0~, 2026-07-23 service_role 스코프 개정) |
 | asyncpg `statement_cache_size=0` — Supabase PgBouncer 호환 | ✅ (v0.9.0.0~) |
 | 모의투자는 키움 가상 계좌 전용 (실자산 영향 없음) | ✅ |
 | 대시보드 localhost 인증 우회 차단 — `client.host` 기반 면제 로직 제거 (Nginx 뒤 모든 요청이 127.0.0.1로 보여 사실상 인증 전면 무력화됐던 취약점 수정, v0.9.8.x) | ✅ |

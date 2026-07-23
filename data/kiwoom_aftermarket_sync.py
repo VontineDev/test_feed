@@ -478,7 +478,9 @@ def ensure_table(dsn: str) -> None:
                     SELECT 1 FROM pg_policies
                     WHERE schemaname='public' AND tablename='aftermarket_snap' AND policyname='backend_all'
                   ) THEN
-                    CREATE POLICY backend_all ON aftermarket_snap FOR ALL USING (true) WITH CHECK (true);
+                    CREATE POLICY backend_all ON aftermarket_snap FOR ALL TO service_role USING (true) WITH CHECK (true);
+                  ELSE
+                    ALTER POLICY backend_all ON aftermarket_snap TO service_role;
                   END IF;
                 END $$;
             """)
@@ -600,7 +602,9 @@ def ensure_daily_snap_table(dsn: str) -> None:
                       AND policyname='backend_all'
                   ) THEN
                     CREATE POLICY backend_all ON daily_market_snap
-                      FOR ALL USING (true) WITH CHECK (true);
+                      FOR ALL TO service_role USING (true) WITH CHECK (true);
+                  ELSE
+                    ALTER POLICY backend_all ON daily_market_snap TO service_role;
                   END IF;
                 END $$
             """)

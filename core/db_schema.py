@@ -399,7 +399,9 @@ async def init_db(pool: asyncpg.Pool) -> None:
                     SELECT 1 FROM pg_policies
                     WHERE schemaname='public' AND tablename='{_tbl}' AND policyname='backend_all'
                   ) THEN
-                    CREATE POLICY backend_all ON {_tbl} FOR ALL USING (true) WITH CHECK (true);
+                    CREATE POLICY backend_all ON {_tbl} FOR ALL TO service_role USING (true) WITH CHECK (true);
+                  ELSE
+                    ALTER POLICY backend_all ON {_tbl} TO service_role;
                   END IF;
                 END $$;
             """)
@@ -417,7 +419,9 @@ async def init_db(pool: asyncpg.Pool) -> None:
                       SELECT 1 FROM pg_policies
                       WHERE schemaname='public' AND tablename='{_tbl}' AND policyname='backend_all'
                     ) THEN
-                      CREATE POLICY backend_all ON {_tbl} FOR ALL USING (true) WITH CHECK (true);
+                      CREATE POLICY backend_all ON {_tbl} FOR ALL TO service_role USING (true) WITH CHECK (true);
+                    ELSE
+                      ALTER POLICY backend_all ON {_tbl} TO service_role;
                     END IF;
                   END IF;
                 END $$;
