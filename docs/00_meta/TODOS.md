@@ -434,6 +434,8 @@ await conn.execute("""
 - ISSUE-001 (QA) Screener Telegram formatter over-escaped tickers in code spans (`005930.KS` → `005930\\.KS`); ISSUE-002 local `esc()` missing backtick; ISSUE-003 `test_db_dsn` isolation failure (load_dotenv restoring DB_PASSWORD during reload). All 3 fixed. `test_screener_telegram_regression_1.py` (8 regression tests). **Completed:** /qa 2026-04-16
 - Article type classification: `article_type` field on `TradeSignal` + `SIGNAL_PROMPT` + `_parse_signal_json()` + DB migration + `save_signal()` + `fetch_latest_signals()` + `run_scheduler.py` call site + Telegram type badges + backtest type breakdown; `test_article_type.py` (17 tests) + 2 backtest tests. **Completed:** v0.2.5.0 (2026-04-16); **QA:** ISSUE-001 (WATCH inflating type breakdown denominator) fixed + 1 regression test (2026-04-16)
 - ISSUE-QA-001 `test_screener_cmd.py` missing `__main__` guard — `asyncio.run(main())` at module level connected to production DB and sent 499-ticker screener results to Telegram on every `pytest` run. Fixed by adding guard. `test_screener_cmd_regression_1.py` (1 regression test). **Completed:** /qa 2026-04-18
+- daily_ohlcv 캐시 워밍 잡: `jobs/ohlcv_warm.py` — 백필(`--start 2025-01-02`, KRX OpenAPI) + 평일 18:30 KST 일배치(run_scheduler 자동 실행, 이미 채워진 날짜 스킵). **Completed:** 2026-06-14
+- Tier-1 조합전략 백필: `stage_classifications` 2025-W01~2026-W24(`jobs/stage_backfill.py`), `chart_signals` 2025-W01~2026-W24 4,144건(`jobs/screener_backfill.py`); 4종 백테스트 검증 — AND-1(샤프 1.75) / FUNNEL-1(샤프 0.74, 주력) / SCORE-1(샤프 0.62) / AND-2(신호 희소). CLI: `python scripts/run_compose.py --strategy ALL --start 2025-01-01 --end 2026-06-14`. **Completed:** 2026-06-14
 
 ## P2: HIGH CONFIDENCE Integration (v2 — after screener validation)
 
