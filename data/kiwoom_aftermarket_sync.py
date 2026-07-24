@@ -212,26 +212,46 @@ class KiwoomClient:
 
     def _post(self, path: str, api_id: str, body: dict,
               cont_yn: str = "N", next_key: str = "") -> tuple[dict, dict]:
-        """(json_body, resp_headers) 반환. cont-yn/next-key 는 응답 헤더에 있음."""
+        """(json_body, resp_headers) 반환. cont-yn/next-key 는 응답 헤더에 있음.
+
+        429(rate limit)는 지수 백오프(1s→2s→4s)로 최대 4회 시도 후에도
+        실패하면 RuntimeError로 전달한다 (기존엔 raise_for_status()가
+        즉시 HTTPError를 던져 aftermarket_snap 수집 전체가 크래시했음).
+        """
         headers = self._auth_headers(api_id)
         if cont_yn == "Y":
             headers["cont-yn"] = "Y"
             headers["next-key"] = next_key
-        resp = self._session.post(
-            f"{self._base}{path}",
-            json=body,
-            headers=headers,
-            timeout=30,
-        )
-        resp.raise_for_status()
-        if "text/html" in resp.headers.get("Content-Type", ""):
-            raise RuntimeError("키움 API 점검 중 (HTML 응답) — 시스템작업알림 페이지 수신")
-        data = resp.json()
-        if data.get("return_code", -1) != 0:
-            raise RuntimeError(
-                f"API 오류 [{api_id}]: {data.get('return_msg', '알 수 없음')}"
+
+        max_attempts = 4
+        backoff = 1.0
+        for attempt in range(1, max_attempts + 1):
+            resp = self._session.post(
+                f"{self._base}{path}",
+                json=body,
+                headers=headers,
+                timeout=30,
             )
-        return data, dict(resp.headers)
+            if resp.status_code == 429 and attempt < max_attempts:
+                wait = float(resp.headers.get("Retry-After", backoff))
+                logger.warning(
+                    "[kiwoom] %s 429(rate limit) — %.1fs 대기 후 재시도 (%d/%d)",
+                    api_id, wait, attempt, max_attempts,
+                )
+                _time.sleep(wait)
+                backoff *= 2
+                continue
+            resp.raise_for_status()
+            if "text/html" in resp.headers.get("Content-Type", ""):
+                raise RuntimeError("키움 API 점검 중 (HTML 응답) — 시스템작업알림 페이지 수신")
+            data = resp.json()
+            if data.get("return_code", -1) != 0:
+                raise RuntimeError(
+                    f"API 오류 [{api_id}]: {data.get('return_msg', '알 수 없음')}"
+                )
+            return data, dict(resp.headers)
+
+        raise RuntimeError(f"API 오류 [{api_id}]: 429 재시도 소진 ({max_attempts}회)")
 
     # ── ka10098: 시간외단일가등락률조회 ────────────────────────
 
@@ -270,6 +290,7 @@ class KiwoomClient:
             if resp_cont != "Y" or not resp_key:
                 break
             cont_yn, next_key = "Y", resp_key
+            _time.sleep(0.25)  # 페이지 간 간격 — 연속 호출로 인한 429 예방
 
         return all_rows
 
@@ -757,7 +778,13 @@ def _collect(
     for mrkt_tp, suffix in markets:
         label = "KOSPI" if suffix == ".KS" else "KOSDAQ"
         logger.info("[kiwoom] %s 시간외 수집 중 (mrkt_tp=%s)...", label, mrkt_tp)
-        rows = client.fetch_aftermarket_bulk(mrkt_tp=mrkt_tp)
+        try:
+            rows = client.fetch_aftermarket_bulk(mrkt_tp=mrkt_tp)
+        except Exception as e:
+            # 한 시장이 재시도 후에도 실패해도 이미 수집한 다른 시장 데이터는
+            # 살려서 저장한다 (기존엔 여기서 예외가 전파돼 전체 수집이 0건이 됐음).
+            logger.error("[kiwoom] %s 수집 실패 — 건너뜀: %s", label, e)
+            continue
         records = parse_bulk_rows(rows, trade_date, suffix)
         logger.info("[kiwoom] %s — %d건 파싱", label, len(records))
         all_records.extend(records)
