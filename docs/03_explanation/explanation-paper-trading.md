@@ -12,20 +12,22 @@
 
 **1차 수정** (v0.10.0.1): 가격 조회를 대시보드와 동일한 yfinance 배치 조회(`_fetch_prices_yf()`)로 교체했다. 주문 실행은 Kiwoom mock API를 유지했다.
 
-**2차 수정 — 현재 상태** (v1.0.4.1): exit checker 실행 시점이 장 마감 후 → **정규장 마감 직전(15:20 KST) 시장가 매도**로 바뀌면서 정규장 중 실시간가가 필요해졌다. yfinance의 1분봉은 지연이 있어 장중 판단에는 부적합하므로, 가격 조회를 다시 Kiwoom mock API(`paper_trader.get_current_price()`, 종목당 0.5초 딜레이)로 되돌렸다. `_fetch_prices_yf()`는 더 이상 호출되지 않아 코드에서 제거됐다.
+**2차 수정** (v1.0.4.1): exit checker 실행 시점이 장 마감 후 → **정규장 마감 직전(15:20 KST) 시장가 매도**로 바뀌면서 정규장 중 실시간가가 필요해졌다. yfinance의 1분봉은 지연이 있어 장중 판단에는 부적합하므로, 가격 조회를 Kiwoom mock API(`paper_trader.get_current_price()`, 종목당 0.5초 딜레이)로 되돌렸다. 하지만 이 서버는 애초에 ka10001을 지원하지 않으므로(위 문단), 다시 매일 "현재가 조회 실패"로 전 포지션이 스킵되는 상태로 돌아갔다 — hard_stop이 발동해야 할 포지션이 며칠~몇 주씩 방치되며 -10% 설계 손절선을 훨씬 넘는 손실(-20~-38%)로 청산되는 결과를 낳았다.
+
+**3차 수정 — 현재 상태**: `KiwoomPaperTrader`에 **시세 조회 전용 실 API 클라이언트**(`_quote_client`, `api.kiwoom.com`, `KIWOOM_APPKEY`/`KIWOOM_SECRETKEY`)를 별도로 추가했다. `get_current_price()`/`get_open_price()`는 이 실 API 클라이언트로 ka10001을 호출하고, 주문(`place_buy`/`place_sell`)과 계좌 조회는 계속 모의투자 서버(`self._client`, mock)를 사용한다 — 실제 매매가 발생하지 않도록 주문 경로는 그대로 유지.
 
 ```
-[초기 설계 — 실패]
-paper_exit_checker(장 마감 후) → KiwoomPaperTrader.get_current_price()
-                                   └─ mockapi.kiwoom.com/ka10001 → 항상 실패
+[초기 설계 / 2차 수정 — 실패]
+paper_exit_checker(15:20 KST) → KiwoomPaperTrader.get_current_price()
+                                   └─ mockapi.kiwoom.com/ka10001 → 항상 실패 (시장데이터 미지원)
 
 [1차 수정 — v0.10.0.1]
 paper_exit_checker(장 마감 후) → _fetch_prices_yf(tickers)        ← 가격 (yfinance)
                                 → paper_trader.place_sell(...)     ← 주문 (mockapi)
 
-[현재 — v1.0.4.1, 정규장 중 실행]
-paper_exit_checker(15:20 KST) → paper_trader.get_current_price(ticker) (종목별 순차, 0.5s 딜레이)
-                              → paper_trader.place_sell(...)
+[현재 — 3차 수정]
+paper_exit_checker(15:20 KST) → paper_trader.get_current_price(ticker)  ← 가격 (api.kiwoom.com, 실 API)
+                              → paper_trader.place_sell(...)             ← 주문 (mockapi.kiwoom.com, 모의투자)
 ```
 
 ---
@@ -59,9 +61,9 @@ paper_exit_checker(15:20 KST) → paper_trader.get_current_price(ticker) (종목
 ### paper_exit_checker_job (15:20 KST, 정규장 마감 직전)
 
 1. DB에서 `status='open'` 포지션 전체 조회
-2. Kiwoom mock API(ka10001)로 종목별 현재가 순차 조회 (0.5초 딜레이로 rate limit 방지)
+2. Kiwoom 실 API(ka10001, `api.kiwoom.com`)로 종목별 현재가 순차 조회 (0.5초 딜레이로 rate limit 방지)
 3. 종목별 exit 조건 판정 (우선순위 순)
-4. 청산 조건 해당 시 Kiwoom mock API로 시장가 매도주문 → DB `closed` 업데이트
+4. 청산 조건 해당 시 Kiwoom mock API(모의투자 서버)로 시장가 매도주문 → DB `closed` 업데이트
 5. Telegram 알림
 
 ### paper_eod_sampler_job (16:40 KST)
@@ -90,11 +92,11 @@ paper_exit_checker(15:20 KST) → paper_trader.get_current_price(ticker) (종목
 
 ### paper_open_entry_job (09:05 KST)
 
-1. 당일 또는 최근 4일 이내 `pending` 포지션 조회 (주말 대응)
-2. 종목별 당일 시가 조회 (`get_open_price` → ka10001, 단 **실 API** 아닌 mock API) — **종목 간 0.5초 딜레이로 rate limit 방지**
-3. 시가로 Kiwoom mock API 매수주문 → DB `open` 업데이트, 슬리피지 기록
+1. `signal_date` 무관하게 `status='pending'` 포지션 **전체** 조회 (이전엔 최근 4일 중 가장 최근 날짜 1개만 처리하고 멈추는 버그가 있었음 — 특정 회차 진입 실패분이 더 최근 날짜의 pending에 가려져 영구히 재시도 안 되는 문제. 2026-07 수정)
+2. 종목별 당일 시가 조회 (`get_open_price` → ka10001, 실 API `api.kiwoom.com`) — **종목 간 0.5초 딜레이로 rate limit 방지**
+3. 시가로 Kiwoom mock API(모의투자 서버) 매수주문 → DB `open` 업데이트, 슬리피지 기록
 
-> **주의**: `get_open_price`는 mockapi.kiwoom.com의 ka10001을 호출한다. 시가는 장 시작 직후에는 조회 가능할 수 있지만, 장 마감 후에는 응답이 없다. 이 때문에 `get_current_price` 폴백이 있으나, 두 함수 모두 mock 서버에서 지원이 불안정하다. 현재는 장 시작 직후(09:05) 시가 조회는 작동하는 것으로 확인되어 있다.
+> **가격 소스**: `get_open_price`/`get_current_price`는 `KiwoomPaperTrader._quote_client`(실 API, `api.kiwoom.com`)를 호출한다. 모의투자 서버(mockapi.kiwoom.com)는 ka10001을 지원하지 않으므로 시세 조회에 쓰지 않는다 — 주문 제출(`place_buy`/`place_sell`)에만 모의투자 서버를 사용.
 
 ---
 
@@ -210,13 +212,13 @@ Cross 모델의 `max_slots=5, position_krw=20M`은 나머지 모델 대비 포�
 
 ## 가격 소스
 
-시스템 내에서 동일 종목의 현재가를 조회하는 지점이 여럿이다. exit checker가 정규장 중(15:20 KST) 실행되도록 바뀐 뒤로는 **주문에 영향을 주는 조회(exit, open_entry)는 모두 Kiwoom mock API**, **표시 전용 조회(대시보드, 텔레그램)는 yfinance**로 나뉜다:
+시스템 내에서 동일 종목의 현재가를 조회하는 지점이 여럿이다. **주문에 영향을 주는 조회(exit, open_entry)는 Kiwoom 실 API**(`api.kiwoom.com`, `_quote_client`), **표시 전용 조회(대시보드, 텔레그램)는 yfinance**로 나뉜다. 주문 제출(매수/매도) 자체는 항상 Kiwoom mock API(모의투자 서버)로 간다:
 
 | 컴포넌트 | 가격 소스 | 용도 |
 |----------|----------|------|
 | 대시보드 `/api/positions` | yfinance (1d 1m, 5분 캐시) | 미실현 손익 표시 |
-| `paper_exit_checker_job` | Kiwoom mock API ka10001 (종목별 순차) | exit 조건 판정 → 매도주문 |
-| `paper_open_entry_job` | Kiwoom mock API ka10001 | 당일 시가 조회 → 매수주문 |
+| `paper_exit_checker_job` | Kiwoom 실 API ka10001 (종목별 순차) | exit 조건 판정 → 매도주문(mock) |
+| `paper_open_entry_job` | Kiwoom 실 API ka10001 | 당일 시가 조회 → 매수주문(mock) |
 | 텔레그램 `/paper` | yfinance (대시보드 캐시 재사용 없음, 직접 조회) | 포지션 조회 |
 
 exit checker와 대시보드가 **다른** 소스를 쓰므로, 대시보드에 표시되는 손익과 15:20 KST exit checker가 판단하는 손익이 일시적으로 어긋날 수 있다(둘 다 정규장 중 시세이므로 보통 근접하지만 동일 틱은 아니다).

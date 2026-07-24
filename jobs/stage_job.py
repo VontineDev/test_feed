@@ -10,6 +10,7 @@ import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
+from itertools import zip_longest
 from typing import Optional
 
 import pandas as pd
@@ -62,9 +63,35 @@ async def daily_stage_job(db_pool) -> set[str]:
         _priority  = [(t, n, s) for t, n, s in all_tickers if t in _ichi_syms]
         _others    = [(t, n, s) for t, n, s in all_tickers if t not in _ichi_syms]
         _n_fill    = max(0, cap - len(_priority))
-        all_tickers = _priority + _others[:_n_fill]
-        logger.info("[3단계] 티커 캡 %d 적용 (Ichimoku 우선 %d + 기타 %d)",
-                    cap, len(_priority), _n_fill)
+
+        # get_all_tickers()가 KOSPI(943개)를 KOSDAQ(1821개)보다 앞에 반환하므로
+        # 캡을 그냥 앞에서 자르면 KOSDAQ은 영원히 후보에 못 든다 — 실제로 이 버그로
+        # stage_classifications에 KOSDAQ 행이 전체 기간 0건이었음 (2026-07 발견).
+        # 두 시장을 번갈아 채우고, 날짜 기반 오프셋으로 매일 다른 구간을 스캔해
+        # 전체 유니버스가 점진적으로 커버되도록 한다.
+        _kospi_others  = [x for x in _others if x[0].endswith(".KS")]
+        _kosdaq_others = [x for x in _others if x[0].endswith(".KQ")]
+
+        def _rotate(lst: list[tuple[str, str, str]], seed: int) -> list[tuple[str, str, str]]:
+            if not lst:
+                return []
+            off = seed % len(lst)
+            return lst[off:] + lst[:off]
+
+        # 시장당 하루 스캔량만큼 오프셋을 이동시켜 창이 매일 겹치지 않게 슬라이드
+        # 되도록 한다 (1칸씩만 옮기면 KOSDAQ 1821개 전체를 훑는데 ~5년 걸림).
+        _step    = max(1, _n_fill // 2)
+        _day_ord = date.today().toordinal()
+        _kospi_rot  = _rotate(_kospi_others,  _day_ord * _step)
+        _kosdaq_rot = _rotate(_kosdaq_others, _day_ord * _step)
+        _fill = [
+            t for pair in zip_longest(_kospi_rot, _kosdaq_rot)
+            for t in pair if t is not None
+        ][:_n_fill]
+
+        all_tickers = _priority + _fill
+        logger.info("[3단계] 티커 캡 %d 적용 (Ichimoku 우선 %d + KOSPI/KOSDAQ 순환 %d)",
+                    cap, len(_priority), len(_fill))
 
     logger.info("[3단계] 분류 대상: %d종목 / SCREENER_WORKERS=%s",
                 len(all_tickers), os.environ.get("SCREENER_WORKERS", "1"))
@@ -111,7 +138,10 @@ async def daily_stage_job(db_pool) -> set[str]:
                 len(s1_history), len(s2_history))
 
     # 5. classify_stage_v15() 병렬 실행
-    market_map = {t: ("KOSDAQ" if s.endswith(".KQ") else "KOSPI") for t, _, s in all_tickers}
+    # market은 종목코드 접미사(.KQ/.KS)로 판정해야 하는데 sector(s)로 판정하고
+    # 있었음 — sector는 항상 빈 문자열이라 모든 종목이 "KOSPI"로 분류돼 KOSDAQ
+    # 전용 임계값(_S1_THRESHOLD["KOSDAQ"]=0.07)이 한 번도 적용되지 않았음 (2026-07 발견).
+    market_map = {t: ("KOSDAQ" if t.endswith(".KQ") else "KOSPI") for t, _, _ in all_tickers}
 
     def _classify_one(ticker: str) -> tuple[str, Optional[int], bool]:
         price_df = price_map.get(ticker)

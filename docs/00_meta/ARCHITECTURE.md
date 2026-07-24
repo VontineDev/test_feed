@@ -1294,6 +1294,13 @@ DB에서 `null_pct > 20%` 확인 후 활성화 권장.
 `DAILY_CLASSIFIER_TICKERS=150` (기본값) 환경변수로 일봉 분류기의 최대 처리 종목 수를 제어합니다.  
 Ichimoku 통과 종목은 캡 초과 여부와 관계없이 항상 포함됩니다.
 
+캡을 채우는 나머지 종목은 KOSPI/KOSDAQ을 번갈아 선택하고, 날짜 기반 오프셋으로
+매일 다른 구간을 스캔합니다(각 시장 유니버스를 ~2~4주 주기로 전체 커버).
+2026-07까지는 KOSPI가 리스트 앞부분을 전부 차지해 KOSDAQ이 캡에 절대 들지 못하는
+버그가 있었고(`stage_classifications`에 KOSDAQ 행이 0건), `market_map`도 종목코드
+접미사 대신 sector로 판정해 모든 종목이 `"KOSPI"`로 분류되는 버그가 겹쳐 있었습니다
+— `jobs/stage_job.py`에서 수정(`CHANGELOG.md` `[0.10.1.18]` 참고).
+
 ### 7. 뉴스 게이팅 강화 (이중 레이어)
 
 기존 단일 스크리너 게이팅에 `_active_stage_tickers` (최근 7일 이내 Stage 활성 종목) 레이어 추가.  

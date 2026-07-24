@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 > **2026-06-21 버전 체계 통합**: 이 프로젝트는 한동안 두 개의 독립된 changelog를 병행 운영했습니다 — `ARCHITECTURE.md`(블록쿼트, `v1.0.x` 계열)와 본 `CHANGELOG.md`(`v0.10.1.x` 계열). 둘 다 활발히 갱신되며 서로 갈라졌고, `VERSION` 파일은 `v0.10.0.0`에서 멈춰 있었습니다. 앞으로는 **이 `CHANGELOG.md`가 유일한 변경 이력**이며, `ARCHITECTURE.md`는 정적 아키텍처 설명만 유지합니다. `v1.0.x` 계열의 항목 6건(2026-06-14~16 발생, 실제 발생일 기준 정렬)을 아래로 이전했습니다 — 날짜가 위 항목(`0.10.1.11` 등)보다 과거인 것은 의도된 것입니다.
 
+## [0.10.1.18] - 2026-07-24
+
+### Fixed
+- **모의투자 exit checker 현재가 조회를 실 API(`api.kiwoom.com`)로 분리**: `KiwoomPaperTrader`에 시세 조회 전용 `_quote_client`(`KIWOOM_APPKEY`/`KIWOOM_SECRETKEY`)를 추가하고 `get_current_price()`/`get_open_price()`가 이 클라이언트로 ka10001을 호출하도록 변경. 모의투자 서버(mockapi.kiwoom.com)는 애초에 ka10001(시장 데이터)을 지원하지 않아 매일 전 포지션이 "현재가 조회 실패"로 스킵되고 있었고(`72e06c3`에서 yfinance→mock API로 되돌리며 재발), 그 결과 hard_stop(-10% 설계)이 며칠~몇 주씩 늦게 잡히며 실제 손실이 -20~-38%까지 벌어졌다(종료 42건 중 hard_stop 37건 평균 -18.15%). 주문 제출(`place_buy`/`place_sell`)과 계좌 조회는 계속 모의투자 서버 사용 — 실제 매매 미발생.
+- `paper_open_entry_job`의 pending 조회가 최근 4일 중 가장 최근 날짜 1개만 처리하고 멈추던 버그 수정 — `signal_date` 무관하게 미체결 `pending` 전체를 매 실행마다 재시도하도록 변경 (`data/kiwoom_paper_trader.py: get_pending_positions`).
+- **`kosdaq` 모의투자 모델이 런칭 이후 신호가 0건이던 버그 2건 수정** (`jobs/stage_job.py`): (1) 일별 분류기 티커 캡(기본 150개) 적용 시 `get_all_tickers()`가 KOSPI를 KOSDAQ보다 앞에 반환해 캡을 앞에서 자르면 KOSDAQ이 항상 제외됐음 — KOSPI/KOSDAQ을 번갈아 채우고 날짜 기반 오프셋으로 매일 다른 구간을 스캔해 ~25일 주기로 전체 유니버스를 커버하도록 변경. (2) `market_map` 계산이 종목코드 접미사(`t`) 대신 `sector`(`s`, 항상 빈 문자열)로 시장을 판정해 모든 종목이 `"KOSPI"`로 분류되고 있었음 — `t.endswith(".KQ")`로 수정, `_S1_THRESHOLD["KOSDAQ"]=0.07`이 이제 실제로 적용됨. `stage_classifications`는 전체 기간(787건) 동안 KOSDAQ 행이 0건이었음.
+
 ## [0.10.1.17] - 2026-06-16 (이전: ARCHITECTURE.md `v1.0.4.0`)
 
 ### Added

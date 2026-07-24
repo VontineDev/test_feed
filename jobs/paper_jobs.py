@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import random
-from datetime import date, timedelta
+from datetime import date
 from typing import Optional
 
 import httpx
@@ -43,7 +43,7 @@ async def paper_exit_checker_job(db_pool, paper_trader) -> None:
 
     logger.info("[paper-exit] 오픈 포지션 %d건 exit 체크 시작", len(_open_positions))
 
-    # 현재가 조회 — Kiwoom mock API ka10001 (정규장 중 실시간 가격)
+    # 현재가 조회 — Kiwoom 실 API ka10001 (정규장 중 실시간 가격; 모의투자 서버는 시장데이터 미지원)
     _all_tickers = list({p["ticker"] for p in _open_positions})
     _prices: dict[str, float] = {}
     for _tk in _all_tickers:
@@ -71,7 +71,7 @@ async def paper_exit_checker_job(db_pool, paper_trader) -> None:
         if not _entry or _entry <= 0:
             continue
 
-        # 현재가 룩업 (Kiwoom mock API 조회 결과)
+        # 현재가 룩업 (Kiwoom 실 API 조회 결과)
         _close = _prices.get(_ticker)
         if not _close or _close <= 0:
             logger.warning("[paper-exit] %s 현재가 없음 — 스킵", _ticker)
@@ -268,29 +268,22 @@ async def paper_eod_sampler_job(db_pool, paper_trader) -> None:
 
 async def paper_open_entry_job(db_pool, paper_trader) -> None:
     """장 시작(09:00) 후 시가 확정 → pending 포지션 매수주문 제출."""
-    today = date.today()
     _loop = asyncio.get_running_loop()
 
-    # 오늘 pending이 없으면 최근 4일 이내 미처리 pending 처리 (주말 포함)
-    _pending = []
-    _target = today
-    for _delta in range(0, 4):
-        _target = today - timedelta(days=_delta)
-        _pending = await get_pending_positions(db_pool, _target)
-        if _pending:
-            break
-    else:
+    # signal_date 무관하게 미체결 pending 전체 처리 (과거 실패분 포함 재시도)
+    _pending = await get_pending_positions(db_pool)
+    if not _pending:
         logger.info("[paper-entry] pending 없음")
         return
 
-    logger.info("[paper-entry] %d건 pending → 매수주문 시작 (신호일=%s)", len(_pending), _target)
+    logger.info("[paper-entry] %d건 pending → 매수주문 시작", len(_pending))
 
     for _pos in _pending:
         _ticker = _pos["ticker"]
         _model  = _pos["model"]
         _pos_id = _pos["id"]
 
-        # 시가 조회 (ka10001 open_pric) — 종목 간 0.5초 딜레이로 mock API rate limit 방지
+        # 시가 조회 (ka10001 open_pric, 실 API) — 종목 간 0.5초 딜레이로 rate limit 방지
         await asyncio.sleep(0.5)
         _open_px = await _loop.run_in_executor(None, paper_trader.get_open_price, _ticker)
         if not _open_px:

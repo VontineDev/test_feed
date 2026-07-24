@@ -4,6 +4,40 @@ Items deferred from code review and planning sessions.
 
 ---
 
+## P1: kosdaq 스테이지 분류 커버리지 회복 확인 (2026-07-24 수정분 검증)
+
+**What:** `jobs/stage_job.py`의 티커 캡 순서 버그(KOSPI가 리스트 앞을 차지해 KOSDAQ이
+캡에 절대 못 듦) + `market_map` sector/symbol 오판정 버그(모든 종목이 `"KOSPI"`로
+분류)를 수정(`CHANGELOG.md` `[0.10.1.18]`). 며칠 뒤 `stage_classifications`에
+실제로 KOSDAQ(`.KQ`) 행이 쌓이는지, `kosdaq` 모의투자 모델에 pending이 들어오는지
+확인 필요.
+
+**Why:** `stage_classifications`는 런칭 이후 전체 기간(787건) 동안 KOSDAQ 행이
+0건이었고, 그 결과 `kosdaq` 모의투자 모델(백테스트 기준 4개 모델 중 최고 성과,
+val_sharpe=5.48)이 한 번도 거래를 못 했음. 로직 수정은 완료했지만 실 운영에서
+의도대로 동작하는지(yfinance 60일 OHLCV fetch가 KOSDAQ 종목에서도 정상 응답하는지,
+Stage1 임계값(`_S1_THRESHOLD["KOSDAQ"]=0.07`)이 실제로 히트를 만들어내는지)는
+아직 라이브로 검증 안 됨.
+
+**How to apply:**
+1. 며칠(최소 1주) 뒤 아래 쿼리로 KOSDAQ 행 적재 여부 확인:
+   ```sql
+   SELECT stage, COUNT(*) FROM stage_classifications
+   WHERE ticker LIKE '%.KQ' AND classified_date > CURRENT_DATE - 7
+   GROUP BY stage;
+   ```
+2. Stage1 KOSDAQ 히트가 나오면 `paper_positions WHERE model='kosdaq'`에 pending이
+   생기는지 확인.
+3. 몇 주 뒤에도 여전히 0건이면 `classify_stage_v15`/`_check_stage1_v13` 내부에
+   시장별로 추가로 갈라지는 로직이 있는지(예: `_S1_THRESHOLD` 외 다른 시장 종속
+   조건) 재조사.
+
+**Effort:** XS (확인만, 코드 변경 없음 — 재조사 필요시 별도)
+**Priority:** P1
+**Depends on:** 2026-07-24 `jobs/stage_job.py` 수정 배포 후 daily_stage_classifier 실행 누적
+
+---
+
 ## P3: 리팩토링 Phase A~C 후속 — 심(shim) 삭제 + 범위 제외분 정리 (2026-07-15, 심 삭제 완료 2026-07-16)
 
 **배경:** 2026-07-15 구조 리팩토링(우선순위 3단계 컷)으로 core/dates.py,

@@ -2,13 +2,20 @@
 kiwoom_paper_trader.py — 키움 모의투자 주문 실행 및 포지션 추적
 
 API 매핑:
-  kt10000  POST /api/dostk/ordr  주식 매수주문
-  kt10001  POST /api/dostk/ordr  주식 매도주문
-  kt00018  POST /api/dostk/acnt  계좌평가잔고내역요청 (보유종목 + 손익)
-  kt00005  POST /api/dostk/acnt  체결잔고요청 (예수금)
+  kt10000  POST /api/dostk/ordr    주식 매수주문 (모의투자 서버)
+  kt10001  POST /api/dostk/ordr    주식 매도주문 (모의투자 서버)
+  kt00018  POST /api/dostk/acnt    계좌평가잔고내역요청 — 보유종목 + 손익 (모의투자 서버)
+  kt00005  POST /api/dostk/acnt    체결잔고요청 — 예수금 (모의투자 서버)
+  ka10001  POST /api/dostk/stkinfo 주식기본정보요청 — 현재가/시가 (실 API 서버)
 
-모의투자 도메인: https://mockapi.kiwoom.com (KRX만 지원)
-환경변수: KIWOOM_MOCK_APPKEY, KIWOOM_MOCK_APPSECRET
+모의투자 서버(mockapi.kiwoom.com)는 주문 체결/계좌 조회만 지원하고
+시장 데이터(ka10001)는 지원하지 않아 항상 실패한다 — 그래서 현재가/시가
+조회는 실 API 서버(api.kiwoom.com)의 읽기 전용 시세 클라이언트로 분리했다.
+주문/계좌 조회는 계속 모의투자 서버를 사용(실제 매매 발생 방지).
+
+환경변수:
+  KIWOOM_MOCK_APPKEY, KIWOOM_MOCK_APPSECRET, KIWOOM_MOCK_ACCOUNT  — 모의투자(주문/계좌)
+  KIWOOM_APPKEY, KIWOOM_SECRETKEY                                 — 실 API(시세 조회 전용)
 """
 from __future__ import annotations
 
@@ -29,6 +36,8 @@ logger = logging.getLogger(__name__)
 _PAPER_APPKEY    = os.environ.get("KIWOOM_MOCK_APPKEY", "")
 _PAPER_SECRETKEY = os.environ.get("KIWOOM_MOCK_APPSECRET", "")
 _PAPER_ACCOUNT   = os.environ.get("KIWOOM_MOCK_ACCOUNT", "")
+_QUOTE_APPKEY    = os.environ.get("KIWOOM_APPKEY", "")
+_QUOTE_SECRETKEY = os.environ.get("KIWOOM_SECRETKEY", "")
 _EXCHANGE        = "KRX"   # mockapi는 KRX만 지원
 
 # 모델별 슬롯 수 / 포지션당 금액(원)
@@ -69,6 +78,23 @@ class KiwoomPaperTrader:
         self._client = KiwoomClient(use_mock=True)
         self._client.issue_token(_PAPER_APPKEY, _PAPER_SECRETKEY)
         logger.info("[paper] 키움 모의투자 클라이언트 초기화 완료")
+
+        # 시세 조회 전용 실 API 클라이언트 — 모의투자 서버는 ka10001(시장데이터)을
+        # 지원하지 않아 항상 실패했다. 주문/계좌는 계속 self._client(모의투자) 사용.
+        self._quote_client: Optional[KiwoomClient] = None
+        if _QUOTE_APPKEY and _QUOTE_SECRETKEY:
+            try:
+                self._quote_client = KiwoomClient(use_mock=False)
+                self._quote_client.issue_token(_QUOTE_APPKEY, _QUOTE_SECRETKEY)
+                logger.info("[paper] 실 API 시세 클라이언트 초기화 완료 (ka10001)")
+            except Exception as e:
+                logger.warning("[paper] 실 API 시세 클라이언트 초기화 실패 — 시세 조회 불가: %s", e)
+                self._quote_client = None
+        else:
+            logger.warning(
+                "[paper] KIWOOM_APPKEY/KIWOOM_SECRETKEY 미설정 — 현재가/시가 조회 불가 "
+                "(모의투자 서버는 ka10001 미지원)"
+            )
 
     # ── 주문 ─────────────────────────────────────────────────────────────────
 
@@ -166,14 +192,17 @@ class KiwoomPaperTrader:
         }
 
     def get_current_price(self, ticker: str) -> Optional[int]:
-        """ka10001 주식기본정보요청으로 현재가 반환.
+        """ka10001 주식기본정보요청으로 현재가 반환 (실 API 서버 — 모의투자 서버는 시장데이터 미지원).
 
         KRX API는 하락일 종목에 cur_prc를 음수로 반환하므로 abs() 처리.
-        Returns None on failure.
+        Returns None on failure (실 API 클라이언트 미설정 포함).
         """
         stk_cd = _to_6digit(ticker)
+        if self._quote_client is None:
+            logger.warning("[paper] %s 현재가 조회 불가 — 실 API 시세 클라이언트 미설정", stk_cd)
+            return None
         try:
-            data, _ = self._client._post(
+            data, _ = self._quote_client._post(
                 "/api/dostk/stkinfo", "ka10001",
                 {"stk_cd": stk_cd},
             )
@@ -184,10 +213,13 @@ class KiwoomPaperTrader:
             return None
 
     def get_open_price(self, ticker: str) -> Optional[int]:
-        """ka10001의 open_pric 필드로 당일 시가 반환."""
+        """ka10001의 open_pric 필드로 당일 시가 반환 (실 API 서버)."""
         stk_cd = _to_6digit(ticker)
+        if self._quote_client is None:
+            logger.warning("[paper] %s 시가 조회 불가 — 실 API 시세 클라이언트 미설정", stk_cd)
+            return None
         try:
-            data, _ = self._client._post(
+            data, _ = self._quote_client._post(
                 "/api/dostk/stkinfo", "ka10001",
                 {"stk_cd": stk_cd},
             )
@@ -303,12 +335,20 @@ async def insert_pending(
         return row["id"]
 
 
-async def get_pending_positions(pool, signal_date: date) -> list[dict]:
-    """signal_date 기준 pending 포지션 조회."""
+async def get_pending_positions(pool) -> list[dict]:
+    """미체결 pending 포지션 전체 조회 (signal_date 무관).
+
+    날짜별로 끊어서 조회하면 특정 회차의 진입 실패(API 오류 등)가
+    이후 실행에서 더 최근 날짜의 pending에 가려져 영구히 재시도되지
+    않는 문제가 있었다 — 그래서 status만으로 전체를 가져와 매 실행마다
+    밀린 건까지 재시도한다.
+
+    오래 방치되어 신호 유효성이 의심되는 건은 status='held'로 전환해
+    이 조회에서 제외한다 (재검토 후 수동으로 'pending' 복귀 필요).
+    """
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT * FROM paper_positions WHERE status='pending' AND signal_date=$1",
-            signal_date,
+            "SELECT * FROM paper_positions WHERE status='pending' ORDER BY signal_date ASC",
         )
     return [dict(r) for r in rows]
 

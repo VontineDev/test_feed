@@ -175,7 +175,7 @@ function PositionCard({ row: r }: { row: HistoryRow }) {
           color: isActive ? tokens.chart.cat.ichimoku : tokens.tx.subtle,
           fontWeight: isActive ? 700 : 400,
         }}>
-          {r.status === 'pending' ? '⏳ 매수대기' : r.status === 'open' ? '● 보유중' : '✓ 완료'}
+          {r.status === 'pending' ? '⏳ 매수대기' : r.status === 'open' ? '● 보유중' : r.status === 'held' ? '⏸ 보류' : '✓ 완료'}
         </span>
       </div>
 
