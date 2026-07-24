@@ -121,14 +121,22 @@ def _next_streak(prev: Optional[int], net: Optional[int]) -> Optional[int]:
     return 0
 
 
-def _isin_from_krx_code(krx_code: str, suffix: str) -> str:
-    """KRX 6자리 코드 + yfinance 접미사 → 12자리 ISIN.
+def _isin_from_krx_code(krx_code: str) -> str:
+    """KRX 6자리 코드 → 12자리 ISIN.
 
     MDCSTAT02302는 isuSrtCd(6자리) 단독으로는 output=[] 반환.
-    isuCd(ISIN)가 반드시 필요. KOSPI→KR7, KOSDAQ→KR8.
-    체크디짓: ISO 6166 Luhn 알고리즘.
+    isuCd(ISIN)가 반드시 필요.
+
+    ISIN의 type digit(3번째 자리)은 상장 시장(KOSPI/KOSDAQ)이 아니라
+    증권 종류(보통주=7)로 결정된다 — KOSDAQ 보통주도 KR7을 쓴다.
+    (실측: KR8247540006 조회 시 output=[] 빈 응답, KR7247540008로
+    동일 종목 조회 시 정상 데이터 수신. tests/test_krx_sync.py의
+    KOSDAQ 픽스처(086520 에코프로비엠)도 ISU_CD="KR7086520006"로
+    이미 KR7을 사용 중이었음 — 이 함수만 잘못된 KR8 가정을 갖고 있었다.)
+    이전엔 suffix==".KS"가 아니면 KR8을 써서 KOSDAQ 종목의 수급 조회가
+    전부 빈 응답으로 조용히 실패했다(daily_flow에 KOSDAQ 행이 전무했던 원인).
     """
-    type_digit = "7" if suffix == ".KS" else "8"
+    type_digit = "7"
     body = f"KR{type_digit}{krx_code}00"  # 11자리
     digits = "".join(str(ord(c) - 55) if c.isalpha() else c for c in body)
     total = 0
@@ -384,10 +392,8 @@ class _KrxDirectFetcher:
 
         KRX API 날짜 범위 제한으로 _CHUNK_DAYS 단위로 분할 요청.
         """
-        parts = yf_symbol.rsplit(".", 1)
-        krx_code = parts[0]
-        suffix   = "." + parts[1] if len(parts) == 2 else ".KS"
-        isuCd    = _isin_from_krx_code(krx_code, suffix)
+        krx_code = yf_symbol.rsplit(".", 1)[0]
+        isuCd    = _isin_from_krx_code(krx_code)
 
         # 날짜 범위를 청크로 분할 수집
         all_rows: list[dict] = []
@@ -928,7 +934,7 @@ async def _handle_possible_expiry(
 
     loop = asyncio.get_running_loop()
     yesterday = date.today() - timedelta(days=1)
-    isuCd = _isin_from_krx_code("005930", ".KS")
+    isuCd = _isin_from_krx_code("005930")
     probe_rows = await loop.run_in_executor(
         None, lambda: fetcher.fetch_raw("005930", yesterday - timedelta(days=7), yesterday, isuCd)
     )
@@ -1142,7 +1148,7 @@ def probe_raw_response(
     yesterday = date.today() - timedelta(days=1)
     start = yesterday - timedelta(days=30)
     krx_code_6 = krx_code.split(".")[0]
-    isuCd = _isin_from_krx_code(krx_code_6, ".KS")  # probe는 KOSPI 기본값
+    isuCd = _isin_from_krx_code(krx_code_6)
     rows = fetcher.fetch_raw(krx_code_6, start, yesterday, isuCd)
     if not rows:
         print(f"[probe] 응답 없음 — 인증 실패 또는 네트워크 차단")
