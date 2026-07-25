@@ -1,7 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { ResponsiveTreeMap } from '@nivo/treemap'
 import { tokens, heatCellColor, stageColor, pctTextColor } from '../tokens'
-import MarketSummaryBanner from './MarketSummaryBanner'
 
 interface HeatmapItem {
   ticker: string
@@ -83,7 +82,6 @@ export default function Heatmap() {
 
   return (
     <div style={styles.container} className="heatmap-root">
-      <MarketSummaryBanner />
       {/* 헤더 */}
       <div style={styles.header}>
         <span style={styles.title}>시장 히트맵</span>

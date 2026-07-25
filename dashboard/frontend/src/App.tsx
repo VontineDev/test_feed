@@ -1,6 +1,7 @@
-import { Suspense, lazy, useState } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import MobileNav from './components/MobileNav'
 import Feedback from './components/Feedback'
+import MarketSummaryBanner from './components/MarketSummaryBanner'
 import { DEFAULT_TAB, getVisibleTabs, type TabKey, type MobileTabKey } from './tabs'
 import { useRole } from './hooks/useRole'
 import { tokens } from './tokens'
@@ -18,6 +19,19 @@ export default function App() {
   const [leftTab, setLeftTab]           = useState<TabKey>(DEFAULT_TAB)
   const [mobileTab, setMobileTab]       = useState<MobileTabKey>(DEFAULT_TAB)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const bannerRef = useRef<HTMLDivElement>(null)
+
+  // 모바일 히트맵의 고정 높이 계산(index.css)이 배너 실측 높이를 반영하도록
+  // --banner-h CSS 변수로 노출 (접기/펼치기 등 높이 변화에 자동 대응)
+  useEffect(() => {
+    const el = bannerRef.current
+    if (!el) return
+    const update = () => document.documentElement.style.setProperty('--banner-h', `${el.offsetHeight}px`)
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   // 현재 선택된 탭이 역할 변경으로 숨겨지면 기본 탭으로 복귀
   const safeLeftTab   = visibleTabs.find(t => t.key === leftTab)   ? leftTab   : DEFAULT_TAB
@@ -39,6 +53,10 @@ export default function App() {
         <span style={styles.sub} className="app-header-sub">KOSPI + KOSDAQ Stage 시스템</span>
         <button style={styles.feedbackBtn} onClick={() => setFeedbackOpen(true)}>피드백</button>
       </header>
+
+      <div ref={bannerRef}>
+        <MarketSummaryBanner />
+      </div>
 
       {/* 데스크탑 레이아웃 */}
       <main style={styles.main} className="app-main app-desktop-layout">

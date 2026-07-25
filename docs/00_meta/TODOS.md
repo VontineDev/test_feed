@@ -275,6 +275,13 @@ Phase D 종료 — 다음은 Phase E(대시보드 백엔드 마무리).
 **Effort:** XS (human: ~30min / CC: ~5min)
 **Priority:** P3
 **Depends on:** MarketSummaryBanner Phase 1 배포 (2026-05-24) 후 실사용 피드백
+**Completed:** 2026-07-25 — `Heatmap.tsx`에서 마운트 제거, `App.tsx` 헤더 바로 아래
+공통 영역(모든 탭 상위)으로 이동. 모바일에서는 히트맵 탭의 `calc(100svh - ...)`
+고정 높이 계산이 배너 높이를 반영하지 않던 문제가 있어, `App.tsx`가
+`ResizeObserver`로 배너 실측 높이를 `--banner-h` CSS 변수로 노출하고
+`index.css`의 `.app-mobile-layout > .heatmap-root` 계산식에 반영하도록 확장
+(접기/펼치기로 배너 높이가 바뀌어도 자동 대응). `/browse`로 데스크톱·모바일,
+접힘·펼침 4가지 조합 스크린샷 검증 완료 — 클리핑 없음.
 
 ---
 
@@ -294,6 +301,11 @@ Phase D 종료 — 다음은 Phase E(대시보드 백엔드 마무리).
 **Effort:** XS (human: ~1h / CC: ~5min)
 **Priority:** P3
 **Depends on:** MarketSummaryBanner Phase 1 배포 후 실사용 피드백 (접기 수요 실제로 있는지 확인)
+**Completed:** 2026-07-25 — Phase 2(앱 헤더 승격)와 함께 진행. `collapsed` 상태를
+`localStorage('market-banner-collapsed')`로 영속화, 우상단 chevron 버튼으로 토글.
+접힌 상태는 코스피/코스닥 수치만 한 줄(라벨+등락률, 팁·한마디·배지 숨김). "완전히
+닫기 vs 최소화" 결정은 최소화(수치는 항상 노출)로 확정 — 시장 맥락 완전 소실은
+피하고 싶다는 Phase 2 Why(초보자가 급락장을 놓치면 안 됨)와 일치시킴.
 
 ---
 

@@ -39,9 +39,20 @@ function sentimentBadgeColor(sentiment: string): string {
   return tokens.tx.muted;
 }
 
+const COLLAPSE_KEY = 'market-banner-collapsed';
+
 export default function MarketSummaryBanner() {
   const [data, setData] = useState<MarketIndexResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_KEY) === 'true');
+
+  const toggleCollapsed = () => {
+    setCollapsed(prev => {
+      const next = !prev;
+      localStorage.setItem(COLLAPSE_KEY, String(next));
+      return next;
+    });
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -89,6 +100,17 @@ export default function MarketSummaryBanner() {
     );
   }
 
+  if (collapsed) {
+    return (
+      <div style={styles.wrapperCollapsed}>
+        <span style={styles.label}>오늘 시장</span>
+        {data.kospi && <IndexBlock label="코스피" data={data.kospi} compact />}
+        {data.kosdaq && <IndexBlock label="코스닥" data={data.kosdaq} compact />}
+        <button style={styles.chevronBtn} onClick={toggleCollapsed} aria-label="배너 펼치기">▾</button>
+      </div>
+    );
+  }
+
   return (
     <div style={styles.wrapper}>
       {/* 헤더 행 */}
@@ -102,6 +124,7 @@ export default function MarketSummaryBanner() {
         <span style={{ ...styles.badge, color: sentimentBadgeColor(data.sentiment), borderColor: sentimentBadgeColor(data.sentiment) }}>
           {data.sentiment}
         </span>
+        <button style={styles.chevronBtn} onClick={toggleCollapsed} aria-label="배너 접기">▴</button>
       </div>
 
       {/* 지수 행 */}
@@ -128,7 +151,7 @@ export default function MarketSummaryBanner() {
   );
 }
 
-function IndexBlock({ label, data }: { label: string; data: IndexData }) {
+function IndexBlock({ label, data, compact }: { label: string; data: IndexData; compact?: boolean }) {
   const pct = data.change_pct;
   const color = pctColor(pct);
   const arrow = pctArrow(pct);
@@ -136,10 +159,10 @@ function IndexBlock({ label, data }: { label: string; data: IndexData }) {
   const pctStr = pct != null ? `${arrow} ${Math.abs(pct).toFixed(2)}%` : '–';
 
   return (
-    <div style={styles.indexBlock}>
-      <span style={styles.indexLabel}>{label}</span>
-      <span style={styles.indexClose}>{closeStr}</span>
-      <span style={{ ...styles.indexPct, color }}>{pctStr}</span>
+    <div style={compact ? styles.indexBlockCompact : styles.indexBlock}>
+      <span style={compact ? styles.indexLabelCompact : styles.indexLabel}>{label}</span>
+      <span style={compact ? styles.indexCloseCompact : styles.indexClose}>{closeStr}</span>
+      <span style={{ ...(compact ? styles.indexPctCompact : styles.indexPct), color }}>{pctStr}</span>
     </div>
   );
 }
@@ -153,10 +176,28 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     gap: 4,
   },
+  wrapperCollapsed: {
+    background: tokens.bg.panel,
+    borderBottom: `1px solid ${tokens.bd.default}`,
+    padding: '6px 16px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 14,
+  },
   headerRow: {
     display: 'flex',
     alignItems: 'center',
     gap: 8,
+  },
+  chevronBtn: {
+    marginLeft: 'auto',
+    background: 'none',
+    border: 'none',
+    color: tokens.tx.muted,
+    cursor: 'pointer',
+    fontSize: 13,
+    padding: '2px 4px',
+    lineHeight: 1,
   },
   label: {
     color: tokens.tx.secondary,
@@ -195,6 +236,26 @@ const styles: Record<string, React.CSSProperties> = {
   },
   indexPct: {
     fontSize: 13,
+    fontWeight: 500,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  indexBlockCompact: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: 5,
+  },
+  indexLabelCompact: {
+    color: tokens.tx.muted,
+    fontSize: 11,
+  },
+  indexCloseCompact: {
+    color: tokens.tx.primary,
+    fontSize: 12,
+    fontWeight: 600,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  indexPctCompact: {
+    fontSize: 11,
     fontWeight: 500,
     fontVariantNumeric: 'tabular-nums',
   },
