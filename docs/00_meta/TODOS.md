@@ -36,6 +36,17 @@ Stage1 임계값(`_S1_THRESHOLD["KOSDAQ"]=0.07`)이 실제로 히트를 만들�
 **Priority:** P1
 **Depends on:** 2026-07-24 `jobs/stage_job.py` 수정 배포 후 daily_stage_classifier 실행 누적
 
+**중간 확인 (2026-07-25, 하루 경과 — 아직 판단 시점 아님):** `jobs/stage_backfill.py`에
+같은 날 추가된 `--market` 필터(`c0073ae`)를 `--market KOSDAQ --max-tickers 50
+--start 2026-06-01 --end 2026-07-25 --skip-existing`로 시험 실행. 필터 자체는
+정상 동작(KOSPI 943 + KOSDAQ 1821 = 전체 2764종목, 정확히 분할). DB 조회 결과
+`stage_classifications` 전체 KOSDAQ stage1이 이미 208건 존재 — 위 "Why"의 "0건"
+서술은 `stage_backfill.py`(전종목 순회, 캡 버그 미해당)로 채워진 과거 백필 기준으로는
+이미 사실이 아님. 다만 **라이브 일별 잡** 기준 최근 7일(07-18~07-25) 신규 분류는
+KOSPI 1건뿐, KOSDAQ 0건 — `jobs/stage_job.py` 캡 순회 수정이 실제 스케줄러 실행에서
+KOSDAQ 히트를 만들어내는지는 원래 계획대로 최소 1주 경과 후(07-31 전후) 위 쿼리로
+재확인 필요. 결론 미변경, 재확인 시점만 남겨둠.
+
 ---
 
 ## P3: 리팩토링 Phase A~C 후속 — 심(shim) 삭제 + 범위 제외분 정리 (2026-07-15, 심 삭제 완료 2026-07-16)
