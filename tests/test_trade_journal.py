@@ -58,7 +58,7 @@ async def test_buy_happy_path_today():
     ]
     sent = []
     import telegram.telegram_trade as telegram_trade
-    with patch.object(telegram_trade, "_send", side_effect=lambda *a, **kw: sent.append(a[3]) or asyncio.coroutine(lambda: None)()):
+    with patch.object(telegram_trade, "_send", side_effect=lambda *a, **kw: sent.append(a[3])):
         with patch("telegram.telegram_trade._send", new_callable=AsyncMock) as mock_send:
             await telegram_trade.handle_buy(
                 MagicMock(), "TOKEN", "CHAT", ["005930", "70000", "100"], pool

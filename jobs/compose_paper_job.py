@@ -53,7 +53,7 @@ def _get_this_week_signals_sync(dsn: str, strategy: str, top_n: int) -> list[str
         return []
 
     if "score" in this_week.columns:
-        this_week = this_week.nlargest(top_n, "score")
+        this_week = this_week.nlargest(top_n, "score")  # type: ignore[call-overload]
     else:
         this_week = this_week.head(top_n)
 

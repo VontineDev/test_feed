@@ -30,7 +30,7 @@ import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, cast
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -122,7 +122,7 @@ def screen_from_prefetched(
     try:
         # 대상 주차까지만 슬라이스 (다음 주 월요일 미만)
         next_monday = pd.Timestamp(target_monday + timedelta(days=7), tz="UTC")
-        df = df_full[df_full.index < next_monday].copy()
+        df = cast(pd.DataFrame, df_full[df_full.index < next_monday]).copy()
 
         if df.empty or df["Close"].notna().sum() < 60:
             return None
@@ -167,8 +167,8 @@ def screen_from_prefetched(
         D = close > ma_60w
         E = ma_20w > prev_ma_20w
         F = ma_60w > prev_ma_60w
-        G = (ma_120w_valid and close > ma_120w) if g_strict else (
-            (not ma_120w_valid) or (close > ma_120w))
+        G = (ma_120w_valid and close > cast(float, ma_120w)) if g_strict else (
+            (not ma_120w_valid) or (close > cast(float, ma_120w)))
 
         if not (A and B and C and D and E and F and G):
             return None

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import copy
 from datetime import date, timedelta
-from typing import Optional
+from typing import Any, Optional
 
 import pandas as pd
 import pytest
@@ -23,7 +23,7 @@ from analysis.backtest.config import _STOP_LOSS_PCT
 
 def _make_cfg(**kwargs) -> BacktestConfig:
     """테스트용 BacktestConfig 생성."""
-    defaults = dict(
+    defaults: dict[str, Any] = dict(
         mode="stage",
         start=date(2024, 1, 1),
         end=date(2025, 1, 1),
@@ -138,6 +138,9 @@ class TestTp1:
                           hard_stop_pct=0.08)
         result = _run(sig, df, cfg)
 
+        assert result.tp1_ret is not None
+        assert result.final_exit_ret is not None
+        assert result.blended_return is not None
         expected = (
             0.5 * result.tp1_ret
             + 0.5 * result.final_exit_ret

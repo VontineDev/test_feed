@@ -15,6 +15,7 @@ Found by /investigate on 2026-04-18
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 from unittest.mock import AsyncMock, patch, call
 
 import pytest
@@ -34,7 +35,7 @@ class _FakeResult:
     week_of: str = "2026-W15"
     sector: str = "반도체"
     ma_120w: float | None = None
-    close_history: list = None  # noqa: RUF009 — stub class only, never passed to _sparkline
+    close_history: Optional[list] = None  # noqa: RUF009 — stub class only, never passed to _sparkline
     per: float | None = None
     pbr: float | None = None
     eps: float | None = None

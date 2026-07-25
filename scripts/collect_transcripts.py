@@ -8,6 +8,7 @@ import re
 import sys
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
@@ -33,13 +34,13 @@ def fetch_transcript_direct(video_id: str) -> str | None:
     import httpx
     import yt_dlp
 
-    ydl_opts = {
+    ydl_opts: dict[str, Any] = {
         "cookiefile": str(COOKIES_FILE),
         "quiet": True,
         "no_warnings": True,
     }
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:  # type: ignore[arg-type]
             info = ydl.extract_info(
                 f"https://www.youtube.com/watch?v={video_id}",
                 download=False,
@@ -96,7 +97,7 @@ if __name__ == "__main__":
     from data.youtube_narrative_sync import fetch_video_list
 
     load_dotenv(ROOT / ".env")
-    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
 
     api_key = os.environ.get("YOUTUBE_API_KEY", "")
     COOKIES_FILE = ROOT / "docs" / "youtube.com_cookies.txt"

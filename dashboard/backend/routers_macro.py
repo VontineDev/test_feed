@@ -17,6 +17,7 @@ import time as _time_module
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
 from fastapi import APIRouter, HTTPException
 
 from common import (
@@ -108,7 +109,7 @@ def _run_macro_analysis() -> dict:
     heatmap_items: list[dict] = (_HEATMAP_CACHE.get("data") or {}).get("items") or []
     heatmap_rank: dict[str, int] = {}  # yf_ticker → 거래대금 순위 (1-based)
     if len(heatmap_items) >= 5:
-        live_tickers: dict[str, str] = {}
+        live_tickers: dict[str, str] | None = {}
         rank = 0
         for item in heatmap_items:
             if not item.get("ticker") or not item.get("name"):
@@ -231,7 +232,7 @@ async def _fetch_market_index_data() -> dict:
             from datetime import date as _date
             hist = _yf.download(["^KS11", "^KQ11"], period="10d", interval="1d",
                                 auto_adjust=True, progress=False, threads=True)
-            if hist.empty:
+            if hist is None or hist.empty:
                 return None, None, None, None
             close_df = hist["Close"]
             today_str = _date.today().isoformat()
@@ -263,11 +264,11 @@ async def _fetch_market_index_data() -> dict:
             import yfinance as _yf
             hist = _yf.download(["^KS11", "^KQ11"], period="1d", interval="1m",
                                 auto_adjust=True, progress=False, threads=True)
-            if hist.empty:
+            if hist is None or hist.empty:
                 return None, None
             close_df = hist["Close"]
-            ks = float(close_df["^KS11"].dropna().iloc[-1]) if "^KS11" in close_df.columns else None
-            kq = float(close_df["^KQ11"].dropna().iloc[-1]) if "^KQ11" in close_df.columns else None
+            ks = float(pd.Series(close_df["^KS11"]).dropna().iloc[-1]) if "^KS11" in close_df.columns else None
+            kq = float(pd.Series(close_df["^KQ11"]).dropna().iloc[-1]) if "^KQ11" in close_df.columns else None
             return ks, kq
         except Exception as e:
             logger.warning("[market_index] yfinance 실시간 조회 실패: %s", e)

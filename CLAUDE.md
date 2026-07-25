@@ -25,3 +25,10 @@ Key routing rules:
 - Architecture review → invoke plan-eng-review
 - Save progress, checkpoint, resume → invoke checkpoint
 - Code quality, health check → invoke health
+
+## Health Stack
+
+- typecheck: pyright (root, via pyrightconfig.json)
+- typecheck-frontend: cd dashboard/frontend && npx tsc -b --noEmit
+- test: venv/Scripts/python.exe -m pytest
+- test-frontend: cd dashboard/frontend && npx vitest run

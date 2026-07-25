@@ -24,7 +24,7 @@ from pathlib import Path
 
 import httpx
 import psycopg2
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 try:
@@ -70,9 +70,12 @@ def _fetch_naver_market_cap(sosok: int, pages: int = 5) -> list[dict]:
                 if len(cols) < 7:
                     continue
                 a = row.find("a", href=True)
-                if not a or "code=" not in a.get("href", ""):
+                if not isinstance(a, Tag):
                     continue
-                code = a["href"].split("code=")[-1][:6]
+                href = str(a.get("href", ""))
+                if "code=" not in href:
+                    continue
+                code = href.split("code=")[-1][:6]
                 name = a.text.strip()
                 cap_str = cols[6].text.strip().replace(",", "")
                 try:
@@ -242,8 +245,8 @@ async def run_download_and_extract(
 # ── CLI ───────────────────────────────────────────────────────
 
 async def _main() -> None:
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
 
     parser = argparse.ArgumentParser(description="시가총액 순 DART 수집 + 추출")
     parser.add_argument("--limit", type=int, default=100, help="최대 처리 기업 수 (기본 100)")

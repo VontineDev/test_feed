@@ -54,7 +54,7 @@ import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
-from typing import Optional
+from typing import Optional, cast
 
 import pandas as pd
 import yfinance as yf
@@ -145,10 +145,10 @@ def batch_fetch_ohlcv(
 def slice_until(df: pd.DataFrame, as_of: date) -> pd.DataFrame:
     """index 날짜가 as_of(포함) 이하인 행만 반환. tz 유무 모두 처리."""
     cutoff = pd.Timestamp(as_of) + pd.Timedelta(days=1)  # as_of 자정 다음날 미만 = as_of 포함
-    idx = df.index
-    if getattr(idx, "tz", None) is not None:
+    idx = cast(pd.DatetimeIndex, df.index)
+    if idx.tz is not None:
         cutoff = cutoff.tz_localize(idx.tz) if cutoff.tzinfo is None else cutoff.tz_convert(idx.tz)
-    return df[idx < cutoff]
+    return cast(pd.DataFrame, df[idx < cutoff])
 
 
 # ── 단일 주차 분류 ────────────────────────────────────────────

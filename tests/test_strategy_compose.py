@@ -177,7 +177,7 @@ class TestAndGate:
             and_gate(self._frame(), [])
 
     def test_empty_frame_returns_empty(self):
-        empty = pd.DataFrame(columns=["ticker", "week", "ichimoku"])
+        empty = pd.DataFrame(columns=pd.Index(["ticker", "week", "ichimoku"]))
         out = and_gate(empty, ["ichimoku"])
         assert out.empty
         assert list(out.columns) == ["ticker", "week"]

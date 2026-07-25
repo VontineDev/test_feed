@@ -100,7 +100,7 @@ async def daily_stage_job(db_pool) -> set[str]:
     workers = int(os.environ.get("SCREENER_WORKERS", "1"))
 
     # 2b. daily OHLCV (60일, yfinance, 병렬)
-    price_map: dict[str, object] = {}
+    price_map: dict[str, pd.DataFrame] = {}
     with ThreadPoolExecutor(max_workers=workers) as pool_ex:
         futures = {pool_ex.submit(_fetch_daily_ohlcv, t): t for t, _, _ in all_tickers}
         for fut in as_completed(futures):

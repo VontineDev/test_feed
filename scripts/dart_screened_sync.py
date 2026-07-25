@@ -280,8 +280,8 @@ async def dart_screened_sync_job(
 # ── CLI ───────────────────────────────────────────────────────
 
 async def _main() -> None:
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
 
     logging.basicConfig(
         level=logging.INFO,

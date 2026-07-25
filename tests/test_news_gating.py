@@ -55,19 +55,18 @@ class TestNewsGating:
         """Article about a non-screener ticker → tg_send_signal NOT called."""
         import run_scheduler as rs
 
-        rs._screener_tickers = {"000660.KS"}  # SK하이닉스 in screener
+        rs._screener_tickers = {"000660.KS"}  # SK하이닉스 in screener  # type: ignore[attr-defined]
         signal = _make_signal(["035720.KQ"])   # 카카오 NOT in screener
 
         with patch("run_scheduler.tg_send_signal", new_callable=AsyncMock) as mock_send:
             # Simulate the gating logic directly (extracted from summary_worker)
-            cross = None
             if signal and signal.is_actionable:
-                if rs._screener_tickers and signal.ticker_symbols and not (
-                    set(signal.ticker_symbols) & rs._screener_tickers
+                if rs._screener_tickers and signal.ticker_symbols and not (  # type: ignore[attr-defined]
+                    set(signal.ticker_symbols) & rs._screener_tickers  # type: ignore[attr-defined]
                 ):
                     pass  # suppressed — do not call
                 else:
-                    await rs.tg_send_signal(None, "", signal, http=None, cross=cross)
+                    await rs.tg_send_signal({}, "", signal, http=None)
 
             mock_send.assert_not_called()
 
@@ -76,18 +75,17 @@ class TestNewsGating:
         """Article about a screener ticker → tg_send_signal IS called."""
         import run_scheduler as rs
 
-        rs._screener_tickers = {"005930.KS", "000660.KS"}  # 삼성전자, SK하이닉스
+        rs._screener_tickers = {"005930.KS", "000660.KS"}  # 삼성전자, SK하이닉스  # type: ignore[attr-defined]
         signal = _make_signal(["005930.KS"])  # 삼성전자 IN screener
 
         with patch("run_scheduler.tg_send_signal", new_callable=AsyncMock) as mock_send:
-            cross = None
             if signal and signal.is_actionable:
-                if rs._screener_tickers and signal.ticker_symbols and not (
-                    set(signal.ticker_symbols) & rs._screener_tickers
+                if rs._screener_tickers and signal.ticker_symbols and not (  # type: ignore[attr-defined]
+                    set(signal.ticker_symbols) & rs._screener_tickers  # type: ignore[attr-defined]
                 ):
                     pass
                 else:
-                    await rs.tg_send_signal(None, "", signal, http=None, cross=cross)
+                    await rs.tg_send_signal({}, "", signal, http=None)
 
             mock_send.assert_called_once()
 
@@ -96,18 +94,17 @@ class TestNewsGating:
         """When _screener_tickers is empty (screener not yet run), gating is inactive."""
         import run_scheduler as rs
 
-        rs._screener_tickers = set()  # screener hasn't run yet
+        rs._screener_tickers = set()  # screener hasn't run yet  # type: ignore[attr-defined]
         signal = _make_signal(["999999.KS"])  # any ticker
 
         with patch("run_scheduler.tg_send_signal", new_callable=AsyncMock) as mock_send:
-            cross = None
             if signal and signal.is_actionable:
-                if rs._screener_tickers and signal.ticker_symbols and not (
-                    set(signal.ticker_symbols) & rs._screener_tickers
+                if rs._screener_tickers and signal.ticker_symbols and not (  # type: ignore[attr-defined]
+                    set(signal.ticker_symbols) & rs._screener_tickers  # type: ignore[attr-defined]
                 ):
                     pass
                 else:
-                    await rs.tg_send_signal(None, "", signal, http=None, cross=cross)
+                    await rs.tg_send_signal({}, "", signal, http=None)
 
             mock_send.assert_called_once()
 
@@ -116,18 +113,17 @@ class TestNewsGating:
         """Signal with multiple tickers — only one needs to be in screener."""
         import run_scheduler as rs
 
-        rs._screener_tickers = {"000660.KS"}
+        rs._screener_tickers = {"000660.KS"}  # type: ignore[attr-defined]
         signal = _make_signal(["035720.KQ", "000660.KS"])  # one in, one out
 
         with patch("run_scheduler.tg_send_signal", new_callable=AsyncMock) as mock_send:
-            cross = None
             if signal and signal.is_actionable:
-                if rs._screener_tickers and signal.ticker_symbols and not (
-                    set(signal.ticker_symbols) & rs._screener_tickers
+                if rs._screener_tickers and signal.ticker_symbols and not (  # type: ignore[attr-defined]
+                    set(signal.ticker_symbols) & rs._screener_tickers  # type: ignore[attr-defined]
                 ):
                     pass
                 else:
-                    await rs.tg_send_signal(None, "", signal, http=None, cross=cross)
+                    await rs.tg_send_signal({}, "", signal, http=None)
 
             mock_send.assert_called_once()
 
@@ -135,7 +131,7 @@ class TestNewsGating:
         """Non-actionable signal is never sent — gating doesn't change this."""
         import run_scheduler as rs
 
-        rs._screener_tickers = {"005930.KS"}
+        rs._screener_tickers = {"005930.KS"}  # type: ignore[attr-defined]
         signal = _make_signal(["005930.KS"], is_actionable=False)
 
         # The existing is_actionable check fires before gating

@@ -6,6 +6,7 @@ Tests:
 - send_watchlist_brief message format (all vol_ratio / streak / ichimoku branches)
 """
 from datetime import date, timedelta
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,13 +15,13 @@ import pytest
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _make_entry(
-    ticker="005930.KS",
-    days_since=4,
-    vol_ratio=1.18,
-    f_streak=3,
-    i_streak=2,
-    ichimoku_ok=True,
-    current_stage=2,
+    ticker: str = "005930.KS",
+    days_since: Optional[int] = 4,
+    vol_ratio: Optional[float] = 1.18,
+    f_streak: Optional[int] = 3,
+    i_streak: Optional[int] = 2,
+    ichimoku_ok: Optional[bool] = True,
+    current_stage: Optional[int] = 2,
 ):
     return {
         "ticker":        ticker,

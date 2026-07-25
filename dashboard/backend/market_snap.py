@@ -222,6 +222,7 @@ def _fetch_nxt_live(n: int) -> dict:
                 _invalidate_kiwoom_token()
                 continue
             raise
+    raise RuntimeError("unreachable — retry loop always returns or raises")
 
 
 def _fetch_top_kiwoom(n: int) -> dict:
@@ -242,3 +243,4 @@ def _fetch_top_kiwoom(n: int) -> dict:
                 _invalidate_kiwoom_token()
                 continue
             raise
+    raise RuntimeError("unreachable — retry loop always returns or raises")

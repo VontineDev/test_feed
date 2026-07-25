@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Optional, cast
 
 import httpx
 
@@ -556,9 +556,9 @@ async def _handle_top(http: httpx.AsyncClient, chat_id: str, args: list[str]) ->
         kospi  = _fdr.StockListing("KOSPI")
         kosdaq = _fdr.StockListing("KOSDAQ")
         df = _pd.concat([kospi, kosdaq], ignore_index=True)
-        df["Amount"]      = _pd.to_numeric(df["Amount"],      errors="coerce").fillna(0)
-        df["Close"]       = _pd.to_numeric(df["Close"],       errors="coerce").fillna(0)
-        df["ChagesRatio"] = _pd.to_numeric(df["ChagesRatio"], errors="coerce").fillna(0)
+        df["Amount"]      = cast(_pd.Series, _pd.to_numeric(df["Amount"],      errors="coerce")).fillna(0)
+        df["Close"]       = cast(_pd.Series, _pd.to_numeric(df["Close"],       errors="coerce")).fillna(0)
+        df["ChagesRatio"] = cast(_pd.Series, _pd.to_numeric(df["ChagesRatio"], errors="coerce")).fillna(0)
 
         top = df.nlargest(10, "Amount").reset_index(drop=True)
 
@@ -575,11 +575,11 @@ async def _handle_top(http: httpx.AsyncClient, chat_id: str, args: list[str]) ->
         today = _date.today().strftime("%m/%d")
         lines = [f"📊 거래금액 상위 10  ({today}  KOSPI+KOSDAQ)\n"]
         for i, row in top.iterrows():
-            pct = _fmt_pct(row["ChagesRatio"])
-            amt = _fmt_amount(row["Amount"])
+            pct = _fmt_pct(float(row["ChagesRatio"]))
+            amt = _fmt_amount(float(row["Amount"]))
             price = f"{int(row['Close']):,}"
             lines.append(
-                f"{i+1:2d}. {row['Name']:<10}  {price:>10}  {pct:>8}  {amt}"
+                f"{int(cast(int, i))+1:2d}. {row['Name']:<10}  {price:>10}  {pct:>8}  {amt}"
             )
         return "\n".join(lines)
 

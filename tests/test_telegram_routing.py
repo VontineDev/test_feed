@@ -58,7 +58,7 @@ async def _run_routing(art, signal, mock_send_sig):
     async with httpx.AsyncClient() as http:
         sig = signal
         if sig and sig.is_actionable:
-            await run_scheduler.tg_send_signal(art, "요약", sig, http=http, cross=None)
+            await run_scheduler.tg_send_signal(art, "요약", sig, http=http)
 
 
 # ── ISSUE-005: all articles gated by signal ──────────────────

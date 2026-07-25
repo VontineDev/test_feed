@@ -14,6 +14,7 @@ import asyncio
 import logging
 import time as _time_module
 from datetime import date, datetime, time, timedelta
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
@@ -178,7 +179,10 @@ def _cache_is_valid(cache: dict) -> bool:
     return True
 
 
-async def _bg_refresh(cache: dict, lock: asyncio.Lock, fetch_fn, ttl, label: str) -> None:
+async def _bg_refresh(
+    cache: dict, lock: asyncio.Lock, fetch_fn,
+    ttl: float | Callable[[Any], float], label: str,
+) -> None:
     """stale-while-revalidate: 백그라운드에서 캐시를 갱신한다. 실패 시 stale 유지.
     ttl: float 또는 Callable[[data], float] — 데이터에 따라 TTL을 동적 결정할 때 callable 사용.
     """
@@ -271,14 +275,15 @@ async def fetch_current_prices(
                     close_df = hist["Close"]
                 elif len(yf_batch) == 1 and "Close" in hist.columns:
                     # 단일 티커 응답은 플랫 OHLCV 컬럼 — 티커 컬럼으로 정규화
-                    close_df = hist[["Close"]].rename(columns={"Close": yf_batch[0]})
+                    close_df = hist[["Close"]].copy()
+                    close_df.columns = _pd.Index([yf_batch[0]])
                 else:
                     close_df = hist
                 for t in yf_batch:
                     try:
                         if t not in close_df.columns:
                             continue
-                        series = close_df[t].dropna()
+                        series = _pd.Series(close_df[t]).dropna()
                         if len(series) >= 1:
                             result[t] = float(series.iloc[-1])
                     except Exception:

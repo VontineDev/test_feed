@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
-from typing import Callable, Optional
+from typing import Callable, Optional, cast
 
 import asyncpg
 import pandas as pd
@@ -25,7 +25,7 @@ def normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     """yfinance 응답 DataFrame 정규화: MultiIndex 컬럼 평탄화 + 컬럼 선택 + UTC tz 인덱스."""
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-    df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
+    df = cast(pd.DataFrame, df[["Open", "High", "Low", "Close", "Volume"]]).copy()
     df.index = pd.to_datetime(df.index, utc=True)
     return df
 

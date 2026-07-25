@@ -84,7 +84,7 @@ def _get_channel_id() -> str:
 def _build_message(art: dict, summary_ko: str) -> str:
     """기사 정보 → Telegram 메시지 문자열 생성 (MarkdownV2)"""
     emoji    = CATEGORY_EMOJI.get(art["category"], "📰")
-    source   = SOURCE_LABEL.get(art["source"], art["source"].upper())
+    source   = SOURCE_LABEL.get(str(art["source"]), str(art["source"]).upper())
     category = art["category"].upper()
     title    = art["title"]
     pub      = art["published"]
@@ -254,7 +254,7 @@ async def send_signal(
             return f"{ko}\\(`{esc(code)}`\\)" if code else esc(ko)
         return f"`{esc(name)}`"
     tickers_str = " ".join(_fmt_ticker(t) for t in signal.tickers) if signal.tickers else "\\-"
-    source  = SOURCE_LABEL.get(art["source"], art["source"].upper())
+    source  = SOURCE_LABEL.get(str(art["source"]), str(art["source"]).upper())
 
     article_type = getattr(signal, "article_type", "other") or "other"
     type_badge = TYPE_BADGE.get(article_type, "")

@@ -73,8 +73,8 @@ def test_compose_and_reproduces_cross():
     frame = sc.derive_flags(frame)
     comp = sc.and_gate(frame, ["ichimoku", "stage1"])
     comp_set = {
-        (r.ticker, r.week) for r in comp.itertuples(index=False)
-        if r.ticker in uni_set
+        (getattr(r, "ticker"), getattr(r, "week")) for r in comp.itertuples(index=False)
+        if getattr(r, "ticker") in uni_set
     }
 
     inter = cross_set & comp_set

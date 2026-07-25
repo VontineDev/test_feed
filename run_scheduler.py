@@ -23,8 +23,8 @@ import os
 import sys
 import time
 
-sys.stdout.reconfigure(encoding="utf-8")
-sys.stderr.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
@@ -189,7 +189,7 @@ HEADERS = {
 # db_pool/paper_trader/게이팅 캐시는 jobs/scheduler_state.py로 이동 —
 # state.<name> 속성 접근으로 읽고 쓴다. 아래 둘은 이 모듈 전용이라 남김.
 _seen_hashes: set[str] = set()       # 중복 방지 (인메모리)
-_summary_queue: asyncio.Queue = None # 수집 → 요약 워커 전달용
+_summary_queue: Optional[asyncio.Queue] = None # 수집 → 요약 워커 전달용
 
 # ── 매크로 컨텍스트 TTL 캐시 (5분) ──────────────────────────
 _macro_cache: Optional[MacroContext] = None
@@ -270,6 +270,7 @@ async def collect_job() -> None:
 # ──────────────────────────────────────────────────────────────
 async def summary_worker() -> None:
     logger.info("[요약 워커] 시작 — Queue 대기 중")
+    assert _summary_queue is not None, "summary_worker는 큐 초기화 후에만 실행돼야 함"
 
     async with httpx.AsyncClient() as http:
         while True:

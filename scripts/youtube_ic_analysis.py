@@ -19,6 +19,7 @@ import sys
 import time
 from datetime import date, timedelta
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -71,23 +72,23 @@ def fetch_prices(tickers: list[str], start: date, end: date) -> pd.DataFrame:
         symbols, start=start_str, end=end_str,
         progress=False, auto_adjust=True, threads=True
     )
-    if raw.empty:
+    if raw is None or raw.empty:
         return pd.DataFrame()
     if "Close" in raw.columns.get_level_values(0):
-        close = raw["Close"].copy()
+        close = cast(pd.DataFrame, raw["Close"]).copy()
     else:
         close = raw.copy()
     close.columns = [c.replace(".KS", "") for c in close.columns]
-    close.index = pd.to_datetime(close.index).normalize()
+    close.index = cast(pd.DatetimeIndex, pd.to_datetime(close.index)).normalize()  # type: ignore[attr-defined]
     return close
 
 
 def load_or_fetch_prices(tickers: list[str], start: date, end: date) -> pd.DataFrame:
     if PRICE_CACHE_PATH.exists():
-        cached = pd.read_pickle(PRICE_CACHE_PATH)
+        cached = cast(pd.DataFrame, pd.read_pickle(PRICE_CACHE_PATH))
         cached_tickers = set(cached.columns)
         need_tickers = set(tickers) - cached_tickers
-        cache_end = cached.index.max().date()
+        cache_end = cast(pd.Timestamp, cached.index.max()).date()
         if not need_tickers and cache_end >= end:
             logger.info("가격 캐시 사용: %d 종목", len(cached.columns))
             return cached
@@ -142,7 +143,7 @@ def compute_ic_series(scores: pd.DataFrame, fwd_ret: pd.DataFrame,
                 merged["q"] = pd.qcut(merged["attention_score"], n_groups,
                                        labels=False, duplicates="drop")
                 # q는 0-based → include_quintiles는 1-based
-                merged = merged[merged["q"].isin([q - 1 for q in include_quintiles])]
+                merged = merged[cast(pd.Series, merged["q"]).isin([q - 1 for q in include_quintiles])]
             except Exception:
                 pass  # 분위 산출 실패 시 필터 없이 진행
 
@@ -153,7 +154,7 @@ def compute_ic_series(scores: pd.DataFrame, fwd_ret: pd.DataFrame,
 
     if not records:
         return pd.Series(dtype=float)
-    return pd.DataFrame(records).set_index("date")["ic"]
+    return cast(pd.Series, pd.DataFrame(records).set_index("date")["ic"])
 
 
 # ── 보고 ───────────────────────────────────────────────────────────────────────
@@ -286,9 +287,9 @@ def decile_analysis(scores: pd.DataFrame, fwd_ret_dict: dict[str, pd.DataFrame],
 
         if not rows:
             continue
-        df_q = pd.DataFrame(rows).mean()
+        df_q = cast(pd.Series, pd.DataFrame(rows).mean())
         spread = df_q.iloc[-1] - df_q.iloc[0] if len(df_q) > 1 else np.nan
-        parts = "  ".join(f"Q{int(q)+1}={v:+.3%}" for q, v in df_q.items())
+        parts = "  ".join(f"Q{int(cast(int, q))+1}={v:+.3%}" for q, v in df_q.items())
         print(f"  {label}:  {parts}   [Q{n_groups}-Q1 spread={spread:+.3%}]")
 
 
@@ -329,7 +330,7 @@ def main() -> None:
         sys.exit(1)
 
     # 가격 인덱스를 날짜(KST)로 통일
-    prices.index = pd.to_datetime(prices.index).normalize()
+    prices.index = cast(pd.DatetimeIndex, pd.to_datetime(prices.index)).normalize()  # type: ignore[attr-defined]
     prices = prices.sort_index()
 
     # 3. Forward returns 계산
@@ -363,7 +364,7 @@ def main() -> None:
             continue
         monthly = ic.groupby(pd.Grouper(freq="ME")).agg(["mean", "count"])
         parts = "  ".join(
-            f"{idx.strftime('%Y-%m')}={row['mean']:+.3f}(N={int(row['count'])})"
+            f"{cast(pd.Timestamp, idx).strftime('%Y-%m')}={row['mean']:+.3f}(N={int(row['count'])})"
             for idx, row in monthly.iterrows()
             if row["count"] > 0
         )

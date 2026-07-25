@@ -8,6 +8,7 @@ test_stage_backfill.py — stage_backfill 순수 로직 단위 테스트
 from __future__ import annotations
 
 from datetime import date
+from typing import cast
 
 import pandas as pd
 import pytest
@@ -87,13 +88,13 @@ class TestSliceUntil:
         df = _daily_df(["2026-04-22", "2026-04-23", "2026-04-24", "2026-04-27"])
         out = slice_until(df, date(2026, 4, 24))
         assert len(out) == 3
-        assert out.index[-1].date() == date(2026, 4, 24)
+        assert cast(pd.Timestamp, out.index[-1]).date() == date(2026, 4, 24)
 
     def test_inclusive_of_as_of_date_tz_aware(self):
         df = _daily_df(["2026-04-22", "2026-04-23", "2026-04-24", "2026-04-27"], tz="UTC")
         out = slice_until(df, date(2026, 4, 24))
         assert len(out) == 3
-        assert out.index[-1].date() == date(2026, 4, 24)
+        assert cast(pd.Timestamp, out.index[-1]).date() == date(2026, 4, 24)
 
     def test_excludes_future_rows(self):
         df = _daily_df(["2026-04-24", "2026-05-01"])
@@ -140,7 +141,7 @@ class TestBuildRow:
         assert row["s1_entry_date"] is None
 
     def test_stage1_empty_price_slice_no_crash(self):
-        empty = pd.DataFrame(columns=["High", "Close", "Volume"])
+        empty = pd.DataFrame(columns=pd.Index(["High", "Close", "Volume"]))
         row = build_row("005930.KS", 1, False, empty, date(2026, 4, 24))
         assert row["stage"] == 1
         assert row["s1_high"] is None

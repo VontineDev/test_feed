@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -221,8 +222,8 @@ class _FakeSignal:
     direction: str = "BUY"
     strength: int = 3
     reason: str = "테스트 근거"
-    tickers: list = None
-    ticker_symbols: dict = None
+    tickers: Optional[list] = None
+    ticker_symbols: Optional[dict] = None
     backend: str = "ollama"
     success: bool = True
     article_type: str = "other"

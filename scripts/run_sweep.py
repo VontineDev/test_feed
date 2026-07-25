@@ -30,11 +30,12 @@ import sys
 import time
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 # 프로젝트 루트를 sys.path에 추가
 sys.path.insert(0, str(Path(__file__).parent.parent))
-sys.stdout.reconfigure(encoding="utf-8")
-sys.stderr.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -378,8 +379,8 @@ def sweep_compose_backtest(
 
     entries: list[tuple[str, date]] = []
     for row in sig_df.itertuples(index=False):
-        ticker = row.ticker
-        friday = sc.week_to_friday(row.week)
+        ticker = getattr(row, "ticker")
+        friday = sc.week_to_friday(getattr(row, "week"))
         if not (full_start <= friday <= full_end):
             continue
         mkt = "KOSDAQ" if ticker.endswith(".KQ") else "KOSPI"
@@ -601,7 +602,7 @@ def main() -> None:
     logger.info("[sweep] 결과 저장: %s", out_path)
 
     # 상위 결과 출력
-    valid = df[df["val_sharpe"].notna() & (df["val_n"] >= 10)].copy()
+    valid = cast(pd.DataFrame, df[df["val_sharpe"].notna() & (df["val_n"] >= 10)]).copy()
     if valid.empty:
         logger.warning("val_n >= 10 인 조합 없음 — 검증 기간에 신호 부족")
         return

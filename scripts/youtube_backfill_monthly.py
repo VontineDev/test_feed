@@ -1,4 +1,4 @@
-"""
+r"""
 youtube_backfill_monthly.py — 삼프로TV 내러티브 월별 순차 백필
 
 단계:
@@ -102,7 +102,7 @@ def _get_dsn() -> str:
 def step_sync(dsn: str, from_ym: str, to_ym: str) -> int:
     """월별 영상 수집 + LLM 추출 → youtube_mention_raw."""
     from data.youtube_narrative_sync import run_sync, ensure_tables
-    api_key, gemini_key = _get_api_keys()
+    api_key, _ = _get_api_keys()
     ensure_tables(dsn)
 
     months = list(_iter_months(from_ym, to_ym))
@@ -114,7 +114,7 @@ def step_sync(dsn: str, from_ym: str, to_ym: str) -> int:
         logger.info("━" * 55)
         logger.info("[sync] %d/%d  %s  (%s ~ %s)", i, len(months), label, start, end)
         try:
-            n = run_sync(dsn, api_key, gemini_key, start, end)
+            n = run_sync(dsn, api_key, start, end)
             total += n
             logger.info("[sync] %s 완료 — %d건 저장", label, n)
         except Exception as e:
@@ -161,12 +161,11 @@ def step_process(dsn: str, batch_size: int) -> int:
     설계됨 — 일일 운영 잡과 동일한 소량 처리로 IP 차단 임계값을 피한다.
     """
     from data.youtube_narrative_sync import process_backfill_queue, ensure_tables
-    _, gemini_key = _get_api_keys()
     ensure_tables(dsn)
 
     logger.info("━" * 55)
     logger.info("[process] 배치 처리 시작 (배치 크기: %d)", batch_size)
-    result = process_backfill_queue(dsn, gemini_key, limit=batch_size)
+    result = process_backfill_queue(dsn, limit=batch_size)
     suffix = " — IP 차단 감지로 조기 종료, 다음 실행에서 재시도" if result["blocked"] else ""
     logger.info("[process] 완료: %d개 처리, %d건 저장%s", result["processed"], result["saved"], suffix)
     return result["processed"]

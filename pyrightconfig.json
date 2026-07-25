@@ -20,5 +20,8 @@
     "logs",
     "results",
     "reports"
+  ],
+  "extraPaths": [
+    "dashboard/backend"
   ]
 }

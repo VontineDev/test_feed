@@ -4,6 +4,37 @@ Items deferred from code review and planning sessions.
 
 ---
 
+## P2: tests/test_news_gating.py — 죽은 게이팅 로직을 테스트 중 (재작성 필요)
+
+**What:** `tests/test_news_gating.py`(5개 테스트)가 검증하는 `_screener_tickers` 집합
+기반 게이팅은 `run_scheduler.py`에서 이미 삭제됨 — 2026-05-20 `_active_stage_tickers`
+전역 캐시 + `get_active_stage_tickers()` DB 함수 기반 게이팅으로 교체됨(Sprint 2,
+`v0.9.3.0`). 테스트는 실제 `run_scheduler` 코드를 호출하지 않고, `summary_worker`의
+옛 게이팅 알고리즘을 테스트 함수 안에 그대로 복사해 넣고 그 사본만 검증한다
+(주석에 "Simulate the gating logic directly"라고 명시돼 있음). `rs._screener_tickers`는
+모듈에 더 이상 존재하지 않는 속성이라 pytest에서만 우연히 동작(동적 속성 할당) —
+pyright는 `reportAttributeAccessIssue`로 잡아냄.
+
+**Why:** 이 테스트 파일은 865개 스위트 중 5개를 차지하지만 `run_scheduler.py`의
+실제 게이팅 동작을 전혀 검증하지 못한다 — 프로덕션 게이팅 로직이 다시 깨져도
+이 테스트는 여전히 통과한다(자기 자신의 사본만 테스트하므로). False confidence.
+
+**How to apply:**
+1. `run_scheduler.py`의 실제 게이팅 지점(`summary_worker` 내부, `_active_stage_tickers`
+   참조 부분)을 찾아 호출 가능한 형태인지 확인 — 필요하면 순수 함수로 추출.
+2. `_active_stage_tickers`를 직접 주입하거나 `get_active_stage_tickers()`를
+   monkeypatch해서 실제 게이팅 함수를 호출하도록 테스트 재작성.
+3. 지금 세션에서는 pyright 타입 에러만 기계적으로 봉합(`cross=` kwarg 제거,
+   `_screener_tickers` 접근에 `type: ignore[attr-defined]`) — 행동 변경 없음,
+   테스트는 여전히 죽은 로직을 검증 중.
+
+**Effort:** S (human: ~1h / CC: ~20min)
+**Priority:** P2
+**Depends on:** 없음
+**Found:** 2026-07-25, `/health` pyright 에러 수정 세션 중 발견
+
+---
+
 ## P1: kosdaq 스테이지 분류 커버리지 회복 확인 (2026-07-24 수정분 검증)
 
 **What:** `jobs/stage_job.py`의 티커 캡 순서 버그(KOSPI가 리스트 앞을 차지해 KOSDAQ이

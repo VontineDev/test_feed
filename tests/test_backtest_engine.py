@@ -8,10 +8,15 @@ from __future__ import annotations
 
 import math
 from datetime import date, timedelta
-from typing import Optional
+from typing import Optional, cast
 
 import pandas as pd
 import pytest
+
+
+def _idx_date(v) -> date:
+    """DatetimeIndex 원소를 date로 변환 (pyright에는 Index[Hashable]로 보여 좁혀줌)."""
+    return cast(pd.Timestamp, v).date()
 
 from analysis.backtest.models import (
     BacktestConfig, BacktestResult, GroupMetrics, SignalRecord,
@@ -192,7 +197,7 @@ def _make_daily_df(
         current += timedelta(days=1)
     return pd.DataFrame(
         {"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": vols},
-        index=dates,
+        index=pd.Index(dates),
     )
 
 
@@ -369,7 +374,7 @@ class TestComputeMdd:
     def test_mdd_not_positive(self):
         returns = [0.03, -0.01, 0.02, -0.02, 0.04]
         mdd = _compute_mdd(returns)
-        assert mdd <= 0.0
+        assert mdd is not None and mdd <= 0.0
 
 
 # ── _compute_portfolio_returns ─────────────────────────────────────
@@ -645,13 +650,13 @@ class TestReplayStage:
             current += timedelta(days=1)
         return pd.DataFrame(
             {"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": vols},
-            index=dates,
+            index=pd.Index(dates),
         )
 
     def test_clear_signal_detected(self):
         """+8% 급등 + 3× 거래량 → Stage 1 신호 발동."""
         df = self._make_stage_trigger_df(n_flat=80, spike_change=0.08, spike_vol_mult=3.0)
-        spike_date = df.index[-1].date()
+        spike_date = _idx_date(df.index[-1])
         cfg = BacktestConfig("stage", spike_date, spike_date + timedelta(days=1))
         sigs = _replay_stage("TEST.KS", "테스트", df, "KOSPI", cfg)
         assert len(sigs) == 1
@@ -661,7 +666,7 @@ class TestReplayStage:
     def test_small_change_no_signal(self):
         """+2% 상승 → 5% 기준 미달, 신호 없음."""
         df = self._make_stage_trigger_df(n_flat=80, spike_change=0.02, spike_vol_mult=3.0)
-        spike_date = df.index[-1].date()
+        spike_date = _idx_date(df.index[-1])
         cfg = BacktestConfig("stage", spike_date, spike_date + timedelta(days=1))
         sigs = _replay_stage("TEST.KS", "테스트", df, "KOSPI", cfg)
         assert len(sigs) == 0
@@ -669,7 +674,7 @@ class TestReplayStage:
     def test_low_volume_no_signal(self):
         """+8% 상승, 1.5× 거래량 → 2× 미달, 신호 없음."""
         df = self._make_stage_trigger_df(n_flat=80, spike_change=0.08, spike_vol_mult=1.5)
-        spike_date = df.index[-1].date()
+        spike_date = _idx_date(df.index[-1])
         cfg = BacktestConfig("stage", spike_date, spike_date + timedelta(days=1))
         sigs = _replay_stage("TEST.KS", "테스트", df, "KOSPI", cfg)
         assert len(sigs) == 0
@@ -677,7 +682,7 @@ class TestReplayStage:
     def test_outside_window_no_signal(self):
         """신호 발생일이 백테스트 기간 외 → 수집 안 됨."""
         df = self._make_stage_trigger_df(n_flat=80, spike_change=0.08, spike_vol_mult=3.0)
-        spike_date = df.index[-1].date()
+        spike_date = _idx_date(df.index[-1])
         # window is 30 days BEFORE spike
         cfg = BacktestConfig("stage",
                              spike_date - timedelta(days=30),
@@ -688,7 +693,7 @@ class TestReplayStage:
     def test_kosdaq_higher_threshold(self):
         """+6% 상승 → KOSPI는 신호, KOSDAQ (7% 기준)은 신호 없음."""
         df = self._make_stage_trigger_df(n_flat=80, spike_change=0.06, spike_vol_mult=3.0)
-        spike_date = df.index[-1].date()
+        spike_date = _idx_date(df.index[-1])
         cfg = BacktestConfig("stage", spike_date, spike_date + timedelta(days=1))
         kospi_sigs  = _replay_stage("TEST.KS", "테스트", df, "KOSPI",  cfg)
         kosdaq_sigs = _replay_stage("TEST.KQ", "테스트", df, "KOSDAQ", cfg)
@@ -884,7 +889,7 @@ def _make_ohlcv_for_sell(
         current += timedelta(days=1)
 
     df = pd.DataFrame({"Open": opens, "High": highs, "Low": lows,
-                       "Close": closes, "Volume": vols}, index=dates)
+                       "Close": closes, "Volume": vols}, index=pd.Index(dates))
     spike_date     = dates[n_flat].date()
     first_post_date = dates[n_flat + 1].date() if post else spike_date
     return df, spike_date, first_post_date
@@ -1057,7 +1062,7 @@ class TestComputeSellSignalsAndS2:
         df = pd.DataFrame(
             {"Open": opens_, "High": highs_, "Low": lows_,
              "Close": closes_, "Volume": vols_},
-            index=dates_,
+            index=pd.Index(dates_),
         )
 
         sig = self._make_sig("T.KS", s1_date, s1_price, mode="stage")
@@ -1137,7 +1142,7 @@ class TestComputeSellSignalsAndS2:
         df = pd.DataFrame(
             {"Open": opens_, "High": highs_, "Low": lows_,
              "Close": closes_, "Volume": vols_},
-            index=dates_,
+            index=pd.Index(dates_),
         )
         sig = self._make_sig("T.KS", s1_date, s1_price, mode="stage")
 
@@ -1202,7 +1207,7 @@ class TestComputeSellSignalsAndS2:
         df = pd.DataFrame(
             {"Open": opens_, "High": highs_, "Low": lows_,
              "Close": closes_, "Volume": vols_},
-            index=dates_,
+            index=pd.Index(dates_),
         )
         sig = self._make_sig("T.KS", s1_date, s1_price, mode="stage")
 
@@ -1267,7 +1272,7 @@ class TestComputeSellSignalsAndS2:
         df = pd.DataFrame(
             {"Open": opens_, "High": highs_, "Low": lows_,
              "Close": closes_, "Volume": vols_},
-            index=dates_,
+            index=pd.Index(dates_),
         )
         sig = self._make_sig("T.KS", s1_date, s1_price, mode="stage")
 
@@ -1338,7 +1343,7 @@ class TestReplayIchimoku:
             current += timedelta(days=1)
         return pd.DataFrame(
             {"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": vols},
-            index=dates,
+            index=pd.Index(dates),
         )
 
     def test_insufficient_data_returns_empty(self):
@@ -1420,7 +1425,7 @@ def _make_daily_for_weekly(
         current += timedelta(days=1)
     return pd.DataFrame(
         {"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": vols},
-        index=dates,
+        index=pd.Index(dates),
     )
 
 
@@ -1491,7 +1496,7 @@ def _make_weekly_ichi_df(
             "tenkan": tenkans,
             "kijun": kijuns,
         },
-        index=dates,
+        index=pd.Index(dates),
     )
 
 
@@ -1535,7 +1540,7 @@ class TestFindIchimokuSell:
         )
         assert sell_date is not None
         assert sell_reason == "구름 이탈"
-        assert hold_days > 0
+        assert hold_days is not None and hold_days > 0
 
     def test_dead_cross_detected(self):
         """tenkan crosses below kijun (prev: tenkan≥kijun, curr: tenkan<kijun) → '전환<기준 DC'."""

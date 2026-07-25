@@ -214,7 +214,7 @@ async def test_export_happy_path():
     # utf-8-sig BOM 확인
     assert response.body[:3] == b'\xef\xbb\xbf', "BOM 없음"
 
-    text = response.body.decode('utf-8-sig')
+    text = bytes(response.body).decode('utf-8-sig')
     lines = text.strip().split('\r\n') if '\r\n' in text else text.strip().split('\n')
 
     # 헤더 확인
@@ -242,7 +242,7 @@ async def test_export_empty_table():
     with patch.object(paper_mod, 'get_pool', side_effect=_get_pool):
         response = await paper_mod.get_paper_export()
 
-    text = response.body.decode('utf-8-sig')
+    text = bytes(response.body).decode('utf-8-sig')
     lines = [l for l in text.strip().split('\n') if l]
     assert len(lines) == 1, f"헤더 외 데이터 있음: {lines}"
     assert 'model' in lines[0]

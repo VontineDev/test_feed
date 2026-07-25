@@ -216,13 +216,15 @@ async def handle_port(
     prices: dict[str, Optional[int]] = {}
     as_of = ""
 
-    def _fetch_prices():
+    def _fetch_prices() -> dict[str, Optional[int]]:
         import yfinance as yf
         from datetime import datetime as _dt
         nonlocal as_of
         try:
             data = yf.download(tickers, period="1d", auto_adjust=True,
                                progress=False)
+            if data is None:
+                return {t: None for t in tickers}
             close = data["Close"] if "Close" in data.columns else data
             latest = close.iloc[-1]
             as_of = _dt.now().strftime("%Y-%m-%d %H:%M")

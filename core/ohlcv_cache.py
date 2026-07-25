@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
-from typing import Callable, Optional
+from typing import Callable, Optional, cast
 
 import pandas as pd
 import psycopg2
@@ -69,7 +69,7 @@ def _load_df(dsn: str, symbol: str, start: date, end: date) -> Optional[pd.DataF
     if not rows:
         return None
 
-    df = pd.DataFrame(rows, columns=["Date", "Open", "High", "Low", "Close", "Volume"])
+    df = pd.DataFrame(rows, columns=pd.Index(["Date", "Open", "High", "Low", "Close", "Volume"]))
     df["Date"] = pd.to_datetime(df["Date"], utc=True)
     df = df.set_index("Date")
     if df["Close"].notna().sum() < 30:
@@ -81,14 +81,14 @@ def _save_df(dsn: str, symbol: str, market: str, df: pd.DataFrame) -> None:
     """일봉 DataFrame을 daily_ohlcv에 upsert (충돌 시 OHLCV 갱신)."""
     rows = []
     for ts, row in df.iterrows():
-        d = ts.date() if hasattr(ts, "date") else ts
-        close = row.get("Close", float("nan"))
+        d = cast(pd.Timestamp, ts).date()
+        close = cast(float, row.get("Close", float("nan")))
         if pd.isna(close):
             continue
-        open_ = row.get("Open", float("nan"))
-        high_ = row.get("High", float("nan"))
-        low_  = row.get("Low",  float("nan"))
-        vol_  = row.get("Volume", float("nan"))
+        open_ = cast(float, row.get("Open", float("nan")))
+        high_ = cast(float, row.get("High", float("nan")))
+        low_  = cast(float, row.get("Low",  float("nan")))
+        vol_  = cast(float, row.get("Volume", float("nan")))
         rows.append((
             symbol, market, d,
             None if pd.isna(open_) else float(open_),

@@ -12,6 +12,7 @@ FIX:  get_dsn()에서 urllib.parse.quote()로 user/password URL 인코딩.
 from __future__ import annotations
 
 import os
+from typing import cast
 from unittest.mock import patch
 from urllib.parse import urlparse, unquote
 
@@ -42,7 +43,7 @@ class TestGetDsnUrlEncoding:
         dsn = _get_dsn_with_password("simplepass")
         parsed = urlparse(dsn)
         assert parsed.hostname == "localhost"
-        assert unquote(parsed.password) == "simplepass"
+        assert unquote(cast(str, parsed.password)) == "simplepass"
 
     def test_hash_in_password_is_encoded(self):
         """# 문자가 URL fragment로 해석되지 않아야 함."""
@@ -52,7 +53,7 @@ class TestGetDsnUrlEncoding:
         assert parsed.hostname == "localhost", (
             f"hostname={parsed.hostname!r} — '#' in password broke URL parsing. DSN: {dsn}"
         )
-        assert unquote(parsed.password) == "pass#word"
+        assert unquote(cast(str, parsed.password)) == "pass#word"
 
     def test_ampersand_in_password_is_encoded(self):
         """& 문자가 쿼리 파라미터 구분자로 해석되지 않아야 함."""
@@ -61,21 +62,21 @@ class TestGetDsnUrlEncoding:
         assert parsed.hostname == "localhost", (
             f"hostname={parsed.hostname!r} — special chars broke URL parsing. DSN: {dsn}"
         )
-        assert unquote(parsed.password) == "UCi65&z#52Rj4p/"
+        assert unquote(cast(str, parsed.password)) == "UCi65&z#52Rj4p/"
 
     def test_slash_in_password_is_encoded(self):
         """/ 문자가 경로 구분자로 해석되지 않아야 함."""
         dsn = _get_dsn_with_password("pass/word")
         parsed = urlparse(dsn)
         assert parsed.hostname == "localhost"
-        assert unquote(parsed.password) == "pass/word"
+        assert unquote(cast(str, parsed.password)) == "pass/word"
 
     def test_at_sign_in_password_is_encoded(self):
         """@ 문자가 userinfo 구분자로 해석되지 않아야 함."""
         dsn = _get_dsn_with_password("p@ssword")
         parsed = urlparse(dsn)
         assert parsed.hostname == "localhost"
-        assert unquote(parsed.password) == "p@ssword"
+        assert unquote(cast(str, parsed.password)) == "p@ssword"
 
     def test_user_password_roundtrip(self):
         """실제 .env 예시 비밀번호 전체 라운드트립 검증."""
@@ -85,8 +86,8 @@ class TestGetDsnUrlEncoding:
         assert parsed.hostname == "localhost"
         assert parsed.port == 5432
         assert parsed.path == "/news_db"
-        assert unquote(parsed.username) == "news_user"
-        assert unquote(parsed.password) == pw
+        assert unquote(cast(str, parsed.username)) == "news_user"
+        assert unquote(cast(str, parsed.password)) == pw
 
     def test_missing_db_password_raises(self):
         """DB_PASSWORD 미설정 시 RuntimeError."""

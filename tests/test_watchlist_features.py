@@ -17,7 +17,7 @@ import pytest
 
 # ── send_watchlist_brief 메시지 포맷 테스트 ─────────────────────────────────
 
-def _captured_message(entries, monkeypatch, target_chat_id=None) -> str:
+def _captured_message(entries, monkeypatch, target_chat_id=None) -> tuple[str, str]:
     """send_watchlist_brief가 _post_message에 넘기는 message 캡처."""
     import telegram.telegram_notify as telegram_notify
     captured = {}

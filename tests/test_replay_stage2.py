@@ -13,7 +13,7 @@ Stage 2 조건:
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Optional
+from typing import Optional, cast
 
 import pandas as pd
 import pytest
@@ -22,6 +22,10 @@ from analysis.backtest.models import BacktestConfig, SignalRecord
 from analysis.backtest.replay import _replay_stage2
 
 # ── 합성 데이터 헬퍼 ──────────────────────────────────────────────
+
+def _idx_date(v) -> date:
+    """DatetimeIndex 원소를 date로 변환 (pyright에는 Index[Hashable]로 보여 좁혀줌)."""
+    return cast(pd.Timestamp, v).date()
 
 def _make_df(
     flat_days: int = 80,
@@ -64,7 +68,7 @@ def _make_df(
         {"Open": [r[0] for r in rows], "High": [r[1] for r in rows],
          "Low":  [r[2] for r in rows], "Close": [r[3] for r in rows],
          "Volume": [r[4] for r in rows]},
-        index=idx,
+        index=pd.Index(idx),
     )
 
 
@@ -91,8 +95,8 @@ class TestReplayStage2Basic:
         """정상 S1 + 다음날 C1/C2/C3 충족 → S2 신호 1건."""
         df = _make_df(flat_days=80, spike_pct=0.08, spike_vol_mult=3.0,
                       post=[(10_800 * 0.90, int(100_000 * 3.0 * 0.40))])
-        spike_date = df.index[-2].date()  # 스파이크(S1) 날짜
-        s2_date    = df.index[-1].date()  # 그 다음날(S2 후보)
+        spike_date = _idx_date(df.index[-2])  # 스파이크(S1) 날짜
+        s2_date    = _idx_date(df.index[-1])  # 그 다음날(S2 후보)
         cfg = _cfg(spike_date, s2_date + timedelta(days=1))
         sigs = _replay_stage2("T.KS", "테스트", df, "KOSPI", cfg)
         assert len(sigs) == 1
@@ -103,7 +107,7 @@ class TestReplayStage2Basic:
     def test_no_s1_no_s2(self):
         """S1 조건 불충족(+2% 상승) → S2 없음."""
         df = _make_df(flat_days=80, spike_pct=0.02)
-        spike_date = df.index[-2].date()
+        spike_date = _idx_date(df.index[-2])
         cfg = _cfg(spike_date, spike_date + timedelta(days=5))
         sigs = _replay_stage2("T.KS", "테스트", df, "KOSPI", cfg)
         assert sigs == []
@@ -112,7 +116,7 @@ class TestReplayStage2Basic:
         """S2 SignalRecord 필드 검증."""
         df = _make_df(flat_days=80, spike_pct=0.08, spike_vol_mult=3.0,
                       post=[(10_800 * 0.90, int(100_000 * 3.0 * 0.40))])
-        spike_date = df.index[-2].date()
+        spike_date = _idx_date(df.index[-2])
         cfg = _cfg(spike_date, spike_date + timedelta(days=5))
         sigs = _replay_stage2("005930.KS", "삼성전자", df, "KOSPI", cfg)
         assert len(sigs) == 1
@@ -142,7 +146,7 @@ class TestStage2C1:
         df = _make_df(flat_days=80, flat_price=self._FLAT,
                       spike_pct=self._SPIKE_PCT, spike_vol_mult=3.0,
                       post=[(pullback, s2_vol)])
-        spike_date = df.index[-2].date()
+        spike_date = _idx_date(df.index[-2])
         cfg = _cfg(spike_date, spike_date + timedelta(days=5))
         return _replay_stage2("T.KS", "테스트", df, "KOSPI", cfg)
 
@@ -177,7 +181,7 @@ class TestStage2C2:
         # 9_720 / 10_000 = 0.972 ≥ 0.95 → C2 통과
         df = _make_df(flat_days=80, spike_pct=0.08, spike_vol_mult=3.0,
                       post=[(10_800 * 0.90, int(100_000 * 3.0 * 0.40))])
-        spike_date = df.index[-2].date()
+        spike_date = _idx_date(df.index[-2])
         cfg = _cfg(spike_date, spike_date + timedelta(days=5))
         sigs = _replay_stage2("T.KS", "테스트", df, "KOSPI", cfg)
         assert len(sigs) == 1
@@ -190,7 +194,7 @@ class TestStage2C2:
         # drop to 9_200 → ratio = 9_200/10_800 = 0.852 (C1 OK) but 9_200 < 9_500 (C2 fail)
         df = _make_df(flat_days=80, spike_pct=0.08, spike_vol_mult=3.0,
                       post=[(9_200, int(100_000 * 3.0 * 0.40))])
-        spike_date = df.index[-2].date()
+        spike_date = _idx_date(df.index[-2])
         cfg = _cfg(spike_date, spike_date + timedelta(days=5))
         sigs = _replay_stage2("T.KS", "테스트", df, "KOSPI", cfg)
         assert sigs == []
@@ -200,7 +204,7 @@ class TestStage2C2:
         # Use only 15 flat days so MA20 (min_periods=20) is NaN for all rows
         df = _make_df(flat_days=15, spike_pct=0.08, spike_vol_mult=3.0,
                       post=[(10_800 * 0.90, int(100_000 * 3.0 * 0.40))])
-        spike_date = df.index[-2].date()
+        spike_date = _idx_date(df.index[-2])
         cfg = _cfg(spike_date, spike_date + timedelta(days=5))
         sigs = _replay_stage2("T.KS", "테스트", df, "KOSPI", cfg)
         assert sigs == []
@@ -221,7 +225,7 @@ class TestStage2C3:
         s2_vol    = int(spike_vol * vol_ratio)
         df = _make_df(flat_days=80, spike_pct=0.08, spike_vol_mult=3.0,
                       post=[(10_800 * 0.90, s2_vol)])
-        spike_date = df.index[-2].date()
+        spike_date = _idx_date(df.index[-2])
         cfg = _cfg(spike_date, spike_date + timedelta(days=5))
         return _replay_stage2("T.KS", "테스트", df, "KOSPI", cfg)
 
@@ -261,8 +265,8 @@ class TestStage2Window:
                 post.append((spike_close * 0.90, int(100_000 * 3.0 * 0.40)))
 
         df = _make_df(flat_days=80, spike_pct=0.08, spike_vol_mult=3.0, post=post)
-        spike_date = df.index[-(delay_days + 1)].date()
-        s2_date    = df.index[-1].date()
+        spike_date = _idx_date(df.index[-(delay_days + 1)])
+        s2_date    = _idx_date(df.index[-1])
         cfg = _cfg(spike_date, s2_date + timedelta(days=1))
         return _replay_stage2("T.KS", "테스트", df, "KOSPI", cfg)
 
@@ -279,7 +283,7 @@ class TestStage2Window:
             (spike_close * 0.88, int(100_000 * 3.0 * 0.35)),  # 둘째 날도 조건 OK, 하지만 skip
         ]
         df = _make_df(flat_days=80, spike_pct=0.08, spike_vol_mult=3.0, post=valid_post)
-        spike_date = df.index[-3].date()
+        spike_date = _idx_date(df.index[-3])
         cfg = _cfg(spike_date, spike_date + timedelta(days=5))
         sigs = _replay_stage2("T.KS", "테스트", df, "KOSPI", cfg)
         assert len(sigs) == 1
@@ -293,8 +297,8 @@ class TestStage2Window:
         flat_fill = [(spike_close, 100_000)] * 10  # 캘린더 14일 초과 보장(거래일 10개 ≈ 14일)
         fill_then_valid = flat_fill + [(spike_close * 0.90, int(100_000 * 3.0 * 0.40))]
         df = _make_df(flat_days=80, spike_pct=0.08, spike_vol_mult=3.0, post=fill_then_valid)
-        spike_date = df.index[-(len(fill_then_valid) + 1)].date()
-        last_date  = df.index[-1].date()
+        spike_date = _idx_date(df.index[-(len(fill_then_valid) + 1)])
+        last_date  = _idx_date(df.index[-1])
         cfg = _cfg(spike_date, last_date + timedelta(days=1))
         sigs = _replay_stage2("T.KS", "테스트", df, "KOSPI", cfg)
         # 마지막 S2 후보가 캘린더 14일 초과인지 확인
@@ -317,7 +321,7 @@ class TestStage2C4Skipped:
         """flow_lookup 없이도 S2 신호 발동 — C4는 검사하지 않음."""
         df = _make_df(flat_days=80, spike_pct=0.08, spike_vol_mult=3.0,
                       post=[(10_800 * 0.90, int(100_000 * 3.0 * 0.40))])
-        spike_date = df.index[-2].date()
+        spike_date = _idx_date(df.index[-2])
         cfg = _cfg(spike_date, spike_date + timedelta(days=5))
         sigs = _replay_stage2("T.KS", "테스트", df, "KOSPI", cfg)
         # flow_lookup=None → C4 건너뜀 → C1+C2+C3만으로 신호 발동
@@ -332,7 +336,7 @@ class TestStage2S1Prerequisite:
         # +2% 상승 → S1 조건(≥5%) 미달 → S2 없음
         df = _make_df(flat_days=80, spike_pct=0.02, spike_vol_mult=3.0,
                       post=[(10_200 * 0.90, int(100_000 * 3.0 * 0.40))])
-        spike_date = df.index[-2].date()
+        spike_date = _idx_date(df.index[-2])
         cfg = _cfg(spike_date, spike_date + timedelta(days=5))
         sigs = _replay_stage2("T.KS", "테스트", df, "KOSPI", cfg)
         assert sigs == []
@@ -341,8 +345,8 @@ class TestStage2S1Prerequisite:
         """S1이 config.start 이전 → S2가 config.start 이후면 수집."""
         df = _make_df(flat_days=80, spike_pct=0.08, spike_vol_mult=3.0,
                       post=[(10_800 * 0.90, int(100_000 * 3.0 * 0.40))])
-        spike_date = df.index[-2].date()
-        s2_date    = df.index[-1].date()
+        spike_date = _idx_date(df.index[-2])
+        s2_date    = _idx_date(df.index[-1])
         # config.start = S2날짜 (S1은 하루 전이라 config.start 이전)
         cfg = _cfg(s2_date, s2_date + timedelta(days=1))
         sigs = _replay_stage2("T.KS", "테스트", df, "KOSPI", cfg)
@@ -360,7 +364,7 @@ class TestStage2S1Prerequisite:
             (spike_close * 1.08 * 0.90, int(100_000 * 3.0 * 0.40)),  # S2 후보
         ]
         df = _make_df(flat_days=80, spike_pct=0.08, spike_vol_mult=3.0, post=post)
-        spike_date = df.index[-(len(post) + 1)].date()
+        spike_date = _idx_date(df.index[-(len(post) + 1)])
         cfg = _cfg(spike_date, spike_date + timedelta(days=20))
         sigs = _replay_stage2("T.KS", "테스트", df, "KOSPI", cfg)
         # 같은 날짜에 중복 없어야 함

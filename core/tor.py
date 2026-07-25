@@ -38,9 +38,9 @@ def send_newnym(control_port: int) -> None:
     from stem import Signal
     from stem.control import Controller
 
-    with Controller.from_port(port=control_port) as controller:
+    with Controller.from_port(port=control_port) as controller:  # type: ignore[arg-type]
         controller.authenticate()
-        controller.signal(Signal.NEWNYM)
+        controller.signal(Signal.NEWNYM)  # type: ignore[attr-defined]
 
 
 def new_identity(control_port: int | None = None) -> bool:

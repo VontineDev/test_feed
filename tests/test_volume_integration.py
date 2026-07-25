@@ -13,6 +13,8 @@ Report: .gstack/qa-reports/qa-report-volume-integration-2026-04-08.md
 from __future__ import annotations
 
 import os
+from typing import cast
+
 import pandas as pd
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -120,8 +122,9 @@ class TestFetchDataTimezone:
 
             df, _, _ = fetch_data("AAPL", "US")
 
-        assert df.index.tzinfo is not None
-        tz_name = str(df.index.tz)
+        idx = cast(pd.DatetimeIndex, df.index)
+        assert idx.tz is not None
+        tz_name = str(idx.tz)
         assert "Seoul" in tz_name, (
             f"Expected Asia/Seoul timezone for US stocks (for Korean-time display), got: {tz_name}"
         )
@@ -181,8 +184,9 @@ class TestFetchDataTimezone:
 
             df, _, _ = fetch_data("005930.KS", "KR")
 
-        assert df.index.tzinfo is not None
-        tz_name = str(df.index.tz)
+        idx = cast(pd.DatetimeIndex, df.index)
+        assert idx.tz is not None
+        tz_name = str(idx.tz)
         assert "Seoul" in tz_name, (
             f"Expected Asia/Seoul timezone for KR stocks, got: {tz_name}"
         )

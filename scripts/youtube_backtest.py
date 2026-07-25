@@ -21,6 +21,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
+from typing import cast
 
 # 프로젝트 루트를 sys.path에 추가
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -100,7 +101,8 @@ def run_backtest(ret_col: str = "ret_5d", min_samples: int = 100) -> dict:
     if len(scores) < 10:
         print("  attention_score 있는 레코드 부족")
     else:
-        ic, pval = stats.spearmanr(scores, rets)
+        ic_raw, pval = stats.spearmanr(scores, rets)
+        ic = cast(float, ic_raw)
         n = len(scores)
         if math.isnan(ic):
             print("  IC = NaN (점수가 모두 동일 — 분산 없음). 데이터 품질 확인 필요.")
@@ -204,7 +206,8 @@ def run_weekly_monthly_backtest(min_samples: int = 20) -> dict:
     scores = [float(r["attention_score"]) for r in rows]
     rets   = [float(r["forward_ret"])    for r in rows]
 
-    ic, pval = stats.spearmanr(scores, rets)
+    ic_raw, pval = stats.spearmanr(scores, rets)
+    ic = cast(float, ic_raw)
     n = len(scores)
 
     if math.isnan(ic):

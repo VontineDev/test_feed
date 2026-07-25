@@ -10,6 +10,7 @@ import json
 import os
 import tempfile
 from datetime import date, timedelta
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -107,17 +108,17 @@ class TestNextStreak:
 class TestWarmup:
     def test_returns_true_on_success(self):
         fetcher = _bare_fetcher()
-        fetcher._session.get.return_value = MagicMock(status_code=200)
+        cast(MagicMock, fetcher._session).get.return_value = MagicMock(status_code=200)
         assert fetcher.warmup() is True
 
     def test_returns_false_on_connection_error(self):
         fetcher = _bare_fetcher()
-        fetcher._session.get.side_effect = ConnectionError("timeout")
+        cast(MagicMock, fetcher._session).get.side_effect = ConnectionError("timeout")
         assert fetcher.warmup() is False
 
     def test_does_not_raise(self):
         fetcher = _bare_fetcher()
-        fetcher._session.get.side_effect = RuntimeError("unexpected")
+        cast(MagicMock, fetcher._session).get.side_effect = RuntimeError("unexpected")
         assert fetcher.warmup() is False  # swallowed, not raised
 
 

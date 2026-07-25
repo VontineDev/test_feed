@@ -18,6 +18,7 @@ from analysis.chart_screener import calc_ichimoku
 from analysis.backtest.config import _S1_THRESHOLD
 from analysis.backtest.models import BacktestConfig, SignalRecord
 from analysis.backtest.helpers import _compute_rsi, _week_label
+from core.ohlcv_cache import FlowKey, FlowValue
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +125,7 @@ def _replay_stage(
     daily_df: pd.DataFrame,
     market: str,
     config: BacktestConfig,
-    flow_lookup: Optional[dict[tuple[str, date], tuple[Optional[int], Optional[int]]]] = None,
+    flow_lookup: Optional[dict[FlowKey, FlowValue]] = None,
 ) -> list[SignalRecord]:
     """일봉 Stage 1 가격 조건 walk-forward 재현 (5/5 조건).
 
@@ -219,7 +220,7 @@ def _replay_stage_v11(
     daily_df: pd.DataFrame,
     market: str,
     config: BacktestConfig,
-    flow_lookup: Optional[dict[tuple[str, date], tuple[Optional[int], Optional[int]]]] = None,
+    flow_lookup: Optional[dict[FlowKey, FlowValue]] = None,
 ) -> list[SignalRecord]:
     """Stage 1 v1.1 walk-forward 재현.
 

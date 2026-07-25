@@ -125,6 +125,7 @@ def _compare(before: list[dict], after: list[dict]) -> None:
         a = after_map.get(key)
 
         if b is None:
+            assert a is not None, "key는 all_keys(before∪after)에서 왔으므로 b가 None이면 a는 존재해야 함"
             print(f"\n[신규] rcept_no={key}")
             _print_record("NEW", a)
             changed += 1
@@ -178,7 +179,7 @@ def _compare(before: list[dict], after: list[dict]) -> None:
 
 
 async def _main() -> None:
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     ap = argparse.ArgumentParser()

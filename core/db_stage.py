@@ -34,7 +34,7 @@ async def get_stage1_history(
     """
     if not tickers:
         return {}
-    if hasattr(since_date, "date"):
+    if isinstance(since_date, datetime):
         since_date = since_date.date()
     try:
         async with pool.acquire() as conn:
@@ -74,7 +74,7 @@ async def get_stage2_history(
     """
     if not tickers:
         return {}
-    if hasattr(since_date, "date"):
+    if isinstance(since_date, datetime):
         since_date = since_date.date()
     try:
         async with pool.acquire() as conn:

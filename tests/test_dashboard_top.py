@@ -7,9 +7,13 @@ API: ka10032 거래대금상위요청 (Kiwoom REST API 문서 p.102-103)
   - 거래대금 단위: 백만원 (×1_000_000 → 원)
   - 검증: 삼성전자 예시 trde_prica=5308092 × 1_000_000 ≈ 5.31조원 ✓
 """
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
 import pytest
+
+if TYPE_CHECKING:
+    from data.kiwoom_aftermarket_sync import KiwoomClient
 
 
 _RESPONSE_KEY = "trde_prica_upper"  # ka10032 응답 배열 키

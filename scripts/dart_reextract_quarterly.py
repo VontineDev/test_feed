@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 
 async def main() -> None:
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
 
     from core.db import create_pool
     import httpx

@@ -27,9 +27,10 @@ import os
 import sys
 from datetime import date, timedelta
 from pathlib import Path
+from typing import cast
 
-sys.stdout.reconfigure(encoding="utf-8")
-sys.stderr.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 try:
@@ -85,16 +86,18 @@ def calc_trading_value(stocks: list[dict]) -> list[dict]:
         try:
             df = yf.download(batch, period="5d", auto_adjust=True,
                              progress=False, timeout=60, threads=True)
-            if df.empty:
+            if df is None or df.empty:
                 continue
             # MultiIndex: (Metric, Ticker) or single-level
             if isinstance(df.columns, pd.MultiIndex):
-                close_vals = df["Close"].mean()
-                vol_vals   = df["Volume"].mean()
+                close_vals = cast(pd.DataFrame, df["Close"]).mean()
+                vol_vals   = cast(pd.DataFrame, df["Volume"]).mean()
             else:
                 # 단일 종목인 경우
-                close_vals = pd.Series({"Close": df["Close"].mean()})
-                vol_vals   = pd.Series({"Volume": df["Volume"].mean()})
+                close_vals = pd.Series({batch[0]: cast(float, df["Close"].mean())})
+                vol_vals   = pd.Series({batch[0]: cast(float, df["Volume"].mean())})
+            close_vals = cast(pd.Series, close_vals)
+            vol_vals   = cast(pd.Series, vol_vals)
             for sym in batch:
                 c = close_vals.get(sym, 0) if sym in close_vals.index else 0
                 v = vol_vals.get(sym, 0)   if sym in vol_vals.index   else 0
@@ -120,14 +123,16 @@ def calc_trading_value(stocks: list[dict]) -> list[dict]:
             try:
                 df = yf.download(batch, period="5d", auto_adjust=True,
                                  progress=False, timeout=60, threads=True)
-                if df.empty:
+                if df is None or df.empty:
                     continue
                 if isinstance(df.columns, pd.MultiIndex):
-                    close_vals = df["Close"].mean()
-                    vol_vals   = df["Volume"].mean()
+                    close_vals = cast(pd.DataFrame, df["Close"]).mean()
+                    vol_vals   = cast(pd.DataFrame, df["Volume"]).mean()
                 else:
-                    close_vals = pd.Series({"Close": df["Close"].mean()})
-                    vol_vals   = pd.Series({"Volume": df["Volume"].mean()})
+                    close_vals = pd.Series({batch[0]: cast(float, df["Close"].mean())})
+                    vol_vals   = pd.Series({batch[0]: cast(float, df["Volume"].mean())})
+                close_vals = cast(pd.Series, close_vals)
+                vol_vals   = cast(pd.Series, vol_vals)
                 for sym in batch:
                     c = close_vals.get(sym, 0) if sym in close_vals.index else 0
                     v = vol_vals.get(sym, 0)   if sym in vol_vals.index   else 0
