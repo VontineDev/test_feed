@@ -263,6 +263,23 @@ async def collect_job() -> None:
     logger.info("[진단] %s", get_resolution_miss_report(10))
 
 
+def _gate_signal(
+    signal_syms: set[str],
+    screener_tickers: set[str],
+    active_stage_tickers: set[str],
+) -> tuple[bool, bool, bool]:
+    """뉴스 게이팅 판정 — (suppressed, in_screener, in_stage) 반환.
+
+    스크리너(Ichimoku 주봉 통과) OR 최근 7일 활성 Stage(1/2/3) 종목만 신호 통과.
+    두 캐시가 모두 비어있으면(게이팅 캐시 미로드) 항상 통과.
+    """
+    in_screener  = bool(signal_syms & screener_tickers)
+    in_stage     = bool(signal_syms & active_stage_tickers)
+    has_any_gate = bool(screener_tickers or active_stage_tickers)
+    suppressed   = has_any_gate and bool(signal_syms) and not (in_screener or in_stage)
+    return suppressed, in_screener, in_stage
+
+
 # ──────────────────────────────────────────────────────────────
 # [요약 워커] 별도 asyncio 태스크로 상시 실행
 # Queue에서 기사를 꺼내 LLM 요약 → DB 저장
@@ -385,12 +402,12 @@ async def summary_worker() -> None:
                 # ── 4. Telegram 전송 ──────────────────────────
                 if signal and signal.is_actionable:
                     # 게이팅: Ichimoku 스크리너 OR 최근 7일 활성 Stage 종목만 전달
-                    signal_syms  = set(signal.ticker_symbols.values())
-                    in_screener  = bool(signal_syms & state.screener_tickers)
-                    in_stage     = bool(signal_syms & state.active_stage_tickers)
-                    has_any_gate = bool(state.screener_tickers or state.active_stage_tickers)
+                    signal_syms = set(signal.ticker_symbols.values())
+                    suppressed, in_screener, in_stage = _gate_signal(
+                        signal_syms, state.screener_tickers, state.active_stage_tickers,
+                    )
 
-                    if has_any_gate and signal.ticker_symbols and not (in_screener or in_stage):
+                    if suppressed:
                         logger.info(
                             "  [게이팅] 스크리너·Stage 미등록 종목 신호 억제: %s",
                             ", ".join(list(signal.ticker_symbols.keys())[:3]),

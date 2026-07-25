@@ -32,6 +32,14 @@ pyright는 `reportAttributeAccessIssue`로 잡아냄.
 **Priority:** P2
 **Depends on:** 없음
 **Found:** 2026-07-25, `/health` pyright 에러 수정 세션 중 발견
+**Completed:** 2026-07-25 — `run_scheduler.py`의 게이팅 판정을 `_gate_signal(signal_syms,
+screener_tickers, active_stage_tickers) -> (suppressed, in_screener, in_stage)`
+순수 함수로 추출, `summary_worker()`는 이 함수를 호출하도록 변경(동작 변화 없음).
+`tests/test_news_gating.py`를 전면 재작성 — 이제 이 실제 함수를 직접 import해
+호출(7 테스트: 스크리너만 매치/Stage만 매치/둘 다 미스/두 캐시 모두 비어 게이팅
+비활성/부분 교집합/둘 다 매치 시 플래그 동시 반환/signal_syms 빈 경우). 죽은
+`_screener_tickers`/`cross=` 관련 코드 전부 제거. 전체 스위트 865→867건(순증 2),
+pyright 0 에러 유지 확인.
 
 ---
 
