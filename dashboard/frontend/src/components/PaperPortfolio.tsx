@@ -3,8 +3,16 @@ import { tokens, pctTextColor } from '../tokens'
 import Positions from './Positions'
 import TickerHistory from './TickerHistory'
 
+interface ModelStatus { count: number; avg_return: number | null }
+interface ModelSummary {
+  open?: ModelStatus
+  pending?: ModelStatus
+  closed?: ModelStatus
+  win_rate: number | null
+  total_realized: number | null
+}
 interface PaperData {
-  model_summary: Record<string, Record<string, { count: number; avg_return: number | null }>>
+  model_summary: Record<string, ModelSummary>
   open: { ticker: string; name: string; model: string; signal_date: string; entry_actual: number | null; current_price: number | null; unrealized_pct: number | null; status: string; qty: number | null }[]
   closed: { ticker: string; name: string; model: string; signal_date: string; exit_date: string | null; exit_type: string | null; blended_return: number | null; tp1_date: string | null }[]
 }
@@ -115,6 +123,20 @@ export default function PaperPortfolio() {
                     <div style={{ marginTop: 5, fontSize: 11, color: tokens.tx.subtle }}>
                       평균 <span style={{ color: pctTextColor(closed.avg_return), fontWeight: 700 }}>
                         {closed.avg_return > 0 ? '+' : ''}{closed.avg_return.toFixed(1)}%
+                      </span>
+                    </div>
+                  )}
+                  {info.win_rate != null && (
+                    <div style={{ marginTop: 3, fontSize: 11, color: tokens.tx.subtle }}>
+                      승률 <span style={{ color: tokens.tx.secondary, fontWeight: 700 }}>
+                        {(info.win_rate * 100).toFixed(0)}%
+                      </span>
+                    </div>
+                  )}
+                  {info.total_realized != null && (
+                    <div style={{ marginTop: 3, fontSize: 11, color: tokens.tx.subtle }}>
+                      실현누적 <span style={{ color: pctTextColor(info.total_realized), fontWeight: 700 }}>
+                        {info.total_realized > 0 ? '+' : ''}{info.total_realized.toFixed(1)}%
                       </span>
                     </div>
                   )}

@@ -247,6 +247,14 @@ Phase D 종료 — 다음은 Phase E(대시보드 백엔드 마무리).
 **Effort:** S (human: ~2h / CC: ~30min)
 **Priority:** P3
 **Depends on:** 없음
+**Completed:** 2026-07-25 — `/api/report/paper`의 `model_summary`에 모델별
+`win_rate`/`total_realized`(청산 포지션 기준) 필드 추가(`routers_report.py`),
+`PaperPortfolio.tsx` 카드에 승률·실현누적 인라인 표시. 클릭 시 확장되는
+아코디언 UI는 스코프 축소 — 기존 카드 클릭이 이미 포지션 목록 필터링 용도로
+쓰이고 있어 같은 클릭에 확장까지 얹으면 UX가 충돌, 핵심 요구(통계 노출)는
+인라인 표시로 충분히 달성돼 별도 확장 상태 없이 마무리. `/api/paper/curve`
+호출 제거 항목은 애초에 프론트엔드가 호출한 적이 없어 해당 없음(엔드포인트
+자체는 `tests/test_paper_analytics.py`가 커버하므로 유지).
 
 ---
 

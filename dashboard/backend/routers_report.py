@@ -278,6 +278,18 @@ async def get_paper_report():
             """
         )
 
+        # 모델별 승률·실현누적 (청산 포지션 기준)
+        model_stats = await conn.fetch(
+            """
+            SELECT model,
+                   COUNT(*) FILTER (WHERE blended_return > 0) AS n_wins,
+                   SUM(blended_return)                         AS total_realized
+            FROM   paper_positions
+            WHERE  status = 'closed' AND blended_return IS NOT NULL
+            GROUP  BY model
+            """
+        )
+
         # 최근 청산 이력 (30건)
         closed = await conn.fetch(
             f"""
@@ -341,6 +353,15 @@ async def get_paper_report():
             "count": r["count"],
             "avg_return": round(float(r["avg_return"]) * 100, 2) if r["avg_return"] else None,
         }
+    for r in model_stats:
+        m = r["model"]
+        if m not in models:
+            continue
+        n_closed = models[m].get("closed", {}).get("count", 0)
+        models[m]["win_rate"] = round(r["n_wins"] / n_closed, 3) if n_closed else None
+        models[m]["total_realized"] = (
+            round(float(r["total_realized"]) * 100, 2) if r["total_realized"] is not None else None
+        )
 
     return {
         "data": {

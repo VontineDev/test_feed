@@ -356,7 +356,9 @@ Stage 분류 + 차트 스크리너 + 유튜브 관심도를 단일 응답으로 
       "stage": {
         "open":    {"count": 10, "avg_return": null},
         "pending": {"count": 0,  "avg_return": null},
-        "closed":  {"count": 5,  "avg_return": 3.2}
+        "closed":  {"count": 5,  "avg_return": 3.2},
+        "win_rate": 0.4,
+        "total_realized": 16.2
       }
     },
     "open": [...],
