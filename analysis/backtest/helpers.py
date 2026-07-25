@@ -78,6 +78,11 @@ def _compute_mdd(returns: list[float]) -> Optional[float]:
     """신호 순서대로 누적한 equity curve의 최대낙폭(MDD).
 
     equal-weight, 순차 포지션 가정. 수익률 목록은 날짜 순 정렬 후 전달.
+    주의: 전달하는 수익률 시계열이 서로 겹치지 않는 "기간별" 수익률이어야
+    이 가정이 성립한다 — 동시 보유 신호가 많은 전략(주간 top-N 등)에서는
+    개별 신호 수익률을 그대로 넘기면 안 되고 _compute_portfolio_returns()로
+    먼저 동시보유 포트폴리오 수익률 시계열로 변환해야 한다 (2026-07 발견:
+    신호 수천 건을 전량 순차 올인으로 복리 계산해 MDD가 상시 -100%로 나오던 버그).
     """
     if not returns:
         return None
@@ -91,6 +96,72 @@ def _compute_mdd(returns: list[float]) -> Optional[float]:
         if dd > max_dd:
             max_dd = dd
     return -max_dd
+
+
+def _compute_portfolio_returns_from_intervals(
+    intervals: list[tuple[date, date, float]],
+    period_days: int = 7,
+) -> list[float]:
+    """(진입일, 청산일, 총수익률) 구간 목록을 동일비중 동시보유 포트폴리오의
+    기간별 수익률 시계열로 변환한다.
+
+    _compute_mdd는 "겹치지 않는 기간별 수익률"을 전제하는데, 신호 자체는
+    보유기간이 겹치는 경우가 흔하다(주간 top-20 선정, 완화된 스크리너,
+    분할청산으로 신호별 실제 보유일수가 제각각인 경우 등). 실제 일별
+    가격 경로 없이 종료 수익률만으로 겹침을 반영하기 위해, 각 구간의
+    수익률이 보유기간 동안 일정 비율로 복리 증가한다고 가정하고
+    (일일률 = (1+r)**(1/hold_days)-1) 각 기간에 해당하는 몫만 추출해
+    그 기간에 활성인 모든 포지션의 동일비중 평균을 취한다.
+    활성 포지션이 0건인 기간은 현금 보유(수익률 0)로 취급한다.
+    """
+    valid = [(d0, d1, r) for d0, d1, r in intervals if d1 > d0]
+    if not valid:
+        return []
+    start = min(d0 for d0, _, _ in valid)
+    end   = max(d1 for _, d1, _ in valid)
+
+    period_returns: list[float] = []
+    cur = start
+    while cur < end:
+        active_period_rs = []
+        for d0, d1, r in valid:
+            if d0 <= cur < d1:
+                hold_days = (d1 - d0).days
+                daily_r = (1.0 + r) ** (1.0 / hold_days) - 1.0
+                active_period_rs.append((1.0 + daily_r) ** period_days - 1.0)
+        period_returns.append(
+            sum(active_period_rs) / len(active_period_rs) if active_period_rs else 0.0
+        )
+        cur += timedelta(days=period_days)
+    return period_returns
+
+
+def _compute_portfolio_returns(
+    signals: list[SignalRecord],
+    hold_days: int = 28,
+    period_days: int = 7,
+) -> list[float]:
+    """신호를 동시 보유 포지션으로 취급해 동일비중 리밸런싱 포트폴리오의
+    기간별(기본 주간) 수익률 시계열을 만든다.
+
+    고정 보유기간(hold_days)에 대해 return_Nd만으로 계산하는 얇은 래퍼 —
+    실제 보유기간이 신호마다 다른 경우(분할청산 등)는
+    _compute_portfolio_returns_from_intervals를 직접 사용할 것.
+    """
+    hold_field = {7: "return_7d", 28: "return_28d", 91: "return_91d"}.get(hold_days)
+    if hold_field is None:
+        raise ValueError(f"hold_days는 7|28|91 중 하나여야 합니다: {hold_days!r}")
+
+    entries = [
+        (s.signal_date, getattr(s, hold_field))
+        for s in signals
+        if getattr(s, hold_field) is not None
+    ]
+    if not entries:
+        return []
+
+    intervals = [(d, d + timedelta(days=hold_days), r) for d, r in entries]
+    return _compute_portfolio_returns_from_intervals(intervals, period_days)
 
 
 def _build_weekly_ichimoku(daily_df: pd.DataFrame) -> Optional[pd.DataFrame]:
@@ -227,7 +298,9 @@ def _compute_group_metrics(
     m.sharpe_7d  = _compute_sharpe(r7s,  hold_days=7,  rf_annual=rf_annual)
     m.sharpe_28d = _compute_sharpe(r28s, hold_days=28, rf_annual=rf_annual)
     m.sharpe_91d = _compute_sharpe(r91s, hold_days=91, rf_annual=rf_annual)
-    m.mdd        = _compute_mdd(r28s)
+    # 동시보유 포지션을 사전에 반영한 포트폴리오 수익률 시계열 → MDD.
+    # r28s를 그대로 넘기면 겹치는 신호를 순차 올인으로 잘못 복리 계산한다.
+    m.mdd        = _compute_mdd(_compute_portfolio_returns(signals, hold_days=28, period_days=7))
 
     if hold_weeks is not None:
         hold_days = hold_weeks * 7

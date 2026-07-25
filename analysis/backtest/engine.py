@@ -11,7 +11,18 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from analysis.backtest.config import OPTIMAL_EXIT_PARAMS_CROSS
+from analysis.backtest.config import (
+    OPTIMAL_EXIT_PARAMS_CROSS,
+    OPTIMAL_EXIT_PARAMS_SCORE1,
+    OPTIMAL_EXIT_PARAMS_FUNNEL1,
+)
+
+# 전략별 전용 청산 파라미터 (scripts/run_sweep.py --mode compose로 도출).
+# 목록에 없는 전략(AND-*)은 기존과 동일하게 CROSS 최적값을 공용 폴백으로 사용.
+_COMPOSE_EXIT_PARAMS: dict[str, dict] = {
+    "SCORE-1":  OPTIMAL_EXIT_PARAMS_SCORE1,
+    "FUNNEL-1": OPTIMAL_EXIT_PARAMS_FUNNEL1,
+}
 from analysis.backtest.models import (
     BacktestConfig,
     BacktestResult,
@@ -161,11 +172,15 @@ def _run_compose(config: BacktestConfig) -> BacktestResult:
     if not signals:
         return _empty(f"compose {config.strategy}: 진입가 산정 후 신호 0건")
 
-    # 6. 청산 파라미터 — 미설정 시 CROSS 최적값 적용 (조합도 교차 성격)
+    # 6. 청산 파라미터 — 미설정 시 전략별 전용값(없으면 CROSS 최적값 폴백) 적용
     cfg = config
     if config.tp1_pct == 0 and config.trail_pct == 0:
-        cfg = _dc_replace(config, **OPTIMAL_EXIT_PARAMS_CROSS)
-        logger.info("[compose] 기본 분할청산 파라미터 적용 (CROSS 최적값)")
+        exit_params = _COMPOSE_EXIT_PARAMS.get(config.strategy, OPTIMAL_EXIT_PARAMS_CROSS)
+        cfg = _dc_replace(config, **exit_params)
+        logger.info(
+            "[compose] 기본 분할청산 파라미터 적용 (%s)",
+            "전략 전용값" if config.strategy in _COMPOSE_EXIT_PARAMS else "CROSS 최적값",
+        )
 
     # 7. 수익률
     for sig in signals:

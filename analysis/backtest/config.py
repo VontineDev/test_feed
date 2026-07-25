@@ -62,6 +62,37 @@ OPTIMAL_EXIT_PARAMS_CROSS: dict = {
     "use_stage3_peak": False,
 }
 
+# SCORE-1 / FUNNEL-1 전용 청산 파라미터
+# 출처: scripts/run_sweep.py --mode compose, 학습 2025-01-01~2025-10-31 /
+#       검증 2025-11-01~2026-07-24 (검증기간에 2026년 3~4월 급변동장 포함).
+#
+# 이 기간 분할에서는 전 조합에서 overfit_gap(train_sharpe-val_sharpe)이
+# 2~5대로 CROSS 모드 기준(0.29)보다 훨씬 크게 나오는데, 이는 특정 파라미터의
+# 과최적화가 아니라 학습기간(저변동)과 검증기간(2026 급변동장)의 시장 레짐
+# 차이 자체가 원인임을 별도 확인함(compose 백테스트 기간분할 검증: 학습
+# MDD -0.2~-2.5% vs 검증 MDD -33~-35%). 따라서 여기서는 overfit_gap 최소화
+# 대신 검증기간(더 가혹한 구간) 기준 val_mdd/val_win_rate로 선정 —
+# hard_stop_pct는 두 전략 모두 0.10(스윕 최대값)이 승률·MDD 모두 최선이었음
+# (타이트한 손절이 급변동장에서 휩쏘 손실을 키움).
+#
+# SCORE-1: val_sharpe=6.80, val_win_rate=65.4%, val_mdd=-36.7%, val_n=758
+OPTIMAL_EXIT_PARAMS_SCORE1: dict = {
+    "tp1_pct":         0.10,
+    "tp1_ratio":       0.70,
+    "trail_pct":       0.15,
+    "hard_stop_pct":   0.10,
+    "use_stage3_peak": False,
+}
+
+# FUNNEL-1: val_sharpe=6.20, val_win_rate=60.2%, val_mdd=-15.1%, val_n=2920
+OPTIMAL_EXIT_PARAMS_FUNNEL1: dict = {
+    "tp1_pct":         0.15,
+    "tp1_ratio":       0.70,
+    "trail_pct":       0.15,
+    "hard_stop_pct":   0.10,
+    "use_stage3_peak": False,
+}
+
 # Ichimoku 단독 모드 (주봉 7조건, ALL시장, 신호 ~1097건/전체, val 439건)
 #   val_sharpe=7.50, val_win_rate=55.8%, overfit_gap=0.24
 #   tp1_ratio=0.70: 1차 익절에서 70% 청산 — 주봉 전략 특성상 조기 익절 비중 높임.

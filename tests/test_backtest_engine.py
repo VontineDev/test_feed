@@ -22,6 +22,7 @@ from analysis.backtest.helpers import (
     _build_weekly_ichimoku,
     _compute_group_metrics,
     _compute_mdd,
+    _compute_portfolio_returns,
     _compute_rsi,
     _compute_sharpe,
     _fill_returns,
@@ -369,6 +370,73 @@ class TestComputeMdd:
         returns = [0.03, -0.01, 0.02, -0.02, 0.04]
         mdd = _compute_mdd(returns)
         assert mdd <= 0.0
+
+
+# ── _compute_portfolio_returns ─────────────────────────────────────
+
+class TestComputePortfolioReturns:
+    def test_empty_signals(self):
+        assert _compute_portfolio_returns([]) == []
+
+    def test_single_signal_matches_hold_days(self):
+        # 신호 1건, 28일 보유 → 4주(period_days=7) 동안 활성, 각 주 몫이 복리로
+        # 정확히 원래 수익률을 재구성해야 한다.
+        sig = _make_signal(signal_date=date(2025, 1, 3), r28=0.20)
+        rs = _compute_portfolio_returns([sig], hold_days=28, period_days=7)
+        assert len(rs) == 4
+        compounded = 1.0
+        for r in rs:
+            compounded *= (1.0 + r)
+        assert compounded == pytest.approx(1.20, abs=1e-6)
+
+    def test_non_overlapping_signals_no_dilution(self):
+        # 보유기간이 겹치지 않는 신호 2건은 서로 영향을 주지 않아야 한다
+        # (동일비중 평균이 각 기간마다 활성 포지션 1건뿐이므로 원래 수익률 그대로).
+        sig1 = _make_signal(ticker="A.KS", signal_date=date(2025, 1, 3), r28=0.20)
+        sig2 = _make_signal(ticker="B.KS", signal_date=date(2025, 3, 1), r28=-0.20)
+        rs = _compute_portfolio_returns([sig1, sig2], hold_days=28, period_days=7)
+        compounded = 1.0
+        for r in rs:
+            compounded *= (1.0 + r)
+        expected = 1.20 * 0.80
+        assert compounded == pytest.approx(expected, abs=1e-6)
+
+    def test_overlapping_signals_are_diluted(self):
+        # 같은 날 진입한 두 신호(+40%, -20%)는 동일비중 평균으로 완화돼야 하며,
+        # 겹치는 구간에서 단일 신호 전량을 그대로 반영해서는 안 된다
+        # (기존 순차 올인 버그가 재발하지 않는지 확인).
+        sig1 = _make_signal(ticker="A.KS", signal_date=date(2025, 1, 3), r28=0.40)
+        sig2 = _make_signal(ticker="B.KS", signal_date=date(2025, 1, 3), r28=-0.20)
+        rs = _compute_portfolio_returns([sig1, sig2], hold_days=28, period_days=7)
+        compounded = 1.0
+        for r in rs:
+            compounded *= (1.0 + r)
+        # 두 신호 단순 평균(+10%)보다는 완만하지만, 단일 신호 전량(+40% 또는 -20%)과는
+        # 달라야 한다 — 동일비중 분산이 반영됐는지 확인.
+        assert compounded != pytest.approx(1.40, abs=1e-6)
+        assert compounded != pytest.approx(0.80, abs=1e-6)
+
+    def test_no_catastrophic_mdd_from_many_concurrent_signals(self):
+        # 회귀 테스트: 동시보유 신호가 수백 건이어도(주간 top-N 유사 상황)
+        # 개별 신호 중 최악이 -80% 수준이면 포트폴리오 MDD가 -100%에 근접해서는
+        # 안 된다 (순차 올인 버그 시 발생했던 증상).
+        import random
+        rnd = random.Random(42)
+        signals = []
+        base = date(2025, 1, 3)
+        for week in range(20):
+            d = base + timedelta(days=7 * week)
+            for i in range(30):
+                r = rnd.uniform(-0.3, 0.3)
+                signals.append(_make_signal(ticker=f"T{week}_{i}.KS", signal_date=d, r28=r))
+        rs = _compute_portfolio_returns(signals, hold_days=28, period_days=7)
+        mdd = _compute_mdd(rs)
+        assert mdd is not None
+        assert mdd > -0.5  # 개별 신호 최대 손실(-30%)보다 훨씬 완만해야 함
+
+    def test_invalid_hold_days_raises(self):
+        with pytest.raises(ValueError):
+            _compute_portfolio_returns([], hold_days=14)
 
 
 # ── _compute_group_metrics ────────────────────────────────────────

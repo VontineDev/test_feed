@@ -251,6 +251,10 @@ async def main(args: argparse.Namespace) -> None:
         logger.error("종목 목록 조회 실패")
         await pool.close()
         return
+    if args.market == "KOSPI":
+        tickers = [t for t in tickers if t[0].endswith(".KS")]
+    elif args.market == "KOSDAQ":
+        tickers = [t for t in tickers if t[0].endswith(".KQ")]
     if args.max_tickers and args.max_tickers > 0:
         tickers = tickers[: args.max_tickers]
     ticker_syms = [t for t, _, _ in tickers]
@@ -307,6 +311,9 @@ if __name__ == "__main__":
                         help="병렬 워커 수 (기본: SCREENER_WORKERS 또는 4)")
     parser.add_argument("--max-tickers", type=int, default=0,
                         help="대상 종목 수 제한 (0 = 전종목). 테스트 시 200 권장")
+    parser.add_argument("--market", default="ALL", choices=["KOSPI", "KOSDAQ", "ALL"],
+                        help="시장 필터 (기본 ALL). get_all_tickers()가 KOSPI를 먼저 반환하므로"
+                             " --max-tickers와 함께 쓰면 KOSDAQ만 표본 검증할 때 필요")
     parser.add_argument("--skip-existing", action="store_true",
                         help="stage_classifications에 이미 있는 주차는 건너뜀")
     parser.add_argument("--dry-run", action="store_true",
