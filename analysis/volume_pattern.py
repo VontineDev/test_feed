@@ -12,6 +12,7 @@ import logging
 import sys
 import os
 from datetime import datetime, timezone
+from typing import cast
 
 import pandas as pd
 import yfinance as yf
@@ -162,7 +163,7 @@ def _load_from_db(symbol: str) -> pd.DataFrame:
         "open": "Open", "high": "High", "low": "Low",
         "close": "Close", "volume": "Volume",
     })
-    df.index = pd.DatetimeIndex(df["ts"]).tz_convert("Asia/Seoul")
+    df.index = cast(pd.DatetimeIndex, pd.DatetimeIndex(df["ts"])).tz_convert("Asia/Seoul")
     df = df.sort_index()
     return df
 
@@ -171,7 +172,7 @@ def _is_db_fresh(df: pd.DataFrame, max_age_hours: int = 12) -> bool:
     """DB 데이터가 충분히 최신인지 확인한다."""
     if df.empty:
         return False
-    latest = df.index.max()
+    latest = cast(pd.Timestamp, df.index.max())
     now = pd.Timestamp.now(tz=latest.tz)
     age = (now - latest).total_seconds() / 3600
     return age < max_age_hours
@@ -216,7 +217,7 @@ def fetch_data(ticker: str, market: str):
         return df, "", "yfinance"
 
     tz = MARKET_TZ[market]
-    df.index = df.index.tz_convert(tz)
+    df.index = cast(pd.DatetimeIndex, df.index).tz_convert(tz)
     return df, full_name, "yfinance"
 
 
@@ -267,7 +268,7 @@ def build_report(df, ticker: str, display_name: str, full_name: str, market: str
     total_period_vol = daily_vol.sum()
     lines.append(f"  일별 거래량:")
     for date, vol in daily_vol.items():
-        weekday = pd.Timestamp(date).day_name()[:3]
+        weekday = cast(str, pd.Timestamp(date).day_name())[:3]
         lines.append(f"     {date} ({weekday})  {int(vol):>14,}주")
     lines.append(f"     {'합계':>18}  {int(total_period_vol):>14,}주")
     lines.append(f"     {'일평균':>17}  {int(total_period_vol / trading_days):>14,}주\n")
@@ -360,7 +361,7 @@ async def save_to_db(df: pd.DataFrame, symbol: str, market: str):
 
     rows = []
     for ts, r in df.iterrows():
-        ts_utc = ts.tz_convert("UTC")
+        ts_utc = cast(pd.Timestamp, ts).tz_convert("UTC")
         rows.append({
             "symbol": symbol,
             "market": market,
@@ -370,7 +371,7 @@ async def save_to_db(df: pd.DataFrame, symbol: str, market: str):
             "high": r.get("High"),
             "low": r.get("Low"),
             "close": r.get("Close"),
-            "volume": int(r.get("Volume", 0)),
+            "volume": int(cast(float, r.get("Volume", 0))),
             "is_extended": False,
             "source": "yfinance",
         })

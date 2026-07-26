@@ -5,6 +5,7 @@
   "pythonPlatform": "Windows",
   "typeCheckingMode": "basic",
   "include": [
+    "analysis",
     "core",
     "dart",
     "dashboard",

@@ -48,15 +48,15 @@ from __future__ import annotations
 
 import sys
 if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
 if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
 
 import argparse
 import json
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -131,12 +131,12 @@ def _download_multi(tickers: list[str], period: str) -> pd.DataFrame:
         progress=False,
         threads=True,
     )
-    if raw.empty:
+    if raw is None or raw.empty:
         raise RuntimeError(f"yfinance 다운로드 실패: {tickers}")
     close = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw
     if isinstance(close, pd.Series):
         close = close.to_frame(name=tickers[0])
-    return close
+    return cast(pd.DataFrame, close)
 
 
 def fetch_macro_data(period: str = "2y") -> pd.DataFrame:
@@ -156,7 +156,7 @@ def fetch_macro_data(period: str = "2y") -> pd.DataFrame:
     # 누락 보간 (주말·공휴일로 인한 결측)
     close = close.ffill().bfill()
     logger.info("[매크로] %d 거래일 로드 완료", len(close))
-    return close
+    return cast(pd.DataFrame, close)
 
 
 def fetch_stock_data(tickers: list[str], period: str = "2y") -> pd.DataFrame:
@@ -248,7 +248,7 @@ def analyze_stock(
         logger.warning("  [skip] %s — 종목 데이터 없음", ticker)
         return None
 
-    stock_ret = compute_stock_returns(stock_prices[[ticker]])[ticker]
+    stock_ret = compute_stock_returns(cast(pd.DataFrame, stock_prices[[ticker]]))[ticker]
     factor_chg = compute_factor_changes(macro_prices)
 
     common = stock_ret.index.intersection(factor_chg.index)

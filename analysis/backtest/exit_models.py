@@ -7,8 +7,8 @@ default(분할청산) / model_a(ATR+Breakeven) / model_b(3단계 분할) 3종과
 
 from __future__ import annotations
 
-from datetime import date, timedelta
-from typing import Optional
+from datetime import date, datetime, timedelta
+from typing import Optional, cast
 
 import pandas as pd
 
@@ -57,7 +57,7 @@ def _compute_exit_logic(
 
     for j in range(entry_idx + 1, len(df)):
         ts       = df.index[j]
-        row_date = ts.date() if hasattr(ts, "date") else ts
+        row_date = ts.date() if isinstance(ts, datetime) else cast(date, ts)
         cur      = df.iloc[j]
 
         if pd.isna(cur["Close"]):
@@ -152,12 +152,12 @@ def _compute_atr(df: "pd.DataFrame", period: int = 14) -> "pd.Series":
     low   = df["Low"].astype(float)
     close = df["Close"].astype(float)
     prev_close = close.shift(1)
-    tr = pd.concat([
+    tr = cast(pd.Series, pd.concat([
         high - low,
         (high - prev_close).abs(),
         (low  - prev_close).abs(),
-    ], axis=1).max(axis=1)
-    return tr.rolling(period, min_periods=period).mean()
+    ], axis=1).max(axis=1))
+    return cast(pd.Series, tr.rolling(period, min_periods=period).mean())
 
 
 def _compute_exit_logic_model_a(
@@ -194,7 +194,7 @@ def _compute_exit_logic_model_a(
 
     for j in range(entry_idx + 1, len(df)):
         ts       = df.index[j]
-        row_date = ts.date() if hasattr(ts, "date") else ts
+        row_date = ts.date() if isinstance(ts, datetime) else cast(date, ts)
         cur      = df.iloc[j]
         if pd.isna(cur["Close"]):
             continue
@@ -334,7 +334,7 @@ def _compute_exit_logic_model_b(
 
     for j in range(entry_idx + 1, len(df)):
         ts       = df.index[j]
-        row_date = ts.date() if hasattr(ts, "date") else ts
+        row_date = ts.date() if isinstance(ts, datetime) else cast(date, ts)
         cur      = df.iloc[j]
         if pd.isna(cur["Close"]):
             continue
@@ -447,7 +447,7 @@ def _compute_sell_signals_and_s2(
         df = raw_df.copy()
         df["ma_5"]      = df["Close"].rolling(5,  min_periods=5).mean()
         df["ma_20"]     = df["Close"].rolling(20, min_periods=20).mean()
-        df["rsi_14"]    = _compute_rsi(df["Close"])
+        df["rsi_14"]    = _compute_rsi(cast(pd.Series, df["Close"]))
         df["avg_vol30"] = df["Volume"].rolling(30, min_periods=30).mean()
         df["high_10d"]  = df["High"].shift(1).rolling(10, min_periods=10).max()
         df["pct_chg"]   = df["Close"].pct_change(fill_method=None)
@@ -461,7 +461,7 @@ def _compute_sell_signals_and_s2(
 
         idx_map: dict[date, int] = {}
         for i, ts in enumerate(df.index):
-            d = ts.date() if hasattr(ts, "date") else ts
+            d = ts.date() if isinstance(ts, datetime) else cast(date, ts)
             idx_map[d] = i
 
         # 분할 청산 모드 판별
@@ -472,7 +472,7 @@ def _compute_sell_signals_and_s2(
             )
         )
         ticker_peakout: frozenset[date] = frozenset()
-        if use_exit_logic and cfg.use_stage3_peak and stage3_peakout_map:
+        if use_exit_logic and cfg is not None and cfg.use_stage3_peak and stage3_peakout_map:
             ticker_peakout = stage3_peakout_map.get(ticker, frozenset())
 
         # 모델 A용 ATR 시리즈 — ticker 단위로 한 번만 계산
@@ -491,6 +491,7 @@ def _compute_sell_signals_and_s2(
 
             # ── 분할 청산 모델 분기 ─────────────────────────────────
             if use_exit_logic:
+                assert cfg is not None, "use_exit_logic=True는 cfg is not None을 전제로 함"
                 if _em == "model_a" and _atr_series is not None:
                     _compute_exit_logic_model_a(sig, df, entry_idx, entry_price, cfg, ticker_peakout, _atr_series)
                 elif _em == "model_b":
@@ -516,7 +517,7 @@ def _compute_sell_signals_and_s2(
 
             for j in range(entry_idx + 1, len(df)):
                 ts       = df.index[j]
-                row_date = ts.date() if hasattr(ts, "date") else ts
+                row_date = ts.date() if isinstance(ts, datetime) else cast(date, ts)
                 cur      = df.iloc[j]
 
                 if pd.isna(cur["Close"]):

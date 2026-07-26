@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace as _dc_replace
-from datetime import date, timedelta
-from typing import Optional
+from datetime import date, datetime, timedelta
+from typing import Optional, cast
 
 import pandas as pd
 
@@ -43,13 +43,13 @@ def _replay_ichimoku(
       G: close > MA120w (데이터 부족 시 통과)
     """
     # KRX는 월~금 → 주봉 = 금요일 마감가 기준
-    weekly = daily_df.resample("W-FRI", closed="right", label="right").agg({
+    weekly = cast(pd.DataFrame, daily_df.resample("W-FRI", closed="right", label="right").agg({
         "Open":   "first",
         "High":   "max",
         "Low":    "min",
         "Close":  "last",
         "Volume": "sum",
-    }).dropna(subset=["Close"])
+    })).dropna(subset=["Close"])
 
     # Ichimoku 선행스팬B: 52주 lookback 최소 요건
     if len(weekly) < 62:
@@ -71,7 +71,7 @@ def _replay_ichimoku(
         _daily_before = daily_df.index[daily_df.index <= week_ts]
         if _daily_before.empty:
             continue
-        row_date = _daily_before[-1].date()
+        row_date = cast(pd.Timestamp, _daily_before[-1]).date()
 
         if row_date < config.start or row_date > config.end:
             continue
@@ -139,7 +139,7 @@ def _replay_stage(
     threshold = _S1_THRESHOLD.get(market, 0.05)
 
     df     = daily_df.copy()
-    closes = df["Close"]
+    closes = cast(pd.Series, df["Close"])
     vols   = df["Volume"]
 
     df["ma_20"] = closes.rolling(20, min_periods=20).mean()
@@ -149,7 +149,7 @@ def _replay_stage(
 
     # i=0는 change_pct 계산 불가, i<21은 20일 거래량 평균 불가
     for i in range(21, len(df)):
-        row_date = df.index[i].date()
+        row_date = cast(pd.Timestamp, df.index[i]).date()
         if row_date < config.start or row_date > config.end:
             continue
 
@@ -229,7 +229,7 @@ def _replay_stage_v11(
     threshold = _S1_THRESHOLD.get(market, 0.05)
 
     df     = daily_df.copy()
-    closes = df["Close"]
+    closes = cast(pd.Series, df["Close"])
     vols   = df["Volume"]
 
     df["ma_20"]  = closes.rolling(20, min_periods=20).mean()
@@ -239,7 +239,7 @@ def _replay_stage_v11(
     signals: list[SignalRecord] = []
 
     for i in range(21, len(df)):
-        row_date = df.index[i].date()
+        row_date = cast(pd.Timestamp, df.index[i]).date()
         if row_date < config.start or row_date > config.end:
             continue
 
@@ -325,7 +325,7 @@ def _replay_stage2_v11(
 
     idx_map: dict[date, int] = {}
     for i, ts in enumerate(daily_df.index):
-        d = ts.date() if hasattr(ts, "date") else ts
+        d = ts.date() if isinstance(ts, datetime) else cast(date, ts)
         idx_map[d] = i
 
     df = daily_df.copy()
@@ -354,7 +354,7 @@ def _replay_stage2_v11(
 
         for j in range(s1_idx + 1, len(df)):
             ts       = df.index[j]
-            row_date = ts.date() if hasattr(ts, "date") else ts
+            row_date = ts.date() if isinstance(ts, datetime) else cast(date, ts)
             if row_date > cutoff:
                 break
             if row_date < config.start or row_date > config.end:
@@ -414,18 +414,18 @@ def _replay_stage_v12(
     threshold = _S1_THRESHOLD.get(market, 0.05)
 
     df     = daily_df.copy()
-    closes = df["Close"]
+    closes = cast(pd.Series, df["Close"])
     vols   = df["Volume"]
 
     df["ma_20"]     = closes.rolling(20, min_periods=20).mean()
     df["ma_60"]     = closes.rolling(60, min_periods=60).mean()
-    df["ma_20_5d"]  = closes.rolling(20, min_periods=20).mean().shift(5)
+    df["ma_20_5d"]  = cast(pd.Series, closes.rolling(20, min_periods=20).mean()).shift(5)
     df["rsi_14"]    = _compute_rsi(closes)
 
     signals: list[SignalRecord] = []
 
     for i in range(21, len(df)):
-        row_date = df.index[i].date()
+        row_date = cast(pd.Timestamp, df.index[i]).date()
         if row_date < config.start or row_date > config.end:
             continue
 
@@ -536,7 +536,7 @@ def _replay_stage2_v12(
 
     idx_map: dict[date, int] = {}
     for i, ts in enumerate(daily_df.index):
-        d = ts.date() if hasattr(ts, "date") else ts
+        d = ts.date() if isinstance(ts, datetime) else cast(date, ts)
         idx_map[d] = i
 
     df      = daily_df.copy()
@@ -575,7 +575,7 @@ def _replay_stage2_v12(
 
         for j in range(s1_idx + 1, len(df)):
             ts       = df.index[j]
-            row_date = ts.date() if hasattr(ts, "date") else ts
+            row_date = ts.date() if isinstance(ts, datetime) else cast(date, ts)
             if row_date > cutoff:
                 break
             if row_date < config.start or row_date > config.end:
@@ -649,7 +649,7 @@ def _replay_stage_v13(
     threshold = _S1_THRESHOLD.get(market, 0.05)
 
     df     = daily_df.copy()
-    closes = df["Close"]
+    closes = cast(pd.Series, df["Close"])
     vols   = df["Volume"]
 
     df["ma_20"]  = closes.rolling(20, min_periods=20).mean()
@@ -659,7 +659,7 @@ def _replay_stage_v13(
     signals: list[SignalRecord] = []
 
     for i in range(21, len(df)):
-        row_date = df.index[i].date()
+        row_date = cast(pd.Timestamp, df.index[i]).date()
         if row_date < config.start or row_date > config.end:
             continue
 
@@ -762,7 +762,7 @@ def _replay_stage_v14(
     threshold = _S1_THRESHOLD.get(market, 0.05)
 
     df     = daily_df.copy()
-    closes = df["Close"]
+    closes = cast(pd.Series, df["Close"])
     vols   = df["Volume"]
 
     df["ma_20"]     = closes.rolling(20, min_periods=20).mean()
@@ -773,7 +773,7 @@ def _replay_stage_v14(
     signals: list[SignalRecord] = []
 
     for i in range(21, len(df)):
-        row_date = df.index[i].date()
+        row_date = cast(pd.Timestamp, df.index[i]).date()
         if row_date < config.start or row_date > config.end:
             continue
 
@@ -875,7 +875,7 @@ def _replay_stage_v15(
     threshold = _S1_THRESHOLD.get(market, 0.05)
 
     df     = daily_df.copy()
-    closes = df["Close"]
+    closes = cast(pd.Series, df["Close"])
     vols   = df["Volume"]
 
     df["ma_20"]     = closes.rolling(20, min_periods=20).mean()
@@ -887,7 +887,7 @@ def _replay_stage_v15(
     signals: list[SignalRecord] = []
 
     for i in range(21, len(df)):
-        row_date = df.index[i].date()
+        row_date = cast(pd.Timestamp, df.index[i]).date()
         if row_date < config.start or row_date > config.end:
             continue
 
@@ -995,7 +995,7 @@ def _replay_stage2_v13(
 
     idx_map: dict[date, int] = {}
     for i, ts in enumerate(daily_df.index):
-        d = ts.date() if hasattr(ts, "date") else ts
+        d = ts.date() if isinstance(ts, datetime) else cast(date, ts)
         idx_map[d] = i
 
     df      = daily_df.copy()
@@ -1033,7 +1033,7 @@ def _replay_stage2_v13(
 
         for j in range(s1_idx + 1, len(df)):
             ts       = df.index[j]
-            row_date = ts.date() if hasattr(ts, "date") else ts
+            row_date = ts.date() if isinstance(ts, datetime) else cast(date, ts)
             if row_date > cutoff:
                 break
             if row_date < config.start or row_date > config.end:
@@ -1160,7 +1160,7 @@ def _replay_stage2(
     # 날짜 → 행 인덱스 매핑
     idx_map: dict[date, int] = {}
     for i, ts in enumerate(daily_df.index):
-        d = ts.date() if hasattr(ts, "date") else ts
+        d = ts.date() if isinstance(ts, datetime) else cast(date, ts)
         idx_map[d] = i
 
     df = daily_df.copy()
@@ -1189,7 +1189,7 @@ def _replay_stage2(
 
         for j in range(s1_idx + 1, len(df)):
             ts = df.index[j]
-            row_date = ts.date() if hasattr(ts, "date") else ts
+            row_date = ts.date() if isinstance(ts, datetime) else cast(date, ts)
             if row_date > cutoff:
                 break
             if row_date < config.start or row_date > config.end:

@@ -253,7 +253,7 @@ def to_html_report(result: "BacktestResult", output_path: str) -> str:
         try:
             _raw = yf.download(_unique_tks, period="5d", progress=False,
                                auto_adjust=True)
-            if not _raw.empty and "Close" in _raw.columns:
+            if _raw is not None and not _raw.empty and "Close" in _raw.columns:
                 _close = _raw["Close"]
                 if isinstance(_close, pd.Series):
                     _s = _close.dropna()

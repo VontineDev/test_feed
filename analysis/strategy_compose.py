@@ -42,7 +42,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Optional
+from typing import Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -83,6 +83,12 @@ def _as_bool(s: pd.Series) -> pd.Series:
     return pd.Series(arr, index=s.index).astype(bool)
 
 
+def _num(x) -> pd.Series:
+    """pd.to_numeric(x, errors='coerce')를 Series로 좁혀줌 (pandas-stubs가
+    반환 타입을 scalar까지 포함한 거대 유니언으로 넓히는 것 방지)."""
+    return cast(pd.Series, pd.to_numeric(x, errors="coerce"))
+
+
 # ── 파생 불리언 플래그 ────────────────────────────────────────
 def derive_flags(
     frame: pd.DataFrame,
@@ -103,66 +109,56 @@ def derive_flags(
     df = frame.copy()
 
     if "ichimoku" in df.columns:
-        df["ichimoku"] = _as_bool(df["ichimoku"])
+        df["ichimoku"] = _as_bool(cast(pd.Series, df["ichimoku"]))
 
     if "stage" in df.columns:
-        st = pd.to_numeric(df["stage"], errors="coerce")
+        st = _num(df["stage"])
         df["stage2plus"] = st.fillna(0) >= 2
         df["stage1"]     = st.fillna(0) == 1          # cross 모드 패리티용 (Stage 1)
         df["stage_any"]  = st.notna() & (st.fillna(0) >= 1)  # 분류기가 무엇이든 플래그
 
     if "foreign_net_w" in df.columns or "inst_net_w" in df.columns:
-        f = pd.to_numeric(
-            df["foreign_net_w"] if "foreign_net_w" in df.columns else 0,
-            errors="coerce",
-        ).fillna(0)
-        i = pd.to_numeric(
-            df["inst_net_w"] if "inst_net_w" in df.columns else 0,
-            errors="coerce",
-        ).fillna(0)
+        f = _num(df["foreign_net_w"] if "foreign_net_w" in df.columns else 0).fillna(0)
+        i = _num(df["inst_net_w"] if "inst_net_w" in df.columns else 0).fillna(0)
         df["flow_pos"]   = (f > 0) | (i > 0)           # 하나라도 순매수
         df["flow_loose"] = ~((f < 0) & (i < 0))        # 양쪽 모두 순매도가 아님
 
     if "vol_ratio" in df.columns:
-        df["vol_spike"] = pd.to_numeric(df["vol_ratio"], errors="coerce").fillna(0) >= vol_spike_x
+        df["vol_spike"] = _num(df["vol_ratio"]).fillna(0) >= vol_spike_x
 
     if "txamt_ratio" in df.columns:
-        df["txamt_spike"] = (
-            pd.to_numeric(df["txamt_ratio"], errors="coerce").fillna(0) >= TXAMT_SPIKE_X
-        )
+        df["txamt_spike"] = _num(df["txamt_ratio"]).fillna(0) >= TXAMT_SPIKE_X
         txamt_weekly_med = df.groupby("week")["txamt_ratio"].transform(
-            lambda x: pd.to_numeric(x, errors="coerce").median()
+            lambda x: _num(x).median()
         )
-        df["txamt_above_med"] = (
-            pd.to_numeric(df["txamt_ratio"], errors="coerce").fillna(0) >= txamt_weekly_med
-        )
+        df["txamt_above_med"] = _num(df["txamt_ratio"]).fillna(0) >= txamt_weekly_med
 
     if "volume_w" in df.columns:
-        vw = pd.to_numeric(df["volume_w"], errors="coerce")
+        vw = _num(df["volume_w"])
         # 주별 이치모쿠 통과 종목 중 거래량 중앙값 이상 (cross-sectional, 항상 계산 가능)
         weekly_med = df.groupby("week")["volume_w"].transform(
-            lambda x: pd.to_numeric(x, errors="coerce").median()
+            lambda x: _num(x).median()
         )
         df["vol_above_med"] = vw >= weekly_med
 
     # 거래대금 기반 플래그 (chart_signals.close × volume_w — daily_ohlcv 불필요)
     if "volume_w" in df.columns and "close_chart" in df.columns:
-        vw2 = pd.to_numeric(df["volume_w"], errors="coerce")
-        cl  = pd.to_numeric(df["close_chart"], errors="coerce")
+        vw2 = _num(df["volume_w"])
+        cl  = _num(df["close_chart"])
         txamt_cs = vw2 * cl                    # 주봉 거래대금 (원)
         txamt_cs_med = txamt_cs.groupby(df["week"]).transform(
-            lambda x: pd.to_numeric(x, errors="coerce").median()
+            lambda x: _num(x).median()
         )
         df["txamt_above_med_cs"] = txamt_cs.fillna(0) >= txamt_cs_med
         # 상위 30% (더 엄격)
         txamt_cs_q70 = txamt_cs.groupby(df["week"]).transform(
-            lambda x: pd.to_numeric(x, errors="coerce").quantile(0.70)
+            lambda x: _num(x).quantile(0.70)
         )
         df["txamt_top30_cs"] = txamt_cs.fillna(0) >= txamt_cs_q70
 
     if "attention_score" in df.columns:
         # 주간 분위: 각 주 내에서 attention_score의 분위수 ≥ narrative_q
-        s = pd.to_numeric(df["attention_score"], errors="coerce")
+        s = _num(df["attention_score"])
         rank = s.groupby(df["week"]).rank(pct=True)
         df["narrative_hi"] = rank.fillna(0.0) >= narrative_q
 
@@ -186,7 +182,7 @@ def and_gate(frame: pd.DataFrame, flags: list[str]) -> pd.DataFrame:
 
     mask = pd.Series(True, index=frame.index)
     for f in flags:
-        mask &= _as_bool(frame[f])
+        mask &= _as_bool(cast(pd.Series, frame[f]))
     out = frame.loc[mask, KEY_COLS].drop_duplicates().reset_index(drop=True)
     return out
 
@@ -213,12 +209,12 @@ def composite_score(
     if top_n <= 0:
         raise ValueError(f"composite_score: top_n은 1 이상이어야 합니다: {top_n}")
     if frame.empty:
-        return pd.DataFrame(columns=KEY_COLS + ["score"])
+        return pd.DataFrame(columns=pd.Index(KEY_COLS + ["score"]))
 
     df = frame.copy()
     score = pd.Series(0.0, index=df.index)
     for col, w in weights.items():
-        x = pd.to_numeric(df[col], errors="coerce")
+        x = _num(df[col])
         g = x.groupby(df["week"])
         mean = g.transform("mean")
         std = g.transform("std")  # ddof=1; 표본<2 → NaN
@@ -229,7 +225,7 @@ def composite_score(
 
     df = df.sort_values(["week", "score", "ticker"], ascending=[True, False, True])
     out = df.groupby("week", group_keys=False, sort=False).head(top_n)
-    return out[KEY_COLS + ["score"]].reset_index(drop=True)
+    return cast(pd.DataFrame, out[KEY_COLS + ["score"]]).reset_index(drop=True)
 
 
 # ── 조합기 3: 깔때기 (순차 깔터링) ────────────────────────────
@@ -256,11 +252,12 @@ def funnel(
         return frame.loc[[], KEY_COLS].reset_index(drop=True)
 
     out_rows: list[tuple[str, str]] = []
-    for ticker, g in frame.groupby("ticker", sort=False):
+    for ticker_raw, g in frame.groupby("ticker", sort=False):
+        ticker = str(ticker_raw)
         g = g.sort_values("week")
         weeks = g["week"].tolist()
-        screen = _as_bool(g[screen_flag]).tolist()
-        trig = _as_bool(g[trigger_flag]).tolist()
+        screen = _as_bool(cast(pd.Series, g[screen_flag])).tolist()
+        trig = _as_bool(cast(pd.Series, g[trigger_flag])).tolist()
 
         armed_week: Optional[str] = None
         for wk, sc, tg in zip(weeks, screen, trig):
@@ -275,7 +272,7 @@ def funnel(
                 out_rows.append((ticker, wk))
                 armed_week = None
 
-    return pd.DataFrame(out_rows, columns=KEY_COLS)
+    return pd.DataFrame(out_rows, columns=pd.Index(KEY_COLS))
 
 
 # ── 선언형 전략 로스터 (Tier-1) ───────────────────────────────
@@ -397,7 +394,7 @@ def load_signal_frame(
 
     frames = [f for f in frames if f is not None and not f.empty]
     if not frames:
-        return pd.DataFrame(columns=KEY_COLS)
+        return pd.DataFrame(columns=pd.Index(KEY_COLS))
 
     merged = frames[0]
     for f in frames[1:]:
@@ -409,7 +406,7 @@ def _fetch_df(conn, sql: str, params: tuple, columns: list[str]) -> pd.DataFrame
     with conn.cursor() as cur:
         cur.execute(sql, params)
         rows = cur.fetchall()
-    return pd.DataFrame(rows, columns=columns)
+    return pd.DataFrame(rows, columns=pd.Index(columns))
 
 
 def _load_ichimoku(conn, start: date, end: date) -> pd.DataFrame:
@@ -474,7 +471,7 @@ def _load_volume(conn, start: date, end: date) -> pd.DataFrame:
         ["ticker", "date", "volume", "close"],
     )
     if raw.empty:
-        return pd.DataFrame(columns=["ticker", "week", "vol_ratio", "txamt_ratio"])
+        return pd.DataFrame(columns=pd.Index(["ticker", "week", "vol_ratio", "txamt_ratio"]))
     raw["date"] = pd.to_datetime(raw["date"])
     raw["volume"] = pd.to_numeric(raw["volume"], errors="coerce")
     raw["close"]  = pd.to_numeric(raw["close"],  errors="coerce")
@@ -500,11 +497,10 @@ def _load_volume(conn, start: date, end: date) -> pd.DataFrame:
         wk["ticker"] = ticker
         out.append(wk[["ticker", "week", "vol_ratio", "txamt_ratio"]])
     if not out:
-        return pd.DataFrame(columns=["ticker", "week", "vol_ratio", "txamt_ratio"])
+        return pd.DataFrame(columns=pd.Index(["ticker", "week", "vol_ratio", "txamt_ratio"]))
     res = pd.concat(out, ignore_index=True)
     # start 이전 워밍업 주차 제거
-    res = res[res["week"] >= iso_week(start)]
-    return res
+    return cast(pd.DataFrame, res[res["week"] >= iso_week(start)])
 
 
 def _load_narrative(conn, start: date, end: date) -> pd.DataFrame:

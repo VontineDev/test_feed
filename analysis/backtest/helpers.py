@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import math
 import statistics
-from datetime import date, timedelta
-from typing import Optional
+from datetime import date, datetime, timedelta
+from typing import Optional, cast
 
 import pandas as pd
 
@@ -26,9 +26,10 @@ def _build_price_lookup(df: pd.DataFrame) -> dict[date, float]:
     """DataFrame → {날짜: 종가} dict."""
     result: dict[date, float] = {}
     for ts, row in df.iterrows():
-        d = ts.date() if hasattr(ts, "date") else ts
-        if not pd.isna(row["Close"]):
-            result[d] = float(row["Close"])
+        d = ts.date() if isinstance(ts, datetime) else cast(date, ts)
+        close = cast(float, row["Close"])
+        if not pd.isna(close):
+            result[d] = float(close)
     return result
 
 
@@ -172,13 +173,13 @@ def _build_weekly_ichimoku(daily_df: pd.DataFrame) -> Optional[pd.DataFrame]:
     """
     from ta.trend import IchimokuIndicator
 
-    weekly = daily_df.resample("W-FRI", closed="right", label="right").agg({
+    weekly = cast(pd.DataFrame, daily_df.resample("W-FRI", closed="right", label="right").agg({
         "Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum",
-    }).dropna(subset=["Close"])
+    })).dropna(subset=["Close"])
     if len(weekly) < 62:
         return None
 
-    ind = IchimokuIndicator(high=weekly["High"], low=weekly["Low"], visual=False)
+    ind = IchimokuIndicator(high=cast(pd.Series, weekly["High"]), low=cast(pd.Series, weekly["Low"]), visual=False)
     weekly = weekly.copy()
     weekly["senkou_a"]    = ind.ichimoku_a()
     weekly["senkou_b"]    = ind.ichimoku_b()
@@ -211,7 +212,7 @@ def _find_ichimoku_sell(
 
     for i in range(len(weekly_df)):
         ts       = weekly_df.index[i]
-        row_date = ts.date() if hasattr(ts, "date") else ts
+        row_date = ts.date() if isinstance(ts, datetime) else cast(date, ts)
         row      = weekly_df.iloc[i]
 
         tenkan = float(row["tenkan"]) if not pd.isna(row["tenkan"]) else None
@@ -263,7 +264,7 @@ def _compute_rsi(closes: pd.Series, period: int = 14) -> pd.Series:
     avg_gain = gain.ewm(com=period - 1, min_periods=period).mean()
     avg_loss = loss.ewm(com=period - 1, min_periods=period).mean()
     rs       = avg_gain / avg_loss.replace(0.0, float("nan"))
-    return 100.0 - 100.0 / (1.0 + rs)
+    return cast(pd.Series, 100.0 - 100.0 / (1.0 + rs))
 
 
 def _compute_group_metrics(
@@ -316,11 +317,11 @@ def _compute_group_metrics(
         m.sharpe_custom = _compute_sharpe(rcs, hold_days=hold_days, rf_annual=rf_annual)
 
     # 매도 신호 기반 집계 — blended_return(분할 청산 가중평균) 우선, 없으면 sell_return
-    sell_rets = [
-        s.blended_return if s.blended_return is not None else s.sell_return
-        for s in signals
-        if (s.blended_return is not None or s.sell_return is not None)
-    ]
+    sell_rets: list[float] = []
+    for s in signals:
+        v = s.blended_return if s.blended_return is not None else s.sell_return
+        if v is not None:
+            sell_rets.append(v)
     if sell_rets:
         m.win_rate_sell      = sum(1 for r in sell_rets if r > 0) / len(sell_rets)
         m.avg_return_sell    = statistics.mean(sell_rets)

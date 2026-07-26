@@ -28,7 +28,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-from typing import Optional
+from typing import Optional, cast
 
 import pandas as pd
 import yfinance as yf
@@ -188,10 +188,10 @@ def fetch_weekly_ohlcv(ticker: str) -> Optional[pd.DataFrame]:
         # history()는 항상 flat 컬럼 반환하지만 방어적으로 처리
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-        df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
+        df = cast(pd.DataFrame, df[["Open", "High", "Low", "Close", "Volume"]]).copy()
         df.index = pd.to_datetime(df.index, utc=True)
         # NaN 미포함 유효 행 기준 60행 최소 요건
-        if df["Close"].notna().sum() < 60:
+        if cast(pd.Series, df["Close"]).notna().sum() < 60:
             logger.debug("[스크리너] %s 유효 데이터 부족", ticker)
             return None
         return df
@@ -209,8 +209,8 @@ def calc_ichimoku(df: pd.DataFrame) -> pd.DataFrame:
          tenkan_sen, kijun_sen 컬럼 추가.
     """
     ichi = IchimokuIndicator(
-        high=df["High"],
-        low=df["Low"],
+        high=cast(pd.Series, df["High"]),
+        low=cast(pd.Series, df["Low"]),
         visual=False,
     )
     df = df.copy()
@@ -235,7 +235,7 @@ def screen_ticker(ticker: str, name: str, sector: str = "") -> Optional[ScreenRe
 
     # ── 주봉 신선도 체크 ────────────────────────────────────────
     # 마지막 봉이 7일 이내여야 함 (yfinance 미확정 봉 방어)
-    last_date = df.index[-1].date()
+    last_date = cast(pd.Timestamp, df.index[-1]).date()
     today_utc = datetime.now(timezone.utc).date()
     if (today_utc - last_date).days > 7:
         logger.debug("[스크리너] %s 마지막 봉 stale (%s)", ticker, last_date)
@@ -286,8 +286,8 @@ def screen_ticker(ticker: str, name: str, sector: str = "") -> Optional[ScreenRe
     D = close > ma_60w                # 60주선 위
     E = ma_20w > prev_ma_20w          # 20주선 우상향
     F = ma_60w > prev_ma_60w          # 60주선 우상향
-    G = (ma_120w_valid and close > ma_120w) if g_strict else (
-        (not ma_120w_valid) or (close > ma_120w))  # 120주선 위
+    G = (ma_120w_valid and close > cast(float, ma_120w)) if g_strict else (
+        (not ma_120w_valid) or (close > cast(float, ma_120w)))  # 120주선 위
 
     if not (A and B and C and D and E and F and G):
         return None

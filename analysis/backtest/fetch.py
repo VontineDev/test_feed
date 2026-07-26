@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
-from typing import Optional
+from typing import Optional, cast
 
 import pandas as pd
 
@@ -33,7 +33,7 @@ def _fetch_single_ohlcv(
             return None
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-        df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
+        df = cast(pd.DataFrame, df[["Open", "High", "Low", "Close", "Volume"]]).copy()
         df.index = pd.to_datetime(df.index, utc=True)
         return df
     except Exception as e:
@@ -58,7 +58,7 @@ def _fetch_index(
             return None
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-        df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
+        df = cast(pd.DataFrame, df[["Open", "High", "Low", "Close", "Volume"]]).copy()
         df.index = pd.to_datetime(df.index, utc=True)
         return df
     except Exception as e:

@@ -76,6 +76,8 @@ def _run_compose(config: BacktestConfig) -> BacktestResult:
     from analysis import strategy_compose as sc
     from analysis.chart_screener import get_all_tickers, fetch_kind_sector_map
 
+    assert config.dsn is not None, "BacktestConfig.__post_init__이 mode='compose'에서 dsn을 강제함"
+    assert config.strategy is not None, "BacktestConfig.__post_init__이 mode='compose'에서 strategy를 강제함"
     spec = sc.STRATEGIES.get(config.strategy)
     if spec is None:
         raise ValueError(
@@ -109,8 +111,8 @@ def _run_compose(config: BacktestConfig) -> BacktestResult:
 
     entries: list[tuple[str, date]] = []
     for row in sig_df.itertuples(index=False):
-        ticker = row.ticker
-        friday = sc.week_to_friday(row.week)
+        ticker = getattr(row, "ticker")
+        friday = sc.week_to_friday(getattr(row, "week"))
         if not (config.start <= friday <= config.end):
             continue
         mkt = "KOSDAQ" if ticker.endswith(".KQ") else "KOSPI"
