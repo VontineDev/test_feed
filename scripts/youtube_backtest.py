@@ -257,8 +257,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     try:
-        from scipy import stats
-        import statistics
+        from scipy import stats  # noqa: F401 — run_backtest/run_weekly_monthly_backtest이 모듈 전역으로 참조
+        import statistics  # noqa: F401 — 위와 동일
     except ImportError:
         raise SystemExit("pip install scipy 필요")
 

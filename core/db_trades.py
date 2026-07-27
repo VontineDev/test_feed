@@ -186,10 +186,10 @@ async def get_pnl_summary(
       all   — 전체
     반환: {total_pnl, trade_cnt, win_cnt, avg_win, avg_loss, by_stage}
     """
-    from datetime import date as _date, timedelta as _td
+    from datetime import datetime as _datetime, timedelta as _td
     from zoneinfo import ZoneInfo
     kst = ZoneInfo("Asia/Seoul")
-    today = _date.today()
+    today = _datetime.now(kst).date()
 
     where = "exit_date IS NOT NULL"
     args: list = []

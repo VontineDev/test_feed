@@ -65,7 +65,6 @@ async def main():
                 xbrl = extract_xbrl_quarterly(xml_path)
                 if xbrl:
                     rv = xbrl["revenue"][0] if xbrl["revenue"] else None
-                    op = xbrl["op_profit"][0] if xbrl["op_profit"] else None
                     print(f"  [XML 재파싱] revenue[0]={rv:,}" if rv else "  [XML] revenue 없음")
                     if rv:
                         print(f"    => {float(rv)/1e8:.0f}억원 = {float(rv)/1e12:.2f}조원")

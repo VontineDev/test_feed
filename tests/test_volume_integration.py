@@ -28,15 +28,6 @@ def _make_5m_df(days: dict[str, list[float]]) -> pd.DataFrame:
     days = {"2026-04-07": [100.0, 101.0, 102.0], ...}
     Each value is used as both Open, High, Low, Close.
     """
-    rows = []
-    for date_str, closes in days.items():
-        base = pd.Timestamp(date_str + " 09:00", tz="Asia/Seoul")
-        for i, c in enumerate(closes):
-            ts = base + pd.Timedelta(minutes=i * 5)
-            rows.append({"Close": c, "Volume": 1_000})
-    df = pd.DataFrame(rows)
-    df.index = pd.DatetimeIndex([r["Close"] for r in rows])  # placeholder
-    # Rebuild with proper DatetimeIndex
     idx = []
     for date_str, closes in days.items():
         base = pd.Timestamp(date_str + " 09:00", tz="Asia/Seoul")

@@ -94,7 +94,6 @@ class TestGatingSymbolMatch:
     def test_name_key_would_miss(self):
         # 구버전 버그: keys() 비교 시 miss — 심볼로 비교해야 함
         ticker_symbols = {"삼성전자": "005930.KS"}
-        screener_with_names = {"삼성전자"}  # 이름으로 비교하면 hit이지만 심볼로 비교해야 정상
         # 실제 screener_tickers는 yfinance 심볼임 → 이름으로 비교하면 안 됨
         assert not (set(ticker_symbols.keys()) & {"005930.KS"})  # 구버전 버그 재현
 

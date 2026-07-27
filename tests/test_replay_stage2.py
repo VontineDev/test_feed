@@ -345,7 +345,6 @@ class TestStage2S1Prerequisite:
         """S1이 config.start 이전 → S2가 config.start 이후면 수집."""
         df = _make_df(flat_days=80, spike_pct=0.08, spike_vol_mult=3.0,
                       post=[(10_800 * 0.90, int(100_000 * 3.0 * 0.40))])
-        spike_date = _idx_date(df.index[-2])
         s2_date    = _idx_date(df.index[-1])
         # config.start = S2날짜 (S1은 하루 전이라 config.start 이전)
         cfg = _cfg(s2_date, s2_date + timedelta(days=1))

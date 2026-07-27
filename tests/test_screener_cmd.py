@@ -22,7 +22,7 @@ async def main():
 
     # ── 환경변수 확인 ──────────────────────────────────────────
     try:
-        token = _get_token()
+        _get_token()
         chat_id = _get_chat_id()
     except ValueError as e:
         logger.error("환경변수 미설정: %s", e)

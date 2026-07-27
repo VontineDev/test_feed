@@ -180,7 +180,6 @@ async def handle_sell(
 
     pnl = result.get("pnl")
     pnl_pct = result.get("pnl_pct")
-    entry_price = result.get("entry_price", 0)
     qty = result.get("qty", 0)
 
     sign = "🟢" if (pnl or 0) >= 0 else "🔴"
@@ -242,7 +241,6 @@ async def handle_port(
         cur = prices.get(t)
         entry = int(p["entry_price"])
         qty = int(p["qty"])
-        cost = entry * qty
 
         if cur is not None:
             unreal = (cur - entry) * qty

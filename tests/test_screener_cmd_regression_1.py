@@ -14,15 +14,6 @@ def test_screener_cmd_has_main_guard():
     src = (pathlib.Path(__file__).parent / "test_screener_cmd.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
 
-    # Collect all top-level Call nodes — asyncio.run() at module level would appear here
-    top_level_calls = [
-        node for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "run"
-        # Ensure it's a direct top-level expression, not inside an if/def/class
-    ]
-
     # The safe pattern: asyncio.run() must be inside an If whose test is
     # a comparison of __name__ == "__main__"
     for node in ast.iter_child_nodes(tree):

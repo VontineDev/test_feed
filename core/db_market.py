@@ -56,7 +56,7 @@ async def upsert_ticker_names(pool: asyncpg.Pool, tickers: list[str]) -> int:
     loop = _aio.get_event_loop()
     with _TPE(max_workers=4) as ex:
         results = await loop.run_in_executor(
-            None,
+            ex,
             lambda: [r for r in map(_lookup, to_fetch) if r],
         )
 
