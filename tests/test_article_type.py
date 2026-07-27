@@ -5,7 +5,7 @@ Covers:
   - TradeSignal.article_type default value
   - _parse_signal_json(): valid type, unknown type → "other", missing → "other",
     case-insensitive normalisation, exception path → NONE_SIGNAL.article_type
-  - save_signal() / fetch_latest_signals(): article_type persisted and retrieved
+  - save_signal(): article_type persisted on INSERT
   - send_signal(): badge prepended for non-"other" types, suppressed for "other",
     all 7 non-other badge values correct
 """
@@ -173,46 +173,6 @@ class TestSaveSignalArticleType:
 
         call_args = mock_conn.fetchrow.call_args
         assert "other" in call_args[0]
-
-
-class TestFetchLatestSignalsArticleType:
-    """fetch_latest_signals() SELECTs article_type from trade_signals."""
-
-    @pytest.mark.asyncio
-    async def test_article_type_in_select(self):
-        from core.db import fetch_latest_signals
-
-        mock_conn = AsyncMock()
-        mock_conn.fetch = AsyncMock(return_value=[])
-        mock_pool = MagicMock()
-        mock_pool.acquire = MagicMock(return_value=AsyncMock(
-            __aenter__=AsyncMock(return_value=mock_conn),
-            __aexit__=AsyncMock(return_value=False),
-        ))
-
-        await fetch_latest_signals(mock_pool)
-
-        call_args = mock_conn.fetch.call_args
-        sql = call_args[0][0]
-        assert "article_type" in sql
-
-    @pytest.mark.asyncio
-    async def test_article_type_in_select_with_direction_filter(self):
-        from core.db import fetch_latest_signals
-
-        mock_conn = AsyncMock()
-        mock_conn.fetch = AsyncMock(return_value=[])
-        mock_pool = MagicMock()
-        mock_pool.acquire = MagicMock(return_value=AsyncMock(
-            __aenter__=AsyncMock(return_value=mock_conn),
-            __aexit__=AsyncMock(return_value=False),
-        ))
-
-        await fetch_latest_signals(mock_pool, direction="BUY")
-
-        call_args = mock_conn.fetch.call_args
-        sql = call_args[0][0]
-        assert "article_type" in sql
 
 
 # ── Telegram badge tests ──────────────────────────────────────────────────────

@@ -83,10 +83,10 @@ from core.db_schema import (    # noqa: E402,F401
     _CREATE_SECTOR_DAILY_STATS, _RLS_ALWAYS, _RLS_IF_EXISTS,
 )
 from core.db_news import (      # noqa: E402,F401
-    is_duplicate, save_article, fetch_latest, load_seen_hashes,
+    save_article, load_seen_hashes,
 )
 from core.db_signals import (   # noqa: E402,F401
-    save_signal, fetch_latest_signals,
+    save_signal,
 )
 from core.db_market import (    # noqa: E402,F401
     upsert_ticker_names,

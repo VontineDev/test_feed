@@ -491,11 +491,8 @@ CREATE TABLE paper_positions (
 |------|------|
 | `create_pool()` | asyncpg 커넥션 풀 생성 |
 | `init_db()` | 테이블·인덱스 자동 생성 |
-| `is_duplicate()` | url_hash 중복 체크 |
 | `save_article()` | 기사 저장 (ON CONFLICT DO NOTHING) |
 | `save_signal()` | 신호 저장 |
-| `fetch_latest()` | 최신 기사 조회 (category·source 필터) |
-| `fetch_latest_signals()` | 최신 신호 조회 (direction·strength 필터) |
 | `load_seen_hashes()` | 재시작 시 중복 해시 복원 |
 | `save_chart_signals()` | 스크리닝 결과 저장 (ON CONFLICT DO UPDATE) |
 | `load_chart_signals_latest()` | 가장 최근 주차 스크리닝 결과 전체 조회 |

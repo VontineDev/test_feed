@@ -15,15 +15,6 @@ import asyncpg
 logger = logging.getLogger(__name__)
 
 
-# ── 중복 체크 ─────────────────────────────────────────────────
-async def is_duplicate(pool: asyncpg.Pool, url_hash: str) -> bool:
-    async with pool.acquire() as conn:
-        row = await conn.fetchval(
-            "SELECT 1 FROM news_articles WHERE url_hash = $1", url_hash
-        )
-    return row is not None
-
-
 # ── 기사 저장 ─────────────────────────────────────────────────
 async def save_article(
     pool: asyncpg.Pool,
@@ -70,42 +61,6 @@ async def save_article(
     except Exception as e:
         logger.error("DB 저장 실패 [%s]: %s", url_hash, e)
         return False
-
-
-# ── 최신 기사 조회 (트레이딩 시스템 연동용) ───────────────────
-async def fetch_latest(
-    pool: asyncpg.Pool,
-    category: Optional[str] = None,
-    source: Optional[str] = None,
-    limit: int = 20,
-) -> list[dict]:
-    """
-    최신 기사 조회. category / source 로 필터링 가능.
-    예) fetch_latest(pool, category="macro", limit=10)
-    """
-    conditions = []
-    args: list = [limit]
-
-    if category:
-        args.append(category)
-        conditions.append(f"category = ${len(args)}")
-    if source:
-        args.append(source)
-        conditions.append(f"source = ${len(args)}")
-
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-
-    query = f"""
-        SELECT id, source, category, title_en, summary_ko,
-               llm_backend, published_at, fetched_at
-        FROM   news_articles
-        {where}
-        ORDER  BY fetched_at DESC
-        LIMIT  $1
-    """
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(query, *args)
-    return [dict(r) for r in rows]
 
 
 # ── 재시작 시 중복 해시 복원 ──────────────────────────────────
