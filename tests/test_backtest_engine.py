@@ -6,7 +6,6 @@ test_backtest_engine.py — 백테스트 엔진 단위 테스트
 
 from __future__ import annotations
 
-import math
 from datetime import date, timedelta
 from typing import Optional, cast
 
@@ -21,14 +20,13 @@ def _idx_date(v) -> date:
 from analysis.backtest.models import (
     BacktestConfig, BacktestResult, GroupMetrics, SignalRecord,
 )
-from analysis.backtest.config import TX_COST_DEFAULT, _STOP_LOSS_PCT
+from analysis.backtest.config import TX_COST_DEFAULT
 from analysis.backtest.helpers import (
     _build_price_lookup,
     _build_weekly_ichimoku,
     _compute_group_metrics,
     _compute_mdd,
     _compute_portfolio_returns,
-    _compute_rsi,
     _compute_sharpe,
     _fill_returns,
     _find_ichimoku_sell,

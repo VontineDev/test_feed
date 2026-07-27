@@ -4,7 +4,6 @@ import asyncio
 import logging
 import random
 from datetime import date
-from typing import Optional
 
 import httpx
 
@@ -24,7 +23,6 @@ from data.kiwoom_paper_trader import (
     _qty_from_price,
     insert_pending,
     get_open_slot_count,
-    init_paper_positions,
 )
 from telegram.telegram_notify import _get_token, _get_chat_id, _post_message
 

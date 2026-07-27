@@ -92,8 +92,6 @@ def fetch_transcript_direct(video_id: str) -> str | None:
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
-    import httpx
-    import yt_dlp
     from data.youtube_narrative_sync import fetch_video_list
 
     load_dotenv(ROOT / ".env")
@@ -129,7 +127,7 @@ if __name__ == "__main__":
             print(f"        -> 자막 {len(text):,}자 확보\n")
             collected.append((v, text))
         else:
-            print(f"        -> 자막 없음\n")
+            print("        -> 자막 없음\n")
 
     print(f"총 자막 확보: {len(collected)}개")
 

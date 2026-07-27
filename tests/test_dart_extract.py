@@ -146,7 +146,7 @@ def main() -> None:
     out.write("=" * 72 + "\n")
     out.write(result + "\n")
     out.write("=" * 72 + "\n")
-    out.write(f"\n비교 기준: 공시추출샘플클로드.md\n")
+    out.write("\n비교 기준: 공시추출샘플클로드.md\n")
     out.flush()
 
 

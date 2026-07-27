@@ -18,7 +18,6 @@ youtube_backtest.py — 블라인드 백테스트: attention_score vs forward re
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 from typing import cast
@@ -226,7 +225,7 @@ def run_weekly_monthly_backtest(min_samples: int = 20) -> dict:
     q = max(1, n // 3)
     low_ret  = statistics.mean(r for _, r in pairs[:q])
     high_ret = statistics.mean(r for _, r in pairs[-q:])
-    print(f"\n[attention_score 구간별 평균 ret_20d]")
+    print("\n[attention_score 구간별 평균 ret_20d]")
     print(f"  하위 3분위 (n={q}): {low_ret:+.4f} ({low_ret*100:+.2f}%)")
     print(f"  상위 3분위 (n={q}): {high_ret:+.4f} ({high_ret*100:+.2f}%)")
 

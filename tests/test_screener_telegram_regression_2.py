@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional
-from unittest.mock import AsyncMock, patch, call
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -126,7 +126,6 @@ class TestHandleScreenerPassesChatId:
         target_chat_id로 전달해야 합니다.
         """
         from telegram.telegram_bot import _handle_screener
-        from analysis.chart_screener import ScreenResult
 
         fake_row = {
             "ticker": "005930.KS",

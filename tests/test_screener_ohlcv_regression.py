@@ -18,7 +18,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-import pytest
 
 
 def _make_ohlcv_df(close: float, rows: int = 65) -> pd.DataFrame:

@@ -2,9 +2,8 @@
 from __future__ import annotations
 
 import sys
-from datetime import date
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
 import pytest

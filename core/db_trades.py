@@ -28,7 +28,6 @@ async def save_trade(
     signal_date, stage_at_entry, after_*_at_signal 는 내부에서 자동 조회.
     반환: 저장된 row id, 실패 시 None.
     """
-    from datetime import date as _date
     try:
         async with pool.acquire() as conn:
             # 가장 최근 Stage 신호 조회 (classified_date 사용)
@@ -102,7 +101,6 @@ async def close_position(
     SELECT FOR UPDATE로 더블탭 레이스 컨디션 차단.
     반환: 닫힌 row dict, 없으면 None.
     """
-    from datetime import date as _date
     try:
         async with pool.acquire() as conn:
             async with conn.transaction():

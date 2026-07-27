@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import httpx
@@ -35,7 +35,7 @@ from reports.summarizer import (
     _call_ollama_native,
     _ollama_is_alive,
     _lmstudio_is_alive,
-    OLLAMA_BASE, OLLAMA_MODEL,
+    OLLAMA_MODEL,
     LM_STUDIO_BASE, LM_STUDIO_MODEL,
     Backend,
     SYSTEM_PROMPT_SIGNAL,

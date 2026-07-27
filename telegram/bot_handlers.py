@@ -98,7 +98,7 @@ async def _handle_status(http: httpx.AsyncClient, chat_id: str, pool) -> None:
         f"📰 누적 수집: {esc(str(collected))}건",
         f"📊 최근 24h 수집: {esc(str(today_count))}건",
         f"🎯 최근 24h 신호: {esc(str(signal_count))}건",
-        f"🌐 피드: Reuters \\+ Investing \\+ CNBC",
+        "🌐 피드: Reuters \\+ Investing \\+ CNBC",
     ]
     if market_line:
         lines.insert(2, market_line)
@@ -275,7 +275,7 @@ async def _handle_backtest_compose(
             "⏳ 백테스트가 이미 실행 중입니다. 완료 후 결과가 전송됩니다.")
         return
 
-    label = f"Tier-1 전체 비교" if strategy == "ALL" else strategy
+    label = "Tier-1 전체 비교" if strategy == "ALL" else strategy
     await bot._send_plain(http, chat_id,
         f"📊 조합전략 백테스트 시작 — {label}\n"
         f"📅 {start} ~ {end}  {market}\n"
@@ -980,7 +980,7 @@ async def _handle_paper_exit(http: httpx.AsyncClient, chat_id: str, pool, args: 
     sell_ord = ""
 
     try:
-        from data.kiwoom_paper_trader import KiwoomPaperTrader, update_to_closed
+        from data.kiwoom_paper_trader import KiwoomPaperTrader
         _trader = KiwoomPaperTrader()
         qty = row["qty"] or 1
         sell_ord = await loop.run_in_executor(None, _trader.place_sell, row["ticker"], qty)

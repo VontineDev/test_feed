@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import copy
 from datetime import date, timedelta
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -16,7 +16,6 @@ import pytest
 # 프로젝트 루트에서 임포트
 from analysis.backtest.models import BacktestConfig, SignalRecord
 from analysis.backtest.exit_models import _compute_exit_logic, _compute_sell_signals_and_s2
-from analysis.backtest.config import _STOP_LOSS_PCT
 
 
 # ── 헬퍼 ──────────────────────────────────────────────────────────────

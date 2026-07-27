@@ -154,7 +154,6 @@ def sweep_backtest(
     )
     from analysis.backtest.helpers import _fill_returns, _build_price_lookup
     from analysis.backtest.exit_models import _compute_sell_signals_and_s2
-    from analysis.chart_screener import get_all_tickers, fetch_kind_sector_map
     from core.ohlcv_cache import batch_fetch_cached, fetch_index_cached
 
     # ── 1. 티커 목록 ───────────────────────────────────────────────

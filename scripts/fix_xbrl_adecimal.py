@@ -3,7 +3,6 @@ ADECIMAL 미적용으로 인한 잘못된 수치 일괄 수정.
 LLM 재실행 없이 XBRL 재파싱만 수행하여 revenue_json 업데이트.
 """
 import asyncio, json, sys
-from pathlib import Path
 sys.path.insert(0, ".")
 from dotenv import load_dotenv; load_dotenv()
 from core.db import create_pool

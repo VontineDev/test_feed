@@ -30,7 +30,7 @@ from common import (
 
 import sys as _sys
 _sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from analysis.macro_tracker import MacroTracker, DEFAULT_TICKERS as _MACRO_TICKERS  # noqa: E402
+from analysis.macro_tracker import MacroTracker  # noqa: E402
 from core.tickers import kiwoom_to_yfinance as _kiwoom_to_yfinance  # noqa: E402
 
 logger = logging.getLogger(__name__)

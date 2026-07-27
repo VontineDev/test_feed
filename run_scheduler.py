@@ -40,18 +40,13 @@ try:
 except ImportError:
     pass  # python-dotenv 미설치 시 환경변수 직접 설정으로 동작
 
-from reports.summarizer import summarize, Backend
+from reports.summarizer import summarize
 from core.db import (
     create_pool, get_dsn, init_db, save_article, save_signal,
-    load_seen_hashes, save_chart_signals, load_chart_signals_latest,
-    get_stage1_history, save_stage_classifications,
-    get_stage1_watchlist, upsert_watchlist_vol_log, get_watchlist_vol_log,
+    load_seen_hashes,
 )
 from telegram.telegram_notify import (
     send_signal as tg_send_signal,
-    send_weekly_screener as tg_send_weekly_screener,
-    send_screener_comparison as tg_send_screener_comparison,
-    send_watchlist_brief as tg_send_watchlist_brief,
 )
 from analysis.signal_detector import detect_signal
 from core.article_fetcher import fetch_article_body
@@ -65,7 +60,7 @@ from jobs.scheduler_jobs import (
     _trigger_watcher_job,
 )
 from jobs.scheduler_wrappers import (
-    _build_watchlist_entries,
+    _build_watchlist_entries,  # noqa: F401 — tests/test_watchlist_features.py가 patch(..., create=False)로 참조, 정적분석상 미사용
     _watchlist_brief_job,
     _daily_krx_refresh_job,
     _youtube_narrative_sync_job,
@@ -79,7 +74,6 @@ from jobs.scheduler_wrappers import (
     _daily_dart_disclosure_job,
     _monthly_dart_xbrl_job,
     _annual_dart_extractor_job,
-    _dart_screened_sync_job,
     _paper_exit_checker_job,
     _paper_eod_sampler_job,
     _paper_open_entry_job,

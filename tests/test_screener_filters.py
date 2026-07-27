@@ -3,9 +3,7 @@ test_screener_filters.py — unit tests for screener_filters.py
 """
 from __future__ import annotations
 
-import pytest
 from dataclasses import replace
-from unittest.mock import patch
 
 from analysis.chart_screener import ScreenResult
 from analysis.screener_filters import (

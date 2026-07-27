@@ -256,7 +256,7 @@ async def _main() -> None:
 
     # 3. After 조회 + 비교
     after = await _load_db(pool, corp_name)
-    print(f"\n=== Before vs After 비교 ===")
+    print("\n=== Before vs After 비교 ===")
     _compare(before, after)
 
     await pool.close()

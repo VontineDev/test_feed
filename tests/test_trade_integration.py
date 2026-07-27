@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import pytest
 import pytest_asyncio
-from datetime import date, timedelta
+from datetime import date
 
 # DB 접근 불가 시 전체 모듈 skip
 def _db_available() -> bool:

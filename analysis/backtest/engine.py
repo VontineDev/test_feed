@@ -399,7 +399,7 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
     if flow_lookup is not None:
         notes = []
         if config.mode in ("stage", "cross"):
-            notes.append(f"S1 조건 5(외·기관 순매수 OR) 적용")
+            notes.append("S1 조건 5(외·기관 순매수 OR) 적용")
         notes.append(f"S3 조건 5(외·기관 동시 순매수 AND) 적용 — {len(flow_lookup)}건 기준")
         note = " | ".join(notes)
     else:

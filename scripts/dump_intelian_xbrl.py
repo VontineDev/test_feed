@@ -44,7 +44,7 @@ for m in TE_RE.finditer(text):
 
 # XBRL 직접 추출 결과
 xbrl = extract_xbrl_quarterly(xml_path)
-print(f"\n=== extract_xbrl_quarterly 결과 ===")
+print("\n=== extract_xbrl_quarterly 결과 ===")
 if xbrl:
     rv = xbrl['revenue']
     op = xbrl['op_profit']
@@ -67,7 +67,7 @@ async def check_db():
     if r:
         rev = json.loads(r["revenue_json"])
         c = rev.get("consolidated", {})
-        print(f"\n=== DB 저장값 ===")
+        print("\n=== DB 저장값 ===")
         print(f"  periods : {rev.get('periods')}")
         print(f"  unit    : {rev.get('unit')}")
         print(f"  revenue : {c.get('revenue')}")

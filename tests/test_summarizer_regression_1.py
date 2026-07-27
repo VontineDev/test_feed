@@ -10,7 +10,7 @@ ISSUE-005: Empty response when Ollama returns thinking in message.thinking (no c
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 import pytest
 import httpx
 

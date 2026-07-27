@@ -102,7 +102,7 @@ class TestParseSignalJsonArticleType:
             assert sig.article_type == expected, f"{raw_type!r} should map to {expected!r}"
 
     def test_parse_failure_returns_other(self):
-        from analysis.signal_detector import _parse_signal_json, NONE_SIGNAL
+        from analysis.signal_detector import _parse_signal_json
         from reports.summarizer import Backend
 
         sig = _parse_signal_json("this is not json at all", Backend.OLLAMA)

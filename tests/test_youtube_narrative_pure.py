@@ -5,9 +5,7 @@ YouTube 내러티브 파이프라인 — 순수 로직 단위 테스트.
 """
 import json
 import os
-import sys
 from datetime import date
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest

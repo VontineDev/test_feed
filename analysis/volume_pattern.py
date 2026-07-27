@@ -11,7 +11,7 @@ import asyncio
 import logging
 import sys
 import os
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import cast
 
 import pandas as pd
@@ -266,7 +266,7 @@ def build_report(df, ticker: str, display_name: str, full_name: str, market: str
     df["date"] = df.index.date
     daily_vol = df.groupby("date")["Volume"].sum()
     total_period_vol = daily_vol.sum()
-    lines.append(f"  일별 거래량:")
+    lines.append("  일별 거래량:")
     for date, vol in daily_vol.items():
         weekday = cast(str, pd.Timestamp(date).day_name())[:3]
         lines.append(f"     {date} ({weekday})  {int(vol):>14,}주")

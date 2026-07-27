@@ -9,7 +9,6 @@ Covers:
 """
 from __future__ import annotations
 
-import pytest
 
 
 # ── send_signal: HIGH CONFIDENCE 배지 ───────────────────────────────────────
@@ -41,7 +40,7 @@ class TestSendSignalHighConfidence:
         monkeypatch.setattr(telegram_notify, "_get_channel_id", lambda: "")
         monkeypatch.setattr(telegram_notify, "_post_message", fake_post)
 
-        import asyncio, httpx
+        import asyncio
         art = {
             "title": "테스트 기사",
             "url": "https://example.com",

@@ -32,3 +32,4 @@ Key routing rules:
 - typecheck-frontend: cd dashboard/frontend && npx tsc -b --noEmit
 - test: venv/Scripts/python.exe -m pytest
 - test-frontend: cd dashboard/frontend && npx vitest run
+- lint: venv/Scripts/python.exe -m ruff check . (select=F만 사용 — ruff.toml 참고, 2026-07-26 도입)

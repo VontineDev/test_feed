@@ -396,9 +396,8 @@ class TestSaveChartSignalsColumns:
     @pytest.mark.asyncio
     async def test_insert_includes_high_w_and_volume_w(self):
         """Verify conn.execute receives 14 positional parameters ($1..$14)."""
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import AsyncMock, MagicMock
         from core.db import save_chart_signals
-        from analysis.chart_screener import ScreenResult
         from datetime import datetime, timezone
 
         result = ScreenResult(
@@ -451,7 +450,6 @@ class TestSaveChartSignalsColumns:
     @pytest.mark.asyncio
     async def test_screen_result_high_w_volume_w_default_none(self):
         """New fields default to None — existing ScreenResult() callers are backward-compatible."""
-        from analysis.chart_screener import ScreenResult
         from datetime import datetime, timezone
 
         r = ScreenResult(

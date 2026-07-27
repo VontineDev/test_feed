@@ -1,0 +1,9 @@
+# ruff 설정 — pyflakes(F)만 활성화: 실제 버그(미사용 import/변수, 재정의,
+# f-string 실수)만 잡고 스타일 규칙(line-too-long, blind-except 등)은 켜지
+# 않는다. 코드베이스가 기존에 린트 없이 자라와서 스타일 규칙까지 켜면
+# 노이즈가 압도적(1000+건)이라 실용적으로 좁혔다 — 2026-07-26 결정.
+target-version = "py314"
+extend-exclude = ["venv", "data", "logs", "results", "reports"]
+
+[lint]
+select = ["F"]

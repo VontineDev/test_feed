@@ -1,6 +1,5 @@
 """삼성전자/SK하이닉스 DB 수치 확인 및 DART XML 대조"""
 import json, asyncio, sys
-from pathlib import Path
 sys.path.insert(0, ".")
 from dotenv import load_dotenv; load_dotenv()
 from core.db import create_pool

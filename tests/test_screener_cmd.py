@@ -4,7 +4,6 @@ DB에서 최신 스크리닝 결과를 로드하고 DM + 채널로 전송.
 """
 import asyncio
 import logging
-import os
 
 from dotenv import load_dotenv
 load_dotenv()

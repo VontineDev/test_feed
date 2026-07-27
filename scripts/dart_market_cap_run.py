@@ -158,7 +158,7 @@ async def run_download_and_extract(
     dry_run: bool = False,
 ) -> None:
     from data.dart_download import download_reports
-    from data.dart_extractor import extract_all_for_company, _ollama_is_alive as _ext_ollama_check
+    from data.dart_extractor import extract_all_for_company
     from core.db import create_pool, init_db
 
     api_key = os.environ.get("DART_API_KEY")

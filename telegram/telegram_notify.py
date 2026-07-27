@@ -206,7 +206,7 @@ async def send_article(
 
 # ── 단독 테스트 ───────────────────────────────────────────────
 if __name__ == "__main__":
-    import asyncio, sys
+    import asyncio
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     TEST_ART = {

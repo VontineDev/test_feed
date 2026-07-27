@@ -3,7 +3,6 @@ test_resolution_diagnostics.py — unit tests for ticker resolution miss diagnos
 """
 from __future__ import annotations
 
-import pytest
 
 
 class TestResolutionMissReport:

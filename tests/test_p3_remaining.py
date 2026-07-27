@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import os
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 
 # ── 1. Condition G NaN Calibration ──────────────────────────────────────────
@@ -99,7 +98,6 @@ class TestEnhancedIchimoku:
 
     def test_enhanced_false_when_nan(self):
         """NaN 데이터 → is_enhanced=False (안전 처리)."""
-        import math
         assert self._compute_enhanced(
             tenkan_cur=float("nan"), kijun_cur=100,
             tenkan_prev=115, kijun_prev=95

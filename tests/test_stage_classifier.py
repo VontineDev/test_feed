@@ -7,7 +7,6 @@ test_stage_classifier.py â€” stage_classifier.py + stage_classifier_legacy.py ì 
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 from datetime import date, timedelta
 from typing import Optional
 

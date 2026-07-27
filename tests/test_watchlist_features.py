@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 
 
 # ── send_watchlist_brief 메시지 포맷 테스트 ─────────────────────────────────
@@ -186,7 +185,6 @@ class TestHandleWatchlist:
             # patch imports inside _handle_watchlist
             with patch("telegram.telegram_bot._build_watchlist_entries_ref", mock_build, create=True), \
                  patch("run_scheduler._build_watchlist_entries", mock_build, create=False):
-                import importlib
                 import run_scheduler
                 original = run_scheduler._build_watchlist_entries
                 run_scheduler._build_watchlist_entries = mock_build

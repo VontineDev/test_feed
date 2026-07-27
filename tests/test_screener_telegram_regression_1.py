@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 

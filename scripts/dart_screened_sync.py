@@ -174,12 +174,12 @@ async def _process_one(
                 api_key=api_key,
             )
             if stats["downloaded"] == 0 and stats["failed"] > 0:
-                return f"download_failed"
+                return "download_failed"
             if stats["downloaded"] == 0:
-                return f"no_report"
+                return "no_report"
         except Exception as e:
             logger.warning("[dart-screened] 다운로드 실패 %s: %s", corp_name, e)
-            return f"download_error"
+            return "download_error"
 
         # 다운로드 후 재확인
         has_xml = corp_dir.exists() and any(corp_dir.rglob("*.xml"))
@@ -194,7 +194,7 @@ async def _process_one(
         return f"extracted:{n}"
     except Exception as e:
         logger.warning("[dart-screened] 추출 실패 %s: %s", corp_name, e)
-        return f"extract_error"
+        return "extract_error"
 
 
 # ── 메인 진입점 ───────────────────────────────────────────────

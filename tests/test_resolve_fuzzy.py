@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from core.ticker_cache import TickerCache
 
@@ -146,7 +145,7 @@ class TestParseSignalJsonSymbolResolution:
 
 class TestTradeSignalConfidence:
     def test_default_confidence_is_normal(self):
-        from analysis.signal_detector import TradeSignal, NONE_SIGNAL
+        from analysis.signal_detector import TradeSignal
         from reports.summarizer import Backend
         sig = TradeSignal(
             direction="BUY", strength=3, reason="test",

@@ -15,7 +15,6 @@ Note: Groups 8-9 (cross_analyze, _fetch_yfinance) removed with cross-analysis fe
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd

@@ -221,7 +221,7 @@ async def _process_update(http: httpx.AsyncClient, update: dict, pool) -> None:
     elif cmd in ("/help", "/start"):
         await _handle_help(http, chat_id)
     else:
-        await _send(http, chat_id, f"알 수 없는 명령어입니다\\. /help 를 입력해보세요\\.")
+        await _send(http, chat_id, "알 수 없는 명령어입니다\\. /help 를 입력해보세요\\.")
 
 
 # ── 봇 폴링 루프 (별도 asyncio 태스크로 실행) ────────────────

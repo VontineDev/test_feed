@@ -8,7 +8,6 @@ test_paper_analytics.py — /api/paper/curve + /api/paper/export 단위 테스�
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from pathlib import Path
 from datetime import date, datetime, timezone

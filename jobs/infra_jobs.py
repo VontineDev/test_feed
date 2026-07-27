@@ -205,7 +205,6 @@ async def youtube_narrative_sync_job() -> None:
 
 async def youtube_attention_score_job() -> None:
     """평일 09:10 KST — rolling 5영업일 attention_score 집계."""
-    from datetime import date as _date
     from core.db import get_dsn as _get_dsn
     from data.youtube_narrative_sync import compute_attention_scores
     logger.info("[yt-attn] 집계 시작")

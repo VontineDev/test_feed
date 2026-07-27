@@ -12,7 +12,7 @@ from typing import Optional, cast
 
 import pandas as pd
 
-from analysis.backtest.models import BacktestConfig, GroupMetrics, SignalRecord
+from analysis.backtest.models import GroupMetrics, SignalRecord
 
 # ── 유틸 함수 ─────────────────────────────────────────────────────
 

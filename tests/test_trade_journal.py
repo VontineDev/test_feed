@@ -11,9 +11,8 @@ test_trade_journal.py — 거래 저널 unit tests (asyncpg mock)
 
 from __future__ import annotations
 
-import asyncio
-from datetime import date, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from datetime import date
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
