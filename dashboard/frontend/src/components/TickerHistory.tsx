@@ -39,6 +39,7 @@ const EXIT_LABEL: Record<string, string> = {
   trail: '트레일링',
   period_end: '기간종료',
   manual: '수동',
+  invalid: '무효',
 }
 
 const pctColor = (v: number | null) => {
