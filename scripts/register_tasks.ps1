@@ -24,13 +24,27 @@ function Register-CrawlerTask {
     $ScriptFile    = "$ProjectDir\run_scheduler.py"
 
     # "@ 는 반드시 열 0에 위치해야 함
+    # 크래시 자동 재시작 루프 — run_scheduler.py 종료 시 5초 후 재시작 (TradingDashboard와
+    # 동일 패턴). Task Scheduler의 Boot/LogOn 트리거 + RestartCount만으로는 프로세스가
+    # 외부 요인으로 죽었을 때 STILL_ACTIVE 오판(LastTaskResult가 갱신 안 됨)으로 자동
+    # 재시작이 걸리지 않는 사례가 있었음 (2026-07-31 investigate 세션에서 확인).
     @"
 @echo off
 cd /d $ProjectDir
+
+tasklist /FI "IMAGENAME eq tor.exe" 2>NUL | find /I "tor.exe" >NUL
+if errorlevel 1 (
+    start "" /min "C:\Users\1\Desktop\Tor Browser\Browser\TorBrowser\Tor\tor.exe" -f "$ProjectDir\tor-daemon\torrc"
+)
+
 for /f "usebackq tokens=1,* delims==" %%a in (".env") do (
     if not "%%a"=="" if not "%%b"=="" set %%a=%%b
 )
-"$PythonExe" "$ScriptFile" --interval 10
+
+:restart
+"$PythonExe" "$ScriptFile" --interval 10 --no-summary
+timeout /t 5 /nobreak >nul
+goto restart
 "@ | Set-Content -Path $WrapperScript -Encoding UTF8
 
     $existing = schtasks /Query /TN $TaskName 2>$null
