@@ -86,21 +86,30 @@ GROUP BY model;
 
 ## 모델 슬롯 설정
 
-`data/kiwoom_paper_trader.py`의 `MODEL_CONFIG`를 편집하여 슬롯 수와 포지션 금액을 조정합니다:
+`data/kiwoom_paper_trader.py`의 `MODEL_CONFIG`를 편집하여 모델별 슬롯 수(분산 종목 수)를 조정합니다:
 
 ```python
 MODEL_CONFIG = {
-    "stage":           {"max_slots": 10, "position_krw": 10_000_000},
-    "kosdaq":          {"max_slots": 10, "position_krw": 10_000_000},
-    "cross":           {"max_slots":  5, "position_krw": 20_000_000},
-    "ichimoku":        {"max_slots": 10, "position_krw": 10_000_000},
-    "compose-funnel1": {"max_slots": 10, "position_krw": 10_000_000},
-    "compose-and1":    {"max_slots":  5, "position_krw": 20_000_000},
-    "compose-score1":  {"max_slots":  5, "position_krw": 20_000_000},
+    "stage":           {"max_slots": 10},
+    "kosdaq":          {"max_slots": 10},
+    "cross":           {"max_slots":  5},
+    "ichimoku":        {"max_slots": 10},
+    "compose-funnel1": {"max_slots": 10},
+    "compose-and1":    {"max_slots":  5},
+    "compose-score1":  {"max_slots":  5},
 }
 ```
 
-`max_slots` 초과 시 신규 진입이 거부됩니다. `position_krw / 현재가`로 주문 수량이 계산됩니다.
+`max_slots` 초과 시 신규 진입이 거부됩니다.
+
+포지션당 금액은 더 이상 고정값이 아니라 **계좌 자산 기준으로 매 실행마다 동적 계산**됩니다(2026-07-31 재설계).
+`compute_slot_krw()`가 계좌 추정예탁자산(`prsm_dpst_aset_amt`)의 `1 - CASH_RESERVE_RATIO`(기본 20% 현금 비중 제외)만큼을
+`ACTIVE_MODELS`(kosdaq 제외 — 신호가 전혀 생성되지 않는 별도 버그) 수로 균등 분배하고, 그 금액을 각 모델의
+`max_slots`로 나눠 슬롯당 금액을 정합니다. 슬롯이 적은 모델(cross/compose-and1/compose-score1, 5개)은
+슬롯당 금액이 크고, 슬롯이 많은 모델(10개)은 슬롯당 금액이 작지만, 모델별 총 배정 금액은 동일합니다.
+
+`paper_open_entry_job`은 매수 주문 전에 "기투자금액 + 이번 주문 금액"이 배포 가능 자본(현금 비중 제외분)을
+넘는지 확인하고, 넘으면 주문을 스킵합니다(다음 실행에서 재시도).
 
 ## 주의 사항
 

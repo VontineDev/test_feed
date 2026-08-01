@@ -575,7 +575,7 @@ class BacktestConfig:
     end_date: date
     market: str = "ALL" # KOSPI | KOSDAQ | ALL
     tp1_pct: float = 0.25
-    tp1_ratio: float = 0.50
+    tp1_ratio: float = 0.50 
     trail_pct: float = 0.10
     hard_stop_pct: float = 0.10
     hold_weeks: int = 13         # 최대 보유 기간 (주)

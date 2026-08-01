@@ -190,23 +190,39 @@ KOSDAQ의 trail이 15%인 이유는 KOSPI(10%)보다 변동성이 크기 때문�
 
 ## 모델 슬롯과 포지션 금액
 
-`MODEL_CONFIG`는 `kiwoom_paper_trader.py`에 하드코딩되어 있다:
+`MODEL_CONFIG`는 `kiwoom_paper_trader.py`에 하드코딩되어 있다 (슬롯 수만 — 포지션 금액은 아래 참고):
 
 ```python
 MODEL_CONFIG = {
-    "stage":           {"max_slots": 10, "position_krw": 10_000_000},
-    "kosdaq":          {"max_slots": 10, "position_krw": 10_000_000},
-    "cross":           {"max_slots":  5, "position_krw": 20_000_000},
-    "ichimoku":        {"max_slots": 10, "position_krw": 10_000_000},
-    "compose-funnel1": {"max_slots": 10, "position_krw": 10_000_000},
-    "compose-and1":    {"max_slots":  5, "position_krw": 20_000_000},
-    "compose-score1":  {"max_slots":  5, "position_krw": 20_000_000},  # txamt z-score top-20
+    "stage":           {"max_slots": 10},
+    "kosdaq":          {"max_slots": 10},
+    "cross":           {"max_slots":  5},
+    "ichimoku":        {"max_slots": 10},
+    "compose-funnel1": {"max_slots": 10},
+    "compose-and1":    {"max_slots":  5},
+    "compose-score1":  {"max_slots":  5},  # txamt z-score top-20
 }
 ```
 
 `eod_sampler_job`은 `get_open_slot_count(model)` — `open + pending` 합산 — 으로 남은 슬롯을 계산한다. 슬롯이 0이면 해당 모델의 신규 신호는 샘플링되지 않는다.
 
-Cross 모델의 `max_slots=5, position_krw=20M`은 나머지 모델 대비 포지션 크기가 2배다. Cross는 Stage1 + Ichimoku 이중 조건이므로 신호 빈도가 낮고, 확인된 신호에 더 큰 금액을 배정하는 설계다.
+### 포지션 금액 (2026-07-31 재설계)
+
+원래는 모델별 고정 원화 금액(`position_krw`)이었으나, 계좌 실제 자산 규모(당시 약 3.75억원, 이미 -18.6%
+손실)를 무시한 채 합계 약 7억원어치를 배정해 신규 진입이 "RC4025 모의투자 매수증거금이 부족합니다"로
+상시 실패하는 문제가 발견됐다. `compute_slot_krw()`로 교체:
+
+1. 계좌 추정예탁자산(`prsm_dpst_aset_amt`) × `(1 - CASH_RESERVE_RATIO)`(기본 20%)로 "배포 가능 자본"을 구한다.
+2. `ACTIVE_MODELS`(kosdaq 제외 — 신호가 전혀 생성되지 않는 별도 버그, 죽은 모델에 자본을 배정하면 나머지가 손해) 수로 균등 분배해 **모델별 동일 금액**을 배정한다.
+3. 그 금액을 각 모델의 `max_slots`로 나눠 슬롯당 금액을 정한다.
+
+Cross/compose-and1/compose-score1(슬롯 5개)은 stage/ichimoku/compose-funnel1(슬롯 10개)보다 슬롯당 금액이
+2배 크지만, 모델 총 배정액은 동일하다 — Cross류는 Stage1+Ichimoku 이중 조건 등으로 신호 빈도가 낮으니
+확인된 신호에 더 큰 금액을 싣는 기존 설계 의도를 유지한 것이다.
+
+`paper_open_entry_job`은 실행 시작 시 계좌 잔고를 한 번 조회해 슬롯당 금액과 배포 가능 자본을 계산하고,
+각 매수 주문 전에 "이번 실행에서 이미 낸 주문 포함 기투자금액 + 이번 주문 금액"이 배포 가능 자본을
+넘으면 스킵한다(현금 비중 보호) — 다음 실행에서 재시도된다.
 
 ---
 

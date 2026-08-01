@@ -23,6 +23,8 @@ from data.kiwoom_paper_trader import (
     _qty_from_price,
     insert_pending,
     get_open_slot_count,
+    compute_slot_krw,
+    deployable_capital,
 )
 from telegram.telegram_notify import _get_token, _get_chat_id, _post_message
 
@@ -218,7 +220,7 @@ async def paper_eod_sampler_job(db_pool, paper_trader) -> None:
     for _model, _signals, _params in model_queue:
         if not _signals:
             continue
-        _cfg       = MODEL_CONFIG.get(_model, {"max_slots": 10, "position_krw": 10_000_000})
+        _cfg       = MODEL_CONFIG.get(_model, {"max_slots": 10})
         _open_cnt  = await get_open_slot_count(db_pool, _model)
         _available = _cfg["max_slots"] - _open_cnt
         if _available <= 0:
@@ -265,7 +267,13 @@ async def paper_eod_sampler_job(db_pool, paper_trader) -> None:
 
 
 async def paper_open_entry_job(db_pool, paper_trader) -> None:
-    """장 시작(09:00) 후 시가 확정 → pending 포지션 매수주문 제출."""
+    """장 시작(09:00) 후 시가 확정 → pending 포지션 매수주문 제출.
+
+    슬롯당 매수 금액은 실행 시점 계좌 자산 기준으로 매번 다시 계산한다
+    (compute_slot_krw) — 모델별로 동일 금액을 배분하고, 현금 비중(CASH_RESERVE_RATIO)
+    만큼은 신규 진입에서 제외한다. 이번 실행에서 이미 낸 주문의 매입금액도
+    누적 반영해, 한 번에 여러 건을 살 때 배포 가능 자본을 넘기지 않도록 한다.
+    """
     _loop = asyncio.get_running_loop()
 
     # signal_date 무관하게 미체결 pending 전체 처리 (과거 실패분 포함 재시도)
@@ -274,7 +282,13 @@ async def paper_open_entry_job(db_pool, paper_trader) -> None:
         logger.info("[paper-entry] pending 없음")
         return
 
-    logger.info("[paper-entry] %d건 pending → 매수주문 시작", len(_pending))
+    _balance   = await _loop.run_in_executor(None, paper_trader.get_balance)
+    _slot_krw  = compute_slot_krw(_balance)
+    _deployable = deployable_capital(_balance)
+    _invested   = _balance["tot_pur_amt"]
+
+    logger.info("[paper-entry] %d건 pending → 매수주문 시작 (배포가능자본=%.0f, 기투자=%.0f)",
+                len(_pending), _deployable, _invested)
 
     for _pos in _pending:
         _ticker = _pos["ticker"]
@@ -290,10 +304,19 @@ async def paper_open_entry_job(db_pool, paper_trader) -> None:
             logger.warning("[paper-entry] %s 가격 조회 실패 — 스킵", _ticker)
             continue
 
-        _cfg = MODEL_CONFIG.get(_model, {"max_slots": 10, "position_krw": 10_000_000})
-        _qty = _qty_from_price(_cfg["position_krw"], _open_px)
+        _slot_amount = _slot_krw.get(_model, 10_000_000)
+        _qty = _qty_from_price(_slot_amount, _open_px)
         if _qty <= 0:
             logger.warning("[paper-entry] %s qty=0 (price=%d) — 스킵", _ticker, _open_px)
+            continue
+
+        _order_cost = _qty * _open_px
+        if _invested + _order_cost > _deployable:
+            logger.info(
+                "[paper-entry] %s 현금 비중 보호 — 배포가능자본 초과로 스킵 "
+                "(기투자=%.0f + 주문=%.0f > 한도=%.0f)",
+                _ticker, _invested, _order_cost, _deployable,
+            )
             continue
 
         # 매수주문 제출
@@ -304,6 +327,8 @@ async def paper_open_entry_job(db_pool, paper_trader) -> None:
         except Exception as _e:
             logger.warning("[paper-entry] %s 매수주문 실패: %s", _ticker, _e)
             continue
+
+        _invested += _order_cost  # 같은 실행 내 후속 주문의 한도 판정에 반영
 
         # pending → open
         try:

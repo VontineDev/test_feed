@@ -40,16 +40,53 @@ _QUOTE_APPKEY    = os.environ.get("KIWOOM_APPKEY", "")
 _QUOTE_SECRETKEY = os.environ.get("KIWOOM_SECRETKEY", "")
 _EXCHANGE        = "KRX"   # mockapi는 KRX만 지원
 
-# 모델별 슬롯 수 / 포지션당 금액(원)
+# 모델별 슬롯 수 (분산 종목 수) — 포지션당 금액은 계좌 자산 기준으로 동적 계산
+# (compute_slot_krw 참고, 2026-07-31 재설계: 고정 원화 금액이 계좌 실제 규모를
+# 무시해 신규 진입이 "매수증거금 부족"으로 상시 실패하는 문제 발견)
 MODEL_CONFIG: dict[str, dict] = {
-    "stage":           {"max_slots": 10, "position_krw": 10_000_000},
-    "kosdaq":          {"max_slots": 10, "position_krw": 10_000_000},
-    "cross":           {"max_slots":  5, "position_krw": 20_000_000},
-    "ichimoku":        {"max_slots": 10, "position_krw": 10_000_000},
-    "compose-funnel1": {"max_slots": 10, "position_krw": 10_000_000},
-    "compose-and1":    {"max_slots":  5, "position_krw": 20_000_000},
-    "compose-score1":  {"max_slots":  5, "position_krw": 20_000_000},
+    "stage":           {"max_slots": 10},
+    "kosdaq":          {"max_slots": 10},
+    "cross":           {"max_slots":  5},
+    "ichimoku":        {"max_slots": 10},
+    "compose-funnel1": {"max_slots": 10},
+    "compose-and1":    {"max_slots":  5},
+    "compose-score1":  {"max_slots":  5},
 }
+
+# kosdaq: stage_job의 KOSDAQ 분류 버그로 신호가 전혀 생성되지 않음(역대 0건,
+# 2026-07-29 investigate 세션 확인). 고쳐지기 전까지 자본 배분에서 제외 —
+# 안 그러면 죽은 모델에 1/N 자본이 영구히 묶여 나머지 모델 몫이 줄어든다.
+ACTIVE_MODELS: list[str] = [m for m in MODEL_CONFIG if m != "kosdaq"]
+
+# 계좌 총자산(추정예탁자산) 중 신규 진입에 쓰지 않고 현금으로 남겨둘 비중.
+# 2026-07-31: 고정 슬롯 금액(모델당 1000만~2000만원 × 슬롯수, 합계 약 7억원)이
+# 실제 계좌 규모(약 3.75억, 이미 -18.6% 손실)를 크게 초과해 신규 매수가
+# "RC4025 모의투자 매수증거금이 부족합니다"로 상시 실패하는 걸 확인 → 계좌
+# 규모에 연동한 배분으로 교체.
+CASH_RESERVE_RATIO = 0.20
+
+
+def compute_slot_krw(balance: dict) -> dict[str, int]:
+    """계좌 총자산 기준 모델별 슬롯(1포지션)당 매수 금액 계산.
+
+    배포 가능 자본(총자산 × (1-현금비중))을 활성 모델 수로 균등 분배해 모델별
+    "동일 금액"으로 시작하게 하고, 그 금액을 각 모델의 max_slots로 나눠 슬롯당
+    금액을 정한다 — 슬롯이 많은 모델(분산 10종목)은 슬롯당 금액이 작고, 슬롯이
+    적은 모델(5종목)은 슬롯당 금액이 크지만 모델 총액은 동일하다.
+    """
+    total_capital = balance["prsm_dpst_aset_amt"]
+    deployable = total_capital * (1 - CASH_RESERVE_RATIO)
+    per_model_capital = deployable / len(ACTIVE_MODELS)
+    return {
+        model: int(per_model_capital / MODEL_CONFIG[model]["max_slots"])
+        for model in ACTIVE_MODELS
+    }
+
+
+def deployable_capital(balance: dict) -> float:
+    """현금 비중을 제외하고 신규 진입에 쓸 수 있는 자본 총액."""
+    return balance["prsm_dpst_aset_amt"] * (1 - CASH_RESERVE_RATIO)
+
 
 # ── 유틸 ─────────────────────────────────────────────────────────────────────
 

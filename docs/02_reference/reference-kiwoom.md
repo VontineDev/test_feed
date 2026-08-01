@@ -114,23 +114,39 @@ class KiwoomPaperTrader:
 
 `kt00005`는 모의투자 미지원이라 코드에서 호출하지 않는다 (`get_balance()`가 `kt00018`로 대체).
 
-### `MODEL_CONFIG`
+### `MODEL_CONFIG` / `compute_slot_krw`
 
-모의투자 슬롯과 포지션당 금액을 모델별로 설정합니다.
+모의투자 슬롯 수(분산 종목 수)를 모델별로 설정합니다. 슬롯당 금액은 고정값이 아니라
+계좌 자산 기준으로 매번 동적 계산됩니다(2026-07-31 재설계, 아래 참고).
 
 ```python
 MODEL_CONFIG = {
-    "stage":           {"max_slots": 10, "position_krw": 10_000_000},
-    "kosdaq":          {"max_slots": 10, "position_krw": 10_000_000},
-    "cross":           {"max_slots":  5, "position_krw": 20_000_000},
-    "ichimoku":        {"max_slots": 10, "position_krw": 10_000_000},
-    "compose-funnel1": {"max_slots": 10, "position_krw": 10_000_000},
-    "compose-and1":    {"max_slots":  5, "position_krw": 20_000_000},
-    "compose-score1":  {"max_slots":  5, "position_krw": 20_000_000},
+    "stage":           {"max_slots": 10},
+    "kosdaq":          {"max_slots": 10},
+    "cross":           {"max_slots":  5},
+    "ichimoku":        {"max_slots": 10},
+    "compose-funnel1": {"max_slots": 10},
+    "compose-and1":    {"max_slots":  5},
+    "compose-score1":  {"max_slots":  5},
 }
 ```
 
-각 모델은 최대 `max_slots`개 포지션을 보유하고, 신규 진입 시 `position_krw`만큼 주문합니다. 주문 수량: `floor(position_krw / current_price)`, 최소 1주.
+각 모델은 최대 `max_slots`개 포지션을 보유합니다. 신규 진입 시 주문 금액은 `compute_slot_krw(balance)`가
+결정합니다:
+
+```
+deployable = balance["prsm_dpst_aset_amt"] * (1 - CASH_RESERVE_RATIO)   # CASH_RESERVE_RATIO=0.20
+per_model  = deployable / len(ACTIVE_MODELS)                            # ACTIVE_MODELS: kosdaq 제외
+slot_krw[model] = per_model / MODEL_CONFIG[model]["max_slots"]
+```
+
+`ACTIVE_MODELS`는 `kosdaq`을 제외한 6개 모델 — kosdaq은 stage_job 분류 버그로 신호가 전혀 생성되지 않아
+(역대 0건) 자본 배분에 포함하면 죽은 모델에 1/N이 영구히 묶인다. 주문 수량은
+`floor(slot_krw[model] / current_price)`, 최소 1주.
+
+`paper_open_entry_job`은 매 실행 시작 시 `get_balance()`로 잔고를 한 번 조회해 `slot_krw`와 배포 가능
+자본을 계산하고, 각 매수 주문 전에 "기투자금액(이번 실행 내 누적 포함) + 이번 주문 금액"이 배포 가능
+자본을 넘으면 주문을 스킵합니다(현금 비중 보호, 다음 실행에서 재시도).
 
 ### 티커 변환
 
