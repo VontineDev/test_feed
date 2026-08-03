@@ -40,6 +40,7 @@ const EXIT_LABEL: Record<string, string> = {
   period_end: '기간종료',
   manual: '수동',
   invalid: '무효',
+  buy_never_filled: '매수미체결',
 }
 
 const pctColor = (v: number | null) => {

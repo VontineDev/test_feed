@@ -4,6 +4,35 @@ Items deferred from code review and planning sessions.
 
 ---
 
+## P1: 모의투자 — 매수/매도 주문 체결 확인 절차 부재
+
+**What:** `paper_open_entry_job`/`paper_exit_checker_job`(`jobs/paper_jobs.py`)이
+`place_buy()`/`place_sell()`에서 반환된 `ord_no`(주문 접수 응답)를 그대로
+체결 확정으로 취급한다 — 실제 체결 여부를 확인하는 별도 조회(미체결/체결내역
+TR)가 코드에 아예 없다.
+
+**Why:** 2026-08-03 investigate 세션에서 매도 실패(24건, `kiwoom_sell_no='FAILED'`)를
+고쳤는데, 같은 세션에서 매수 쪽도 같은 결함이 있는 걸 발견했다 —
+`000240.KS`(compose-funnel1), `475150.KS`(compose-and1/compose-score1) 3건이
+2026-06-21에 정상적인 주문번호(`0011150`/`0011287`/`0011371`)까지 받았지만
+브로커 잔고엔 0주. 매도와 달리 매수는 예외조차 안 던져서 조용히 "성공"으로
+기록됐다 — DB(`paper_positions`)에 `status='closed', exit_type='buy_never_filled'`로
+정정 완료(2026-08-03), 프론트 `EXIT_LABEL`에 '매수미체결' 라벨 추가.
+
+**How to apply:**
+1. Kiwoom 체결내역 조회 TR(미체결/체결 조회, 예: `ka10075`/`ka10076`류 — 정확한
+   TR 코드는 키움 API 문서 재확인 필요)을 `KiwoomPaperTrader`에 추가.
+2. `place_buy`/`place_sell` 직후 해당 TR로 체결 확인 → 미체결/부분체결 시
+   `update_to_open`/`update_to_closed` 대신 재시도 또는 대기 상태로 분기.
+3. 최소한의 임시 대안: 매수 직후 `get_positions()`로 해당 종목 보유 여부를
+   교차 검증 — 새 TR 없이도 "주문은 받았는데 실제로 안 샀다"는 사실은 잡아낼 수 있음.
+
+**Effort:** M (human: ~1h / CC: ~30min)
+**Priority:** P1
+**Found:** 2026-08-03, paper trading 계좌 불일치 investigate 세션
+
+---
+
 ## P2: tests/test_news_gating.py — 죽은 게이팅 로직을 테스트 중 (재작성 필요)
 
 **What:** `tests/test_news_gating.py`(5개 테스트)가 검증하는 `_screener_tickers` 집합

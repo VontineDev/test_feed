@@ -24,6 +24,7 @@ const MODEL_LABEL: Record<string, string> = {
 
 const EXIT_LABEL: Record<string, string> = {
   hard_stop: '손절', trail: '트레일', period_end: '기간종료', manual: '수동', invalid: '무효',
+  buy_never_filled: '매수미체결',
 }
 
 
