@@ -138,6 +138,22 @@ async def paper_exit_checker_job(db_pool, paper_trader) -> None:
                 logger.warning("[paper-exit] %s 매도주문 실패: %s", _ticker, _e)
                 _sell_ord = "FAILED"
 
+        # 매도주문이 실패하면 브로커에 주식이 그대로 남으므로 청산 확정하지 않고
+        # open 상태를 유지 — 다음 실행에서 재시도된다(2026-08-03 investigate 세션에서
+        # 발견: 실패해도 무조건 closed 처리해 브로커 실보유와 DB가 어긋나는 버그였음).
+        if _sell_ord == "FAILED":
+            try:
+                async with httpx.AsyncClient() as _http:
+                    await _post_message(
+                        _http, _get_token(), _get_chat_id(),
+                        f"⚠️ 매도주문 실패 — {_ticker} ({_pos['model']}) exit_type={_exit_type}, "
+                        f"청산 미확정 (다음 실행에서 재시도)",
+                        label="paper-exit", parse_mode=None,
+                    )
+            except Exception as _e:
+                logger.warning("[paper-exit] %s 매도 실패 알림 전송 실패: %s", _ticker, _e)
+            continue
+
         # blended_return 계산 (TP1 발동 시 가중평균)
         if _tp1_done:
             _tp1_ret = (_pos["tp1_price"] - _entry) / _entry if _pos.get("tp1_price") else 0

@@ -14,7 +14,7 @@
 
 **2차 수정** (v1.0.4.1): exit checker 실행 시점이 장 마감 후 → **정규장 마감 직전(15:20 KST) 시장가 매도**로 바뀌면서 정규장 중 실시간가가 필요해졌다. yfinance의 1분봉은 지연이 있어 장중 판단에는 부적합하므로, 가격 조회를 Kiwoom mock API(`paper_trader.get_current_price()`, 종목당 0.5초 딜레이)로 되돌렸다. 하지만 이 서버는 애초에 ka10001을 지원하지 않으므로(위 문단), 다시 매일 "현재가 조회 실패"로 전 포지션이 스킵되는 상태로 돌아갔다 — hard_stop이 발동해야 할 포지션이 며칠~몇 주씩 방치되며 -10% 설계 손절선을 훨씬 넘는 손실(-20~-38%)로 청산되는 결과를 낳았다.
 
-**3차 수정 — 현재 상태**: `KiwoomPaperTrader`에 **시세 조회 전용 실 API 클라이언트**(`_quote_client`, `api.kiwoom.com`, `KIWOOM_APPKEY`/`KIWOOM_SECRETKEY`)를 별도로 추가했다. `get_current_price()`/`get_open_price()`는 이 실 API 클라이언트로 ka10001을 호출하고, 주문(`place_buy`/`place_sell`)과 계좌 조회는 계속 모의투자 서버(`self._client`, mock)를 사용한다 — 실제 매매가 발생하지 않도록 주문 경로는 그대로 유지.
+**3차 수정**: `KiwoomPaperTrader`에 **시세 조회 전용 실 API 클라이언트**(`_quote_client`, `api.kiwoom.com`, `KIWOOM_APPKEY`/`KIWOOM_SECRETKEY`)를 별도로 추가했다. `get_current_price()`/`get_open_price()`는 이 실 API 클라이언트로 ka10001을 호출하고, 주문(`place_buy`/`place_sell`)과 계좌 조회는 계속 모의투자 서버(`self._client`, mock)를 사용한다 — 실제 매매가 발생하지 않도록 주문 경로는 그대로 유지.
 
 ```
 [초기 설계 / 2차 수정 — 실패]
@@ -25,10 +25,12 @@ paper_exit_checker(15:20 KST) → KiwoomPaperTrader.get_current_price()
 paper_exit_checker(장 마감 후) → _fetch_prices_yf(tickers)        ← 가격 (yfinance)
                                 → paper_trader.place_sell(...)     ← 주문 (mockapi)
 
-[현재 — 3차 수정]
+[3차 수정]
 paper_exit_checker(15:20 KST) → paper_trader.get_current_price(ticker)  ← 가격 (api.kiwoom.com, 실 API)
                               → paper_trader.place_sell(...)             ← 주문 (mockapi.kiwoom.com, 모의투자)
 ```
+
+**4차 수정 — 현재 상태** (2026-08-03): 매도주문(`place_sell`) 호출이 예외를 던지면 `kiwoom_sell_no`에 `"FAILED"`만 기록하고도 `update_to_closed()`를 그대로 호출해 `status='closed'`로 확정해버리는 버그가 있었다. 브로커에는 주식이 그대로 남아있는데 DB는 청산된 걸로 착각해, 실제 계좌 보유 종목과 `paper_positions`가 어긋나는 문제(26건 발견, 2026-08-03 investigate 세션)로 이어졌다. 매도주문이 실패하면 `status`를 `closed`로 넘기지 않고 `open`을 유지하도록 수정 — 다음 실행(익일 15:20 KST)에서 exit 조건이 다시 판정되며 자동 재시도된다. 실패 시 텔레그램 경고(`⚠️ 매도주문 실패`)도 추가했다.
 
 ---
 
@@ -168,7 +170,9 @@ else:
 
 ## 모델별 파라미터 출처
 
-exit 파라미터(`tp1_pct`, `trail_pct`, `hard_stop_pct` 등)는 `analysis/backtest_engine.py`의 `OPTIMAL_EXIT_PARAMS*` 상수에서 온다. 이 값들은 `scripts/run_sweep.py`의 그리드서치로 산출됐다.
+exit 파라미터(`tp1_pct`, `trail_pct`, `hard_stop_pct` 등)는 `analysis/backtest/config.py`의 `OPTIMAL_EXIT_PARAMS*` 상수에서 온다(2026-07-16 리팩토링으로 옛 `analysis/backtest_engine.py`에서 이관 — 심까지 삭제됨). 이 값들은 `scripts/run_sweep.py`의 그리드서치로 산출됐다.
+
+> **주의**: `analysis/backtest/config.py`에는 이 4개 모델용 상수 외에 `OPTIMAL_EXIT_PARAMS_FUNNEL1`/`OPTIMAL_EXIT_PARAMS_SCORE1`도 정의돼 있지만, 라이브 모의투자는 이 두 상수를 쓰지 않는다 — `analysis/backtest/engine.py`(백테스트 전용)에서만 참조된다. compose 모델의 실제 청산 파라미터는 아래 표 대신 바로 다음 문단(`compose_paper_entry_job`에서 직접 전달)을 참고.
 
 | 모델 | tp1_pct | tp1_ratio | trail_pct | hard_stop_pct | 학습 성과 |
 |------|---------|-----------|-----------|----------------|-----------|
