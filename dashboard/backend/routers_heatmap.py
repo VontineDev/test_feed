@@ -64,7 +64,7 @@ router = APIRouter()
 #   개선 방법: 15:30~16:05 구간에 ka10032 frozen 스냅샷 별도 캐시 유지.
 #
 # TODO [엣지 3·12] 종목 구성 불연속:
-#   장마감 → 장전 전환(07:59→08:00) 시 daily_market_snap top100(장중) vs
+#   장마감 → 장전 전환(07:59→08:00) 시 daily_market_snap 전종목(장중) vs
 #   daily_market_snap 전날 데이터가 그대로 유지되므로 연속성 개선됨.
 #   단, 스냅샷 수집(16:10) 전 15:30~16:10 구간은 어제 데이터로 표시.
 async def _build_heatmap_data() -> dict:
@@ -73,7 +73,7 @@ async def _build_heatmap_data() -> dict:
 
     데이터 소스 우선순위:
       NXT 시간외 (15:40~16:05): ka10098 실시간
-      장 마감 1순위: daily_market_snap — ka10032 top100, KRX+NXT 합산, 전 종목 커버
+      장 마감 1순위: daily_market_snap — ka10032 전종목, KRX+NXT 합산
       장 마감 2순위: aftermarket_snap  — NXT 거래 종목만, 폴백
     """
     pool = await get_pool()

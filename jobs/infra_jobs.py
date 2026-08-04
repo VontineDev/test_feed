@@ -134,7 +134,8 @@ async def daily_market_snap_job() -> None:
     1차: 평일 16:10 KST — NXT 단일가 종료 후 중간 스냅샷 (히트맵/TOP 즉시 반영용)
     2차: 평일 20:10 KST — NXT 애프터마켓 종료 후 완전한 KRX+NXT 최종값으로 덮어씀
 
-    stex_tp=3 (KRX+NXT 합산) top100. (ticker, trade_date) upsert라 중복 없음.
+    stex_tp=3 (KRX+NXT 합산) 전종목(거래대금>0, cont-yn 페이지네이션). (ticker, trade_date)
+    upsert라 중복 없음.
     """
     from datetime import date as _date
     from core.db import get_dsn as _get_dsn

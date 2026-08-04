@@ -156,3 +156,67 @@ class TestFetchTopVolume:
         expected_amount_won = 5_308_092 * 1_000_000
         assert result[0]["amount"] == expected_amount_won
         assert result[0]["amount"] > 5_000_000_000_000  # 5조원 이상
+
+
+class TestFetchAllByValue:
+    """fetch_all_by_value() 단위 테스트 — KOSPI/KOSDAQ 순차 조회 + cont-yn 페이지네이션.
+
+    ka10032는 mrkt_tp="101"(KOSDAQ)로 명시 요청해도 stk_cd 접미사가 "_AL"로
+    고정 반환되는 걸 실측으로 확인했다(실제 시장과 무관). 그래서
+    fetch_all_by_value는 KOSPI(001)/KOSDAQ(101)를 따로 호출해 응답 접미사
+    대신 "요청한 시장"을 직접 ticker에 태그한다 — 아래 테스트는 이 태깅이
+    응답 접미사와 무관하게 항상 요청 시장 기준으로 나오는지 검증한다.
+    """
+
+    def _row(self, rank: int, suffix: str = "_AL") -> dict:
+        return {
+            "now_rank": str(rank), "stk_cd": f"{rank:06d}{suffix}", "stk_nm": f"종목{rank}",
+            "cur_prc": "1000", "flu_rt": "0.5", "trde_prica": "100",
+        }
+
+    def test_both_markets_queried_and_tagged_by_request_not_suffix(self):
+        """KOSPI/KOSDAQ 응답이 전부 "_AL" 접미사여도 요청한 시장 기준으로 태그."""
+        from data.kiwoom_aftermarket_sync import KiwoomClient
+        client = KiwoomClient(use_mock=False)
+        client.inject_token("dummy-token-for-tests")
+        mock_post = MagicMock(side_effect=[
+            ({_RESPONSE_KEY: [self._row(1)]}, {}),   # mrkt_tp=001 (KOSPI) 호출
+            ({_RESPONSE_KEY: [self._row(2)]}, {}),   # mrkt_tp=101 (KOSDAQ) 호출 — 응답도 "_AL"
+        ])
+        client._post = mock_post
+        result = client.fetch_all_by_value()
+
+        assert mock_post.call_count == 2
+        first_body = mock_post.call_args_list[0][0][2]
+        second_body = mock_post.call_args_list[1][0][2]
+        assert first_body["mrkt_tp"] == "001"
+        assert second_body["mrkt_tp"] == "101"
+
+        assert len(result) == 2
+        assert result[0]["ticker"] == "000001.KS"   # KOSPI 요청분 → .KS
+        assert result[1]["ticker"] == "000002.KQ"   # KOSDAQ 요청분 → .KQ (접미사는 "_AL"이었음)
+
+    def test_paginates_within_each_market(self):
+        """시장별로 cont-yn="Y" → "N" 페이지네이션 후 다음 시장으로 이동."""
+        from data.kiwoom_aftermarket_sync import KiwoomClient
+        client = KiwoomClient(use_mock=False)
+        client.inject_token("dummy-token-for-tests")
+        kospi_p1 = [self._row(i) for i in range(1, 101)]
+        kospi_p2 = [self._row(i) for i in range(101, 151)]
+        kosdaq_p1 = [self._row(i) for i in range(1, 51)]
+        mock_post = MagicMock(side_effect=[
+            ({_RESPONSE_KEY: kospi_p1}, {"cont-yn": "Y", "next-key": "00110001"}),
+            ({_RESPONSE_KEY: kospi_p2}, {"cont-yn": "N", "next-key": ""}),
+            ({_RESPONSE_KEY: kosdaq_p1}, {"cont-yn": "N", "next-key": ""}),
+        ])
+        client._post = mock_post
+        result = client.fetch_all_by_value()
+        assert mock_post.call_count == 3
+        assert len(result) == 150 + 50
+        assert all(t["ticker"].endswith(".KS") for t in result[:150])
+        assert all(t["ticker"].endswith(".KQ") for t in result[150:])
+
+    def test_empty_responses_return_empty_list(self):
+        client = _make_client([])
+        result = client.fetch_all_by_value()
+        assert result == []

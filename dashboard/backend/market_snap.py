@@ -35,7 +35,7 @@ async def _fetch_daily_snap_top_async(n: int) -> dict | None:
     """daily_market_snap 최신 영업일 거래대금 상위 N 종목.
 
     aftermarket_snap 대비 장점:
-      - NXT 거래 여부와 무관하게 전 종목 커버 (ka10032 top100)
+      - NXT 거래 여부와 무관하게 전 종목 커버 (ka10032 전종목, cont-yn 페이지네이션)
       - amount = KRX+NXT 합산 당일 최종값
       - change_pct = 정규장 기준 당일 등락률
     데이터 없으면 None 반환.

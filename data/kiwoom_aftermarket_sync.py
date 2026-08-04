@@ -352,6 +352,9 @@ class KiwoomClient:
           응답 배열 키: trde_prica_upper
           거래대금 필드: trde_prica (단위: 백만원 × 1_000_000 → 원)
           검증: 삼성전자 152,000원 × 3,495만주 ≈ 5.31조원 = trde_prica(5,308,092) × 1,000,000 ✓
+
+        단일 페이지만 조회(n>100이어도 100건 상한) — 전종목이 필요하면
+        fetch_all_by_value() 사용.
         """
         data, _ = self._post(
             "/api/dostk/rkinfo",
@@ -366,19 +369,55 @@ class KiwoomClient:
         rows = data.get("trde_prica_upper") or []
         result: list[dict] = []
         for i, r in enumerate(rows[:n]):
-            raw_amt = _parse_int(r.get("trde_prica"))
-            if raw_amt is not None and raw_amt == 0:
-                # 거래대금 명시적 0 = 장 미개장 또는 무의미한 행 → 건너뜀
-                continue
-            result.append({
-                "rank":       _parse_int(r.get("now_rank")) or (i + 1),
-                "ticker":     str(r.get("stk_cd", "")).strip().zfill(6),
-                "name":       str(r.get("stk_nm") or r.get("stk_cd") or "").strip(),
-                "price":      abs(_parse_int(r.get("cur_prc")) or 0),
-                "change_pct": _parse_float(r.get("flu_rt")) or 0.0,
-                "amount":     (raw_amt or 0) * _VALUE_UNIT,
-            })
+            row = _parse_top_volume_row(r, fallback_rank=i + 1)
+            if row is not None:
+                result.append(row)
         return result
+
+    def fetch_all_by_value(self) -> list[dict]:
+        """거래대금 기준 전종목 조회 — ka10032, cont-yn/next-key 페이지네이션.
+
+        daily_market_snap 전종목 적재용. fetch_top_volume과 달리 100건 상한이
+        없고, 응답이 끊길 때(cont-yn != "Y")까지 페이지를 순회한다.
+
+        mrkt_tp="000"(전체) 한 번으로는 안 됨: 실측 결과 ka10032 응답의 stk_cd
+        접미사(_AL/_AQ)가 실제 시장과 무관하게 항상 "_AL"로 고정 반환된다
+        (mrkt_tp="101"로 KOSDAQ만 명시 요청해도 KOSDAQ 종목이 "_AL"로 옴).
+        그래서 KOSPI(001)/KOSDAQ(101)를 따로 호출해 요청한 시장 값을 직접
+        태그한다 — 응답의 접미사는 신뢰하지 않는다.
+        """
+        all_rows: list[dict] = []
+        for mrkt_tp, market_label in (("001", "KOSPI"), ("101", "KOSDAQ")):
+            body = {
+                "mrkt_tp":       mrkt_tp,
+                "mang_stk_incls": "1",
+                "stex_tp":       "3",
+            }
+            cont_yn, next_key = "N", ""
+            page_n = 0
+            while True:
+                data, resp_hdrs = self._post(
+                    "/api/dostk/rkinfo", "ka10032", body, cont_yn, next_key
+                )
+                rows = data.get("trde_prica_upper") or []
+                for i, r in enumerate(rows):
+                    row = _parse_top_volume_row(
+                        r, fallback_rank=page_n * 100 + i + 1, market_override=market_label
+                    )
+                    if row is not None:
+                        all_rows.append(row)
+                page_n += 1
+                logger.debug("[kiwoom] ka10032 mrkt_tp=%s — %d행 수신 (누적 %d)",
+                             mrkt_tp, len(rows), len(all_rows))
+
+                resp_cont = resp_hdrs.get("cont-yn", "N")
+                resp_key  = resp_hdrs.get("next-key", "")
+                if resp_cont != "Y" or not resp_key:
+                    break
+                cont_yn, next_key = "Y", resp_key
+                _time.sleep(0.25)  # 페이지 간 간격 — 연속 호출로 인한 429 예방
+
+        return all_rows
 
 
 # ── 파싱 ─────────────────────────────────────────────────────────
@@ -414,6 +453,37 @@ def _parse_float(s) -> Optional[float]:
         return float(s)
     except ValueError:
         return None
+
+
+def _parse_top_volume_row(
+    r: dict, fallback_rank: int, market_override: Optional[str] = None,
+) -> Optional[dict]:
+    """ka10032 원본 행 → rank/ticker/name/price/change_pct/amount 딕셔너리.
+
+    거래대금(trde_prica)이 명시적으로 0이면 장 미개장/무의미한 행으로 보고 None.
+
+    market_override: "KOSPI"/"KOSDAQ" 지정 시 ticker를 요청한 시장 기준으로
+    직접 조립(예: "058610.KQ")한다 — 응답의 stk_cd 접미사(_AL/_AQ)는 실제
+    시장과 무관하게 고정 반환되는 것으로 확인돼 신뢰하지 않는다. 미지정 시
+    기존 동작대로 원본 stk_cd를 그대로 둔다(fetch_top_volume 호출부 호환).
+    """
+    raw_amt = _parse_int(r.get("trde_prica"))
+    if raw_amt is not None and raw_amt == 0:
+        return None
+    if market_override is not None:
+        code = str(r.get("stk_cd", "")).strip().split("_")[0].zfill(6)
+        suffix = ".KS" if market_override == "KOSPI" else ".KQ"
+        ticker = code + suffix
+    else:
+        ticker = str(r.get("stk_cd", "")).strip().zfill(6)
+    return {
+        "rank":       _parse_int(r.get("now_rank")) or fallback_rank,
+        "ticker":     ticker,
+        "name":       str(r.get("stk_nm") or r.get("stk_cd") or "").strip(),
+        "price":      abs(_parse_int(r.get("cur_prc")) or 0),
+        "change_pct": _parse_float(r.get("flu_rt")) or 0.0,
+        "amount":     (raw_amt or 0) * _VALUE_UNIT,
+    }
 
 
 def parse_bulk_rows(
@@ -687,9 +757,9 @@ def save_daily_market_snap(dsn: str, items: list[dict], trade_date: date) -> int
 
 
 def run_daily_snap(dsn: str, client: "KiwoomClient", trade_date: date) -> int:
-    """ka10032 top100 조회 후 daily_market_snap 저장. 저장 건수 반환."""
+    """ka10032 전종목(페이지네이션) 조회 후 daily_market_snap 저장. 저장 건수 반환."""
     ensure_daily_snap_table(dsn)
-    items = client.fetch_top_volume(n=100)
+    items = client.fetch_all_by_value()
     if not items:
         logger.warning("[daily-snap] ka10032 응답 없음")
         return 0

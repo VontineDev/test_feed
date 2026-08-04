@@ -30,9 +30,9 @@ PostgreSQL (Supabase)
 
 | 탭 | 컴포넌트 | 기능 |
 |----|----------|------|
-| 히트맵 | `Heatmap.tsx` | 당일 거래대금 상위 20종목(Kiwoom ka10032). Stage 분류 결과 오버레이. 장 마감 시 `daily_market_snap`(ka10032 top100, KRX+NXT 합산) 기준으로 전환 — `aftermarket_snap` 미매칭 시 폴백. 헤더에 "MM/DD 합산" 배지 표시. 5분 갱신(장 마감 30분). 상단에 `MarketSummaryBanner` — KOSPI/KOSDAQ 지수 + 시장 심리 한마디 표시. Kiwoom 실패 시 Stage 분류 데이터로 폴백. |
+| 히트맵 | `Heatmap.tsx` | 당일 거래대금 상위 20종목(Kiwoom ka10032). Stage 분류 결과 오버레이. 장 마감 시 `daily_market_snap`(ka10032 전종목, KRX+NXT 합산) 기준으로 전환 — `aftermarket_snap` 미매칭 시 폴백. 헤더에 "MM/DD 합산" 배지 표시. 5분 갱신(장 마감 30분). 상단에 `MarketSummaryBanner` — KOSPI/KOSDAQ 지수 + 시장 심리 한마디 표시. Kiwoom 실패 시 Stage 분류 데이터로 폴백. |
 | 종목 분석 | `Report.tsx` | 추세 단계(Stage 분류) + 강세 후보 발굴(차트 스크리닝) 결과. 날짜 범위 선택(오늘/-3일/-1주/-2주/-1달/직접입력)으로 이력 조회 가능. 직접입력 시 `yymmdd ~ yymmdd` 형식 두 필드 입력 → 확인. 종목 클릭 시 우측 패널 분할로 Stage·스크리너 이력 표시; 같은 종목 재클릭 또는 날짜 변경 시 패널 닫힘. 모바일에서는 세로 스택 전환, 숫자패드 자동 활성화. 헤더에 "데이터 기준: YYYY-MM-DD" 표시 — Stage/스크리너/내러티브 각 데이터 신선도(`as_of`) 확인 가능(? 호버 시 세부 날짜). |
-| Top | `Top.tsx` | 당일 거래대금 상위 50종목(Kiwoom ka10032). EPS·PER·Forward PER(Naver Finance) 표시. 장 마감 시 `daily_market_snap`(ka10032 top100, KRX+NXT 합산) 기준으로 전환 — `aftermarket_snap` 미수집 시 폴백. "MM/DD 합산" 배지 표시. 5분 캐시(장 마감 30분). |
+| Top | `Top.tsx` | 당일 거래대금 상위 50종목(Kiwoom ka10032). EPS·PER·Forward PER(Naver Finance) 표시. 장 마감 시 `daily_market_snap`(ka10032 전종목, KRX+NXT 합산) 기준으로 전환 — `aftermarket_snap` 미수집 시 폴백. "MM/DD 합산" 배지 표시. 5분 캐시(장 마감 30분). |
 | 모의투자 | `PaperPortfolio.tsx` | 모델별 요약 + 실시간 포지션(60s 갱신) + 청산 이력 + CSV 다운로드(포지션 헤더 버튼) + 스케줄러 컨트롤. 모델 카드 클릭으로 포지션 필터링 |
 | 매크로 | `Macro.tsx` | OLS 팩터 모델 — 6개 팩터(USD/KRW·미국10년금리·브렌트유·VIX·달러인덱스·아이셰어즈 대한민국 ETF(EWY)) 추적. 종목별 분석 대상은 오늘 거래대금 상위 20종목(히트맵 기준), 없으면 `daily_market_snap` 최신 영업일 TOP 20. 결과는 거래대금 순 정렬 |
 | 시그널 (우측 패널/모바일) | `SignalFeed.tsx` | 실시간 매매 신호 SSE 스트림. 15초 폴링 |
@@ -52,7 +52,7 @@ PostgreSQL (Supabase)
 | 상태 | 데이터 소스 |
 |------|------------|
 | 장 중 (09:00~15:30 KST, 평일·영업일) | Kiwoom ka10032 실시간 (KRX+NXT 합산) |
-| 장 마감·주말·공휴일 — 1순위 | `daily_market_snap` 최신 영업일 (ka10032 top100) |
+| 장 마감·주말·공휴일 — 1순위 | `daily_market_snap` 최신 영업일 (ka10032 전종목) |
 | 장 마감·주말·공휴일 — 2순위 폴백 | `aftermarket_snap` (`COALESCE(reg_value, after_value)`) |
 | Kiwoom 실패 (장 중) | Stage 분류 데이터 (`stage_results`) |
 
@@ -378,7 +378,7 @@ Stage 분류 + 차트 스크리너 + 유튜브 관심도를 단일 응답으로 
 | 상태 | 데이터 소스 |
 |------|------------|
 | 장 중 (09:00~15:30 KST) | Kiwoom ka10032 실시간 (KRX+NXT 합산) |
-| 장 마감·주말·공휴일 — 1순위 | `daily_market_snap` 최신 영업일 (ka10032 top100) |
+| 장 마감·주말·공휴일 — 1순위 | `daily_market_snap` 최신 영업일 (ka10032 전종목) |
 | 장 마감·주말·공휴일 — 2순위 폴백 | `aftermarket_snap` (`COALESCE(reg_value, after_value)`) |
 
 **쿼리 파라미터:** `?n=50` (기본값 50, 최대 100) · `?refresh=true` (캐시 강제 갱신)
@@ -439,8 +439,8 @@ CREATE TABLE daily_market_snap (
 
 - `ticker`: Kiwoom 원본(`000660_AL` → `.KS`, `035720_AQ` → `.KQ`) 정규화
 - `amount`: `ka10032`(`stex_tp=3`, KRX+NXT 합산) 기준 — 정규장 + NXT 시간외 포함
-- 저장 범위: 거래대금 top100 (삼성전자·SK하이닉스 등 주요 종목 전체 커버)
-- `aftermarket_snap`과의 차이: NXT 거래 여부와 무관하게 ka10032 상위 종목 전체 저장
+- 저장 범위: 전종목 (KOSPI+KOSDAQ, 거래대금>0 — cont-yn 페이지네이션으로 ka10032 전 페이지 순회)
+- `aftermarket_snap`과의 차이: NXT 거래 여부와 무관하게 ka10032 전종목 저장
 
 ---
 

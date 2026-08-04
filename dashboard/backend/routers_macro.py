@@ -53,7 +53,7 @@ _MARKET_INDEX_LOCK = asyncio.Lock()
 def _fetch_prev_top20_sync() -> dict[str, str] | None:
     """최근 영업일 거래대금 TOP 20 → {ticker: name}. 실패 시 None.
 
-    1순위: daily_market_snap (ka10032 top100, 전 종목)
+    1순위: daily_market_snap (ka10032 전종목)
     2순위: aftermarket_snap  (NXT 거래 종목만, 폴백)
     """
     try:

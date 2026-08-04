@@ -609,7 +609,7 @@ async def main(interval: int, enable_summary: bool) -> None:
         replace_existing=True,
     )
     # ── 당일 스냅샷 1차: 평일 16:10 KST (07:10 UTC) ──────────────
-    # ka10032 top100(KRX+NXT 합산) → daily_market_snap
+    # ka10032 전종목(KRX+NXT 합산, cont-yn 페이지네이션) → daily_market_snap
     # NXT 단일가 종료(16:00) 후 10분 여유. 히트맵/TOP 장마감 즉시 반영용.
     scheduler.add_job(
         _daily_market_snap_job,
