@@ -50,9 +50,11 @@ def test_raw_to_yf(raw, expected):
     assert _raw_to_yf(raw) == expected
 
 
-# ── _to_snap_ticker (매치 실패 시 raw 그대로 — None 아님) ───────
-# 이 함수는 _enrich_with_reg_value 내부에 nested되어 있어 직접 import 불가 —
-# client.fetch_top_volume()을 mock해 간접적으로 동작을 고정한다.
+# ── _enrich_with_reg_value (fetch_all_by_value 기반) ────────────
+# 예전엔 fetch_top_volume()의 원시 stk_cd(_AL/_AQ 접미사)를 변환해 매칭했는데,
+# ka10032가 시장과 무관하게 항상 "_AL"을 반환하는 걸 실측으로 확인해(2026-08-04)
+# KOSPI/KOSDAQ을 각각 명시 요청해 태그하는 fetch_all_by_value()로 교체했다 —
+# 반환 ticker가 이미 최종 yfinance 형식이라 별도 변환 없이 직접 매칭한다.
 
 def _make_record(ticker: str) -> AftermarketRecord:
     return AftermarketRecord(
@@ -62,15 +64,15 @@ def _make_record(ticker: str) -> AftermarketRecord:
     )
 
 
-@pytest.mark.parametrize("raw_ticker,record_ticker,should_match", [
-    ("000660_AL", "000660.KS", True),    # _AL 접미사 변환 후 매치
-    ("035720_AQ", "035720.KQ", True),    # _AQ 접미사 변환 후 매치
-    ("000660.KS", "000660.KS", True),    # 이미 yfinance 포맷 → 그대로 매치
-    ("000660", "000660", True),          # 접미사 없음 → raw 그대로 매치 (quirk, None 아님)
+@pytest.mark.parametrize("item_ticker,record_ticker,should_match", [
+    ("000660.KS", "000660.KS", True),    # KOSPI 정확히 매치
+    ("035720.KQ", "035720.KQ", True),    # KOSDAQ 정확히 매치
+    ("000660.KS", "000660.KQ", False),   # 시장 접미사 다르면 매치 안 함
+    ("000660.KS", "005930.KS", False),   # 종목코드 다르면 매치 안 함
 ])
-def test_to_snap_ticker_via_enrich(raw_ticker, record_ticker, should_match):
+def test_enrich_with_reg_value_matches_by_ticker(item_ticker, record_ticker, should_match):
     client = MagicMock()
-    client.fetch_top_volume.return_value = [{"ticker": raw_ticker, "amount": 12345}]
+    client.fetch_all_by_value.return_value = [{"ticker": item_ticker, "amount": 12345}]
     records = [_make_record(record_ticker)]
 
     _enrich_with_reg_value(client, records)

@@ -618,30 +618,25 @@ def _enrich_with_reg_value(client: "KiwoomClient", records: list[AftermarketReco
     """ka10032(거래대금상위)로 KRX+NXT 합산 거래대금을 reg_value에 채움.
 
     ka10032는 장 마감 후에도 당일 최종 합산값을 반환.
-    stex_tp="3" (전체=KRX+NXT) 기준 상위 500종목 조회.
 
-    ka10032 stk_cd 형식: "005930_AL"(KOSPI) / "035720_AQ"(KOSDAQ)
-    aftermarket_snap ticker 형식: "005930.KS" / "035720.KQ"
-    → _AL→.KS, _AQ→.KQ 변환 후 매칭.
+    fetch_all_by_value()로 전종목(KOSPI+KOSDAQ) 조회 — 예전엔 fetch_top_volume(n=500)을
+    썼는데 이 함수는 페이지네이션이 없어 항상 단일 페이지(100건) 상한에 걸려 있었고,
+    stk_cd 접미사(_AL/_AQ)로 시장을 추정하는 방식도 실제로는 ka10032가 시장과 무관하게
+    항상 "_AL"을 반환해 KOSDAQ 종목이 전부 잘못 매칭됐다(daily_market_snap 전종목 확장
+    작업 중 실측으로 확인, 2026-08-04). fetch_all_by_value()는 KOSPI/KOSDAQ을 각각
+    명시적으로 요청해 태그하므로 반환되는 ticker가 이미 aftermarket_snap과 동일한
+    yfinance 형식("005930.KS"/"035720.KQ")이라 별도 변환이 필요 없다.
     """
     if not records:
         return
     try:
-        top_items = client.fetch_top_volume(n=500)
+        top_items = client.fetch_all_by_value()
     except Exception as e:
         logger.warning("[kiwoom] reg_value 조회(ka10032) 실패 (무시): %s", e)
         return
 
-    # _AL/.KS / _AQ/.KQ 변환 → aftermarket_snap ticker와 동일 형식으로 정규화
-    from core.tickers import kiwoom_to_yfinance
-
-    def _to_snap_ticker(raw: str) -> str:
-        # 매치 안 되면(접미사도 '.'도 없는 원시 코드) raw 그대로 — 알 수 없는
-        # 케이스를 조용히 스킵하기보다 원본 유지해 디버깅 여지를 남긴다.
-        return kiwoom_to_yfinance(raw) or raw
-
     amount_map: dict[str, int] = {
-        _to_snap_ticker(it["ticker"]): it["amount"]
+        it["ticker"]: it["amount"]
         for it in top_items
         if it.get("amount")
     }
@@ -652,7 +647,7 @@ def _enrich_with_reg_value(client: "KiwoomClient", records: list[AftermarketReco
         if amt:
             r.reg_value = amt
             n += 1
-    logger.info("[kiwoom] reg_value 보강 완료: %d/%d건 (ka10032 top500 매칭)", n, len(records))
+    logger.info("[kiwoom] reg_value 보강 완료: %d/%d건 (ka10032 전종목 매칭)", n, len(records))
 
 
 # ── daily_market_snap DDL + 저장 ─────────────────────────────────
