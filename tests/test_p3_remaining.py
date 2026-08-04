@@ -4,8 +4,7 @@ test_p3_remaining.py — 나머지 P3 기능 회귀 테스트
 Covers:
   1. Condition G NaN Calibration (SCREENER_G_NAN_STRICT env var)
   2. Enhanced Ichimoku (is_enhanced: tenkan > kijun, both rising)
-  3. Daily Ticker Cap (DAILY_CLASSIFIER_TICKERS env var)
-  4. Tighten News Gating (_active_stage_tickers OR _screener_tickers)
+  3. Tighten News Gating (_active_stage_tickers OR _screener_tickers)
 """
 from __future__ import annotations
 
@@ -127,52 +126,7 @@ class TestEnhancedIchimoku:
             pytest.skip("ta 라이브러리 미설치")
 
 
-# ── 3. Daily Ticker Cap ──────────────────────────────────────────────────────
-
-class TestDailyTickerCap:
-    """DAILY_CLASSIFIER_TICKERS 환경변수로 최대 처리 종목 수 제한."""
-
-    def _apply_cap(self, all_tickers, ichimoku_syms, cap):
-        """_daily_stage_job()의 cap 로직 추출."""
-        if len(all_tickers) <= cap:
-            return all_tickers
-        priority = [(t, n, s) for t, n, s in all_tickers if t in ichimoku_syms]
-        others   = [(t, n, s) for t, n, s in all_tickers if t not in ichimoku_syms]
-        n_fill   = max(0, cap - len(priority))
-        return priority + others[:n_fill]
-
-    def _make_tickers(self, n):
-        return [(f"{i:06d}.KS", f"종목{i}", "KOSPI") for i in range(n)]
-
-    def test_cap_limits_total(self):
-        all_t = self._make_tickers(300)
-        result = self._apply_cap(all_t, set(), cap=150)
-        assert len(result) == 150
-
-    def test_ichimoku_tickers_always_included(self):
-        all_t = self._make_tickers(300)
-        ichi  = {"000010.KS", "000020.KS", "000030.KS"}
-        result = self._apply_cap(all_t, ichi, cap=10)
-        result_syms = {t for t, _, _ in result}
-        assert ichi.issubset(result_syms)
-
-    def test_no_cap_when_under_limit(self):
-        all_t = self._make_tickers(100)
-        result = self._apply_cap(all_t, set(), cap=150)
-        assert len(result) == 100
-
-    def test_env_var_default_is_150(self, monkeypatch):
-        monkeypatch.delenv("DAILY_CLASSIFIER_TICKERS", raising=False)
-        cap = int(os.environ.get("DAILY_CLASSIFIER_TICKERS", "150"))
-        assert cap == 150
-
-    def test_env_var_override(self, monkeypatch):
-        monkeypatch.setenv("DAILY_CLASSIFIER_TICKERS", "300")
-        cap = int(os.environ.get("DAILY_CLASSIFIER_TICKERS", "150"))
-        assert cap == 300
-
-
-# ── 4. Tighten News Gating ───────────────────────────────────────────────────
+# ── 3. Tighten News Gating ───────────────────────────────────────────────────
 
 class TestTightenNewsGating:
     """_screener_tickers OR _active_stage_tickers 기반 이중 게이팅."""

@@ -10,7 +10,6 @@ import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
-from itertools import zip_longest
 from typing import Optional
 
 import pandas as pd
@@ -53,46 +52,13 @@ async def daily_stage_job(db_pool) -> set[str]:
     _week, ichimoku_rows = await load_chart_signals_latest(db_pool)
     logger.info("[3단계] Ichimoku 비교 풀: %d종목 (week_of=%s)", len(ichimoku_rows), _week)
 
-    # 2. 전 종목 티커 목록 (KOSPI + KOSDAQ, ~2770개)
+    # 2. 전 종목 티커 목록 (KOSPI + KOSDAQ, ~2770개) — 캡 없이 스크리너와 동일하게 전종목 스캔.
+    # 스크리너(analysis/chart_screener.py)가 이미 동일한 yfinance 개별 호출 패턴으로 매일
+    # 전종목(2763개)을 SCREENER_WORKERS만으로 문제없이 처리하는 게 실증돼 있어, 예전에 있던
+    # 150종목 캡/KOSPI-KOSDAQ 순환 로직(2026-04 도입, 실측 없는 추정 기반)을 제거했다.
     all_tickers: list[tuple[str, str, str]] = await loop.run_in_executor(
         None, get_all_tickers, None
     )
-    cap = int(os.environ.get("DAILY_CLASSIFIER_TICKERS", "150"))
-    if len(all_tickers) > cap:
-        _ichi_syms = {r["ticker"] for r in ichimoku_rows}
-        _priority  = [(t, n, s) for t, n, s in all_tickers if t in _ichi_syms]
-        _others    = [(t, n, s) for t, n, s in all_tickers if t not in _ichi_syms]
-        _n_fill    = max(0, cap - len(_priority))
-
-        # get_all_tickers()가 KOSPI(943개)를 KOSDAQ(1821개)보다 앞에 반환하므로
-        # 캡을 그냥 앞에서 자르면 KOSDAQ은 영원히 후보에 못 든다 — 실제로 이 버그로
-        # stage_classifications에 KOSDAQ 행이 전체 기간 0건이었음 (2026-07 발견).
-        # 두 시장을 번갈아 채우고, 날짜 기반 오프셋으로 매일 다른 구간을 스캔해
-        # 전체 유니버스가 점진적으로 커버되도록 한다.
-        _kospi_others  = [x for x in _others if x[0].endswith(".KS")]
-        _kosdaq_others = [x for x in _others if x[0].endswith(".KQ")]
-
-        def _rotate(lst: list[tuple[str, str, str]], seed: int) -> list[tuple[str, str, str]]:
-            if not lst:
-                return []
-            off = seed % len(lst)
-            return lst[off:] + lst[:off]
-
-        # 시장당 하루 스캔량만큼 오프셋을 이동시켜 창이 매일 겹치지 않게 슬라이드
-        # 되도록 한다 (1칸씩만 옮기면 KOSDAQ 1821개 전체를 훑는데 ~5년 걸림).
-        _step    = max(1, _n_fill // 2)
-        _day_ord = date.today().toordinal()
-        _kospi_rot  = _rotate(_kospi_others,  _day_ord * _step)
-        _kosdaq_rot = _rotate(_kosdaq_others, _day_ord * _step)
-        _fill = [
-            t for pair in zip_longest(_kospi_rot, _kosdaq_rot)
-            for t in pair if t is not None
-        ][:_n_fill]
-
-        all_tickers = _priority + _fill
-        logger.info("[3단계] 티커 캡 %d 적용 (Ichimoku 우선 %d + KOSPI/KOSDAQ 순환 %d)",
-                    cap, len(_priority), len(_fill))
-
     logger.info("[3단계] 분류 대상: %d종목 / SCREENER_WORKERS=%s",
                 len(all_tickers), os.environ.get("SCREENER_WORKERS", "1"))
 

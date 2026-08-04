@@ -654,7 +654,7 @@ class ScreenResult:
 
 **핵심 설계**:
 - ThreadPoolExecutor 내부에서 asyncpg 직접 호출 금지 — price_df, flow_df, s1_history 모두 진입 전에 배치 로드하여 전달 (learnings: asyncpg-threadpool-no-db)
-- `DAILY_CLASSIFIER_TICKERS` 환경변수로 최대 처리 종목 수 제어 (기본 150), Ichimoku 통과 종목은 캡 초과 시에도 항상 포함
+- 매일 전종목(KOSPI+KOSDAQ, ~2764종목) 스캔 — 티커 캡 없음(스크리너와 동일 패턴으로 2026-08 제거)
 
 **주요 함수**:
 
@@ -1286,17 +1286,21 @@ LLM이 "셀트리온헬스케어"로 추출하고 KRX DB에는 "셀트리온헬�
 기본(미설정): NaN → 통과. Strict 모드: NaN → 실패.  
 DB에서 `null_pct > 20%` 확인 후 활성화 권장.
 
-### 6. 일봉 분류기 티커 캡 (DAILY_CLASSIFIER_TICKERS)
+### 6. 일봉 분류기 전종목 스캔 (티커 캡 제거)
 
-`DAILY_CLASSIFIER_TICKERS=150` (기본값) 환경변수로 일봉 분류기의 최대 처리 종목 수를 제어합니다.  
-Ichimoku 통과 종목은 캡 초과 여부와 관계없이 항상 포함됩니다.
+일봉 분류기는 매일 전종목(KOSPI+KOSDAQ, ~2764종목)을 스캔합니다. 원래는
+`DAILY_CLASSIFIER_TICKERS`(기본 150) 환경변수로 하루 처리 종목 수를 제한하고
+KOSPI/KOSDAQ을 날짜 기반 오프셋으로 번갈아 스캔해 전체 유니버스를 ~2~4주에
+걸쳐 점진 커버하는 방식이었습니다. 2026-07까지는 KOSPI가 리스트 앞부분을 전부
+차지해 KOSDAQ이 캡에 절대 들지 못하는 버그가 있었고(`stage_classifications`에
+KOSDAQ 행이 0건), `market_map`도 종목코드 접미사 대신 sector로 판정해 모든
+종목이 `"KOSPI"`로 분류되는 버그가 겹쳐 있었습니다 — 이 버그는
+`jobs/stage_job.py`에서 먼저 수정(`CHANGELOG.md` `[0.10.1.18]` 참고).
 
-캡을 채우는 나머지 종목은 KOSPI/KOSDAQ을 번갈아 선택하고, 날짜 기반 오프셋으로
-매일 다른 구간을 스캔합니다(각 시장 유니버스를 ~2~4주 주기로 전체 커버).
-2026-07까지는 KOSPI가 리스트 앞부분을 전부 차지해 KOSDAQ이 캡에 절대 들지 못하는
-버그가 있었고(`stage_classifications`에 KOSDAQ 행이 0건), `market_map`도 종목코드
-접미사 대신 sector로 판정해 모든 종목이 `"KOSPI"`로 분류되는 버그가 겹쳐 있었습니다
-— `jobs/stage_job.py`에서 수정(`CHANGELOG.md` `[0.10.1.18]` 참고).
+이후 스크리너(주봉, 동일한 yfinance 개별 호출 패턴)가 이미 전종목(2763개)을
+`SCREENER_WORKERS`만으로 매일 문제없이 처리하는 게 실증돼(2026-08, ≈3분 24초),
+캡/순환 로직 자체를 제거하고 스크리너와 동일하게 전종목을 매일 스캔하도록
+단순화했습니다.
 
 ### 7. 뉴스 게이팅 강화 (이중 레이어)
 

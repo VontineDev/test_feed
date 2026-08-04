@@ -160,36 +160,12 @@ python run_scheduler.py --once stage
 
 ---
 
-## 티커 캡 설정
+## 처리 범위
 
-기본값으로 일봉 분류기는 최대 150종목을 처리합니다. Ichimoku 주봉 통과 종목은 이 한도에 관계없이 항상 포함됩니다.
-
-```env
-# .env
-DAILY_CLASSIFIER_TICKERS=150   # 기본값
-```
-
-### 캡 확장 절차
-
-1. **2주 이상 로그에서 fetch latency 확인:**
-
-```bash
-grep "\[일봉\].*API 수집" logs/run.log | tail -50
-```
-
-2. **p99 latency < 0.5초이면 캡 확장:**
-
-```env
-DAILY_CLASSIFIER_TICKERS=300
-```
-
-3. **5회 연속 데드라인(17:00 KST) 이내 완료 확인 후 유지.**
-
-| 캡 | 예상 소요 (SCREENER_WORKERS=8) |
-|----|-------------------------------|
-| 150 | ~3분 |
-| 300 | ~6분 |
-| 2770 (전종목) | ~50분 |
+일봉 분류기는 매일 전종목(KOSPI+KOSDAQ, ~2764종목)을 스캔합니다 — 티커 캡 없음. 스크리너(주봉,
+동일한 yfinance 개별 호출 패턴)가 이미 전종목을 `SCREENER_WORKERS`만으로 매일 문제없이 처리하는
+게 실증돼 있어(2026-08 기준 2763종목 ≈ 3분 24초), 예전에 있던 150종목 캡/KOSPI-KOSDAQ 순환 로직을
+제거했습니다.
 
 ---
 
@@ -279,13 +255,12 @@ ORDER BY avg_flow_score DESC NULLS LAST, stage1_count DESC;
 
 ## 트러블슈팅
 
-**`[3단계] OHLCV 수집: 50/150종목`처럼 수집 수가 낮은 경우:**
+**`[3단계] OHLCV 수집: 2500/2764종목`처럼 수집 수가 대상보다 낮은 경우:**
 - yfinance 일봉 60일치 조회 실패. 최근 상장 종목이나 거래 정지 종목에서 발생합니다.
 - `SCREENER_WORKERS`를 줄이면 rate limit 압박이 줄어들 수 있습니다.
 
 **분류기가 데드라인(17:00 KST) 전에 완료되지 않는 경우:**
-1. `SCREENER_WORKERS` 증가
-2. `DAILY_CLASSIFIER_TICKERS` 감소 (150이 기본, 100으로 낮춰서 확인)
+- `SCREENER_WORKERS` 증가 (스크리너와 공유하는 값 — 8 권장)
 
 **`stage_classifications` 테이블이 없는 경우:**
 ```bash
@@ -297,7 +272,7 @@ python -c "import asyncio; from db import init_db; asyncio.run(init_db(None))"
 
 ## 관련 문서
 
-- [reference-env-vars.md](reference-env-vars.md) — `DAILY_CLASSIFIER_TICKERS`, `SCREENER_WORKERS`
+- [reference-env-vars.md](reference-env-vars.md) — `SCREENER_WORKERS`
 - [howto-watchlist.md](howto-watchlist.md) — Stage 1 이후 워치리스트 추적
 - [howto-screener.md](howto-screener.md) — 주봉 Ichimoku 스크리너 (교차 시스템)
 - [explanation-signal-pipeline.md](explanation-signal-pipeline.md) — 게이팅 동작 원리
