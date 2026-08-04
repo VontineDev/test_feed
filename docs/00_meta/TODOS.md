@@ -30,6 +30,16 @@ TR)가 코드에 아예 없다.
 **Effort:** M (human: ~1h / CC: ~30min)
 **Priority:** P1
 **Found:** 2026-08-03, paper trading 계좌 불일치 investigate 세션
+**Completed:** 2026-08-04 — Kiwoom REST API 문서(p.190-192) 원문 확인 후 `ka10076`(체결요청)로
+`KiwoomPaperTrader.check_execution()`/`confirm_fill()` 추가(`data/kiwoom_paper_trader.py`).
+주문 직후 최대 3회(1.5s 간격) 폴링해 실제 체결 수량 확인. 매수 미체결 시 `update_to_open` 대신
+즉시 `update_to_closed(exit_type='buy_never_filled')` 처리(기존 수동 정정과 동일 라벨, 프론트
+변경 불필요), 부분체결 시 실체결 수량 기준으로 기록. 매도는 미체결/부분체결 시 기존 `FAILED`
+분기와 동일하게 `open` 유지 후 다음 실행 재시도. 유닛테스트 10건(`tests/test_kiwoom_execution_check.py`)
+추가, 전체 스위트 873건 통과, pyright/ruff 클린. 라이브 검증 중 모의투자 서버가 과거 체결 이력을
+오래 보관하지 않는 걸 발견해(`ka10075`/`ka10076` 둘 다 오래된 주문 조회 시 빈 응답) `confirm_fill()`
+자체가 확인 결과를 INFO 로그로 남기도록 보강 — Kiwoom 이력 보관 여부와 무관하게 우리 쪽이 감사
+기록을 갖도록 함. 실제 신규 주문에 대한 검증은 다음 실거래(09:05/15:20 KST)에서 로그로 확인 필요.
 
 ---
 
@@ -642,6 +652,12 @@ Success Criterion 1 (stranger installs without asking a question).
 **Priority:** P3
 **Blocked by:** Sprint 2 daily job implementation.
 **Completed:** v0.9.3.0 (2026-05-20) — `DAILY_CLASSIFIER_TICKERS=150` env var; Ichimoku 통과 종목 우선 포함 후 나머지 채움.
+
+**추가 해소 (2026-08-04):** 여기서 다루던 "150→300 단계적 확장" 자체가 무의미해짐 — 스크리너가
+이미 전종목(2763개)을 yfinance 개별 호출로 매일 문제없이 처리하는 게 실증돼(3분 24초), 단계적
+확장 대신 `DAILY_CLASSIFIER_TICKERS` 캡/순환 로직 자체를 제거하고 스크리너와 동일하게 매일
+전종목을 스캔하도록 변경(`jobs/stage_job.py`). p99 실측 후 300으로 늘리는 절차 자체가 필요
+없어짐 — 이 TODO 완전히 닫음.
 
 ---
 
