@@ -4,6 +4,28 @@ Items deferred from code review and planning sessions.
 
 ---
 
+## P1: 체결 확인 절차(ka10076) — 첫 실거래 로그 확인 필요
+
+**What:** 아래 항목("모의투자 — 매수/매도 주문 체결 확인 절차 부재")에서 구현한
+`confirm_fill()`/`check_execution()`이 실제 신규 주문에서 정상 동작하는지 아직
+라이브로 확인 못 함 — 라이브 검증 시도했지만 모의투자 서버가 과거 체결 이력을
+보관하지 않아(오래된 주문 조회 시 빈 응답) 히스토리 기반 검증이 불가능했음.
+
+**How to apply:** 다음 실거래(평일 09:05 KST `paper_open_entry_job` 매수 진입, 또는
+15:20 KST `paper_exit_checker_job` 매도 청산) 이후 `logs/news_crawler.log`에서 확인:
+1. `[paper] {ticker} 매수 체결 확인: N/M주 (주문번호=...)` 로그가 정상적으로 찍히는지
+2. 미체결(`N=0`) → `buy_never_filled`로 closed 처리 + 텔레그램 경고가 실제로 발생하는지
+3. 부분체결(`0<N<M`) 케이스가 있으면 실체결 수량 기준으로 `paper_positions.qty`가
+   정확히 기록됐는지 DB로 교차 확인
+4. 에러 없이 완료됐는지(`[paper-entry] 완료` 로그까지 도달)
+
+**Effort:** XS (확인만, ~5분)
+**Priority:** P1
+**Found:** 2026-08-04, 체결확인 기능 구현 세션 — 라이브 검증이 막혀 다음 실거래로 이월
+**Depends on:** 다음 평일 09:05 KST 또는 15:20 KST 스케줄 실행
+
+---
+
 ## P1: 모의투자 — 매수/매도 주문 체결 확인 절차 부재
 
 **What:** `paper_open_entry_job`/`paper_exit_checker_job`(`jobs/paper_jobs.py`)이
