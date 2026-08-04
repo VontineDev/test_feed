@@ -154,6 +154,28 @@ async def paper_exit_checker_job(db_pool, paper_trader) -> None:
                 logger.warning("[paper-exit] %s 매도 실패 알림 전송 실패: %s", _ticker, _e)
             continue
 
+        # 주문 접수(ord_no) ≠ 체결 확정 — ka10076으로 실제 체결 수량 확인.
+        # 미체결/부분체결이면 브로커에 주식이 그대로(또는 일부) 남으므로 위 FAILED
+        # 분기와 동일하게 청산 미확정 상태로 두고 다음 실행에서 재시도한다.
+        _sell_filled = await _loop.run_in_executor(
+            None, paper_trader.confirm_fill, _ticker, _sell_ord, _qty, False
+        )
+        if _sell_filled < _qty:
+            logger.warning("[paper-exit] %s 매도 체결 미확인 %d/%d주 (주문번호=%s)",
+                            _ticker, _sell_filled, _qty, _sell_ord)
+            try:
+                async with httpx.AsyncClient() as _http:
+                    await _post_message(
+                        _http, _get_token(), _get_chat_id(),
+                        f"⚠️ 매도 체결 미확인 — {_ticker} ({_pos['model']}) "
+                        f"{_sell_filled}/{_qty}주 주문번호={_sell_ord}, "
+                        f"청산 미확정 (다음 실행에서 재시도)",
+                        label="paper-exit", parse_mode=None,
+                    )
+            except Exception as _e:
+                logger.warning("[paper-exit] %s 미확인 알림 전송 실패: %s", _ticker, _e)
+            continue
+
         # blended_return 계산 (TP1 발동 시 가중평균)
         if _tp1_done:
             _tp1_ret = (_pos["tp1_price"] - _entry) / _entry if _pos.get("tp1_price") else 0
@@ -344,13 +366,52 @@ async def paper_open_entry_job(db_pool, paper_trader) -> None:
             logger.warning("[paper-entry] %s 매수주문 실패: %s", _ticker, _e)
             continue
 
-        _invested += _order_cost  # 같은 실행 내 후속 주문의 한도 판정에 반영
+        # 주문 접수(ord_no) ≠ 체결 확정 — ka10076으로 실제 체결 수량 확인
+        # (2026-08-03 investigate: 접수만 되고 미체결인 주문이 조용히 성공 처리된 사고)
+        _filled = await _loop.run_in_executor(
+            None, paper_trader.confirm_fill, _ticker, _ord_no, _qty, True
+        )
 
-        # pending → open
+        if _filled <= 0:
+            logger.warning("[paper-entry] %s 매수 미체결 (주문번호=%s) — closed 처리",
+                            _ticker, _ord_no)
+            try:
+                await update_to_closed(db_pool, _pos_id, 0.0, "buy_never_filled", _ord_no)
+            except Exception as _e:
+                logger.warning("[paper-entry] %s DB 업데이트 실패: %s", _ticker, _e)
+            try:
+                async with httpx.AsyncClient() as _http:
+                    await _post_message(
+                        _http, _get_token(), _get_chat_id(),
+                        f"⚠️ 매수 미체결 — {_ticker} ({_model}) 주문번호={_ord_no}, "
+                        f"청산(buy_never_filled) 처리",
+                        label="paper-entry", parse_mode=None,
+                    )
+            except Exception as _e:
+                logger.warning("[paper-entry] %s 미체결 알림 전송 실패: %s", _ticker, _e)
+            continue
+
+        if _filled < _qty:
+            logger.warning("[paper-entry] %s 부분체결 %d/%d주 (주문번호=%s)",
+                            _ticker, _filled, _qty, _ord_no)
+            try:
+                async with httpx.AsyncClient() as _http:
+                    await _post_message(
+                        _http, _get_token(), _get_chat_id(),
+                        f"⚠️ 매수 부분체결 — {_ticker} ({_model}) {_filled}/{_qty}주 "
+                        f"주문번호={_ord_no}",
+                        label="paper-entry", parse_mode=None,
+                    )
+            except Exception as _e:
+                logger.warning("[paper-entry] %s 부분체결 알림 전송 실패: %s", _ticker, _e)
+
+        _invested += _filled * _open_px  # 같은 실행 내 후속 주문의 한도 판정에 실체결 기준 반영
+
+        # pending → open (실제 체결 수량 기준)
         try:
-            await update_to_open(db_pool, _pos_id, float(_open_px), _qty, _ord_no)
+            await update_to_open(db_pool, _pos_id, float(_open_px), _filled, _ord_no)
             logger.info("[paper-entry] %s %d주 매수 완료 (시가=%d, 주문번호=%s)",
-                        _ticker, _qty, _open_px, _ord_no)
+                        _ticker, _filled, _open_px, _ord_no)
         except Exception as _e:
             logger.warning("[paper-entry] %s DB 업데이트 실패: %s", _ticker, _e)
 

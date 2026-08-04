@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import time
 from datetime import date
 from typing import Optional
 
@@ -184,6 +185,55 @@ class KiwoomPaperTrader:
         ord_no = data.get("ord_no", "")
         logger.info("[paper] 매도주문 %s %d주 → 주문번호=%s", stk_cd, qty, ord_no)
         return ord_no
+
+    def check_execution(self, ticker: str, ord_no: str, is_buy: bool) -> int:
+        """ka10076 체결요청으로 특정 주문의 실제 체결 수량을 조회.
+
+        place_buy/place_sell과 같은 계좌 패밀리(/api/dostk/acnt)라 모의투자
+        서버(self._client)를 그대로 쓴다. 조회 실패 시 예외를 전파하지 않고
+        0을 반환한다 — 호출부(confirm_fill)가 재시도 루프를 돌리기 때문.
+        """
+        stk_cd = _to_6digit(ticker)
+        try:
+            data, _ = self._client._post(
+                "/api/dostk/acnt", "ka10076",
+                {
+                    "stk_cd":  stk_cd,
+                    "qry_tp":  "1",                      # 1:종목
+                    "sell_tp": "2" if is_buy else "1",    # 2:매수, 1:매도
+                    "ord_no":  ord_no,
+                    "stex_tp": "0",                       # 0:전체
+                },
+            )
+        except Exception as e:
+            logger.warning("[paper] %s 체결 확인 실패(ord_no=%s): %s", stk_cd, ord_no, e)
+            return 0
+
+        filled = 0
+        for row in data.get("cntr") or []:
+            try:
+                filled += int(str(row.get("cntr_qty", "0")).strip() or "0")
+            except ValueError:
+                pass
+        return filled
+
+    def confirm_fill(
+        self, ticker: str, ord_no: str, qty: int, is_buy: bool,
+        attempts: int = 3, delay_s: float = 1.5,
+    ) -> int:
+        """check_execution을 최대 attempts회 폴링해 실제 체결 수량을 반환.
+
+        누적 체결량이 qty 이상이면 즉시 종료. 동기 함수 — place_buy/place_sell과
+        마찬가지로 호출부에서 run_in_executor로 감싼다.
+        """
+        filled = 0
+        for i in range(attempts):
+            if i > 0:
+                time.sleep(delay_s)
+            filled = self.check_execution(ticker, ord_no, is_buy)
+            if filled >= qty:
+                break
+        return filled
 
     # ── 계좌 조회 ────────────────────────────────────────────────────────────
 
