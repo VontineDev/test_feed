@@ -225,6 +225,11 @@ class KiwoomPaperTrader:
 
         누적 체결량이 qty 이상이면 즉시 종료. 동기 함수 — place_buy/place_sell과
         마찬가지로 호출부에서 run_in_executor로 감싼다.
+
+        모의투자 서버는 과거 체결 이력을 오래 보관하지 않는 것으로 확인됐다
+        (2026-08-04 라이브 확인 — 지난 주문을 조회하면 빈 응답). 그래서 서버
+        조회 결과에만 의존하지 않고, 확인 시점에 결과를 이 로그로 직접 남겨
+        우리 쪽이 스스로의 감사 기록을 갖도록 한다.
         """
         filled = 0
         for i in range(attempts):
@@ -233,6 +238,9 @@ class KiwoomPaperTrader:
             filled = self.check_execution(ticker, ord_no, is_buy)
             if filled >= qty:
                 break
+        side = "매수" if is_buy else "매도"
+        logger.info("[paper] %s %s 체결 확인: %d/%d주 (주문번호=%s)",
+                    ticker, side, filled, qty, ord_no)
         return filled
 
     # ── 계좌 조회 ────────────────────────────────────────────────────────────
