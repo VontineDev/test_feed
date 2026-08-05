@@ -4,6 +4,38 @@ Items deferred from code review and planning sessions.
 
 ---
 
+## P1: 한국경제(hankyung) RSS 완전 차단 — Cloudflare JS 챌린지 — ✅ 완료 (사이트맵으로 대체)
+
+**What:** `jobs/scheduler_collect.py`가 10분마다 수집하는 `hankyung/feed/economy`,
+`hankyung/feed/finance` 두 RSS 피드가 2026-08-02부터 최소 3일간(하루 288건 로그
+전부) **100% 403 실패** — `logs/news_crawler.log` 정기 점검이 아니라 우연히 발견됨.
+재시도(3회/회차)에도 매번 실패해 핵심 뉴스 소스 하나가 조용히 완전히 빠진 상태였음.
+
+**원인:** UA/Referer/헤더 문제 아님 — `/feed/*` 경로만 Cloudflare가 JS 챌린지
+페이지(`"Just a moment..."`, 403)로 막고 있고, 홈페이지·`robots.txt`는 동일 요청·
+헤더로 전부 정상(200). `robots.txt`에도 `/feed/` disallow 규정 없음 — 정책적
+차단이 아니라 WAF 룰. JS 실행이 필요한 챌린지라 httpx 헤더 조합으로는 우회 불가능.
+
+**대안:** `https://www.hankyung.com/sitemap/latest-article.xml`(구글 뉴스 사이트맵)은
+차단되지 않음 — 최근 기사 838건이 `<loc>`/`<news:title>`/`<news:publication_date>`로
+제공돼 RSS가 주던 필드(title/url/published)를 그대로 대체.
+
+**수정:** `jobs/scheduler_collect.py`에 `_parse_sitemap()`/`_parse_sitemap_dt()` 추가,
+`fetch_feed()`가 `cfg["type"]`(`rss`\|`sitemap`, 기본값 `rss`)로 파서를 디스패치하도록
+리팩토링(중복 재시도 루프 제거). `run_scheduler.py`의 hankyung 두 RSS 엔트리를
+`type: sitemap` 단일 엔트리로 교체(economy/finance 구분은 사라지지만 원래도 둘 다
+`category="korea"`로 동일 취급됐음 — 영향 없음). `tests/test_scheduler_collect.py`
+신규(12 테스트: 사이트맵 날짜 파싱, url/title 추출, news 블록 없는 entry 처리,
+fetch_feed의 rss/sitemap 디스패치, 신선도 필터, 403 재시도). 실제 프로덕션
+헤더로 라이브 스모크 테스트 — 429건 정상 수집 확인. 전체 스위트 887건 통과,
+pyright/ruff 클린.
+
+**Effort:** S (human: ~1h / CC: ~30min)
+**Priority:** P1
+**Found:** 2026-08-05, "오늘 할 일 찾기" 세션 중 로그 훑다가 발견 (TODOS.md에 기록된 적 없던 이슈)
+
+---
+
 ## P1: 체결 확인 절차(ka10076) — 첫 실거래 로그 확인 필요 — ✅ 완료 (결함 발견 및 수정)
 
 **What:** 아래 항목("모의투자 — 매수/매도 주문 체결 확인 절차 부재")에서 구현한

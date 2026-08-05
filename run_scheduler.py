@@ -149,14 +149,11 @@ FEEDS = [
         "source": "yonhap", "category": "korea",
         "url": "https://www.yna.co.kr/rss/market.xml",
     },
-    # 한국경제 — 경제·시장 RSS
+    # 한국경제 — 사이트맵 기반 (2026-08-05: /feed/* RSS가 Cloudflare JS 챌린지로
+    # 3일+ 100% 403 차단 확인 — 같은 도메인의 뉴스 사이트맵은 차단되지 않아 대체)
     {
-        "source": "hankyung", "category": "korea",
-        "url": "https://www.hankyung.com/feed/economy",
-    },
-    {
-        "source": "hankyung", "category": "korea",
-        "url": "https://www.hankyung.com/feed/finance",
+        "source": "hankyung", "category": "korea", "type": "sitemap",
+        "url": "https://www.hankyung.com/sitemap/latest-article.xml",
     },
     # 매일경제 — 경제·증권 RSS
     {
