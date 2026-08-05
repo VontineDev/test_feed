@@ -1,9 +1,16 @@
 """check_execution() / confirm_fill() 단위 테스트.
 
-API: ka10076 체결요청 (Kiwoom REST API 문서 p.190-192)
+check_execution(): ka10076 체결요청 (Kiwoom REST API 문서 p.190-192)
   - URL: /api/dostk/acnt
   - 응답 배열 키: cntr, 체결수량 필드: cntr_qty
   - place_buy()/place_sell()이 반환한 ord_no가 실제로 체결됐는지 확인하는 용도.
+  - 2026-08-05: 실 계좌 검증 결과 이 모의투자 계좌에서 신규 주문도 항상 빈
+    체결내역을 반환하는 것으로 확인돼 confirm_fill()의 내부 구현에서는
+    더 이상 쓰지 않음(get_position_qty() 델타로 대체). 메서드 자체는 응답
+    파싱 로직이 독립적으로 올바르므로 유지 — TestCheckExecution 테스트 참고.
+
+confirm_fill(): get_position_qty()(get_positions()/kt00018) 전후 스냅샷
+  델타로 실제 체결 수량을 추정 — TestConfirmFill 참고.
 """
 from unittest.mock import MagicMock
 
@@ -73,39 +80,65 @@ class TestCheckExecution:
 
 
 class TestConfirmFill:
+    """2026-08-05: ka10076이 이 모의투자 계좌에서 신규 주문도 항상 빈 체결내역을
+    반환하는 것으로 확인돼(실제로는 100% 체결된 주문이 전부 미확인 처리됨),
+    confirm_fill()은 check_execution()(ka10076) 대신 get_position_qty()
+    (get_positions()/kt00018 기반) 전후 스냅샷 델타로 체결량을 추정하도록 변경됨.
+    """
+
     def test_full_fill_stops_after_first_attempt(self):
-        mock_post = MagicMock(return_value=({_RESPONSE_KEY: [_cntr_row(10)]}, {}))
-        trader = _make_trader(mock_post)
-        filled = trader.confirm_fill("005930", "0000001", qty=10, is_buy=True, delay_s=0)
+        trader = _make_trader(MagicMock())
+        trader.get_position_qty = MagicMock(return_value=10)  # qty_before=0 → +10
+        filled = trader.confirm_fill(
+            "005930", "0000001", qty=10, is_buy=True, qty_before=0, delay_s=0
+        )
         assert filled == 10
-        assert mock_post.call_count == 1
+        assert trader.get_position_qty.call_count == 1
 
     def test_never_filled_polls_all_attempts(self):
-        mock_post = MagicMock(return_value=({_RESPONSE_KEY: []}, {}))
-        trader = _make_trader(mock_post)
+        trader = _make_trader(MagicMock())
+        trader.get_position_qty = MagicMock(return_value=0)  # qty_before=0 → 변화 없음
         filled = trader.confirm_fill(
-            "005930", "0000001", qty=10, is_buy=True, attempts=3, delay_s=0
+            "005930", "0000001", qty=10, is_buy=True, qty_before=0,
+            attempts=3, delay_s=0,
         )
         assert filled == 0
-        assert mock_post.call_count == 3
+        assert trader.get_position_qty.call_count == 3
 
     def test_fills_on_second_attempt(self):
-        mock_post = MagicMock(side_effect=[
-            ({_RESPONSE_KEY: []}, {}),
-            ({_RESPONSE_KEY: [_cntr_row(10)]}, {}),
-        ])
-        trader = _make_trader(mock_post)
+        trader = _make_trader(MagicMock())
+        trader.get_position_qty = MagicMock(side_effect=[0, 10])  # qty_before=0
         filled = trader.confirm_fill(
-            "005930", "0000001", qty=10, is_buy=True, attempts=3, delay_s=0
+            "005930", "0000001", qty=10, is_buy=True, qty_before=0,
+            attempts=3, delay_s=0,
         )
         assert filled == 10
-        assert mock_post.call_count == 2
+        assert trader.get_position_qty.call_count == 2
 
     def test_partial_fill_returns_last_observed_amount(self):
-        mock_post = MagicMock(return_value=({_RESPONSE_KEY: [_cntr_row(4)]}, {}))
-        trader = _make_trader(mock_post)
+        trader = _make_trader(MagicMock())
+        trader.get_position_qty = MagicMock(return_value=4)  # qty_before=0 → +4
         filled = trader.confirm_fill(
-            "005930", "0000001", qty=10, is_buy=True, attempts=2, delay_s=0
+            "005930", "0000001", qty=10, is_buy=True, qty_before=0,
+            attempts=2, delay_s=0,
         )
         assert filled == 4
-        assert mock_post.call_count == 2
+        assert trader.get_position_qty.call_count == 2
+
+    def test_sell_delta_uses_qty_before_minus_qty_now(self):
+        trader = _make_trader(MagicMock())
+        trader.get_position_qty = MagicMock(return_value=0)  # 100 → 0, 전량 매도
+        filled = trader.confirm_fill(
+            "005930", "0000001", qty=100, is_buy=False, qty_before=100, delay_s=0
+        )
+        assert filled == 100
+
+    def test_concurrent_other_model_holding_does_not_break_delta(self):
+        """같은 티커를 다른 모델이 동시 보유해도, 델타 계산이라 이 주문분만 잡아낸다."""
+        trader = _make_trader(MagicMock())
+        # 이 모델 100주 + 다른 모델 50주 = before 150 → 이 모델분만 매도돼 50 남음
+        trader.get_position_qty = MagicMock(return_value=50)
+        filled = trader.confirm_fill(
+            "005930", "0000001", qty=100, is_buy=False, qty_before=150, delay_s=0
+        )
+        assert filled == 100

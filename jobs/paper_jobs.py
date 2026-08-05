@@ -128,6 +128,10 @@ async def paper_exit_checker_job(db_pool, paper_trader) -> None:
             continue
 
         # ── 매도주문 제출 ─────────────────────────────────────
+        # 주문 제출 직전 보유수량 스냅샷 — confirm_fill()의 델타 계산 기준.
+        _qty_before = await _loop.run_in_executor(
+            None, paper_trader.get_position_qty, _ticker
+        )
         _sell_ord = ""
         if _qty > 0:
             try:
@@ -154,11 +158,12 @@ async def paper_exit_checker_job(db_pool, paper_trader) -> None:
                 logger.warning("[paper-exit] %s 매도 실패 알림 전송 실패: %s", _ticker, _e)
             continue
 
-        # 주문 접수(ord_no) ≠ 체결 확정 — ka10076으로 실제 체결 수량 확인.
+        # 주문 접수(ord_no) ≠ 체결 확정 — 보유수량 스냅샷 델타로 실제 체결 수량 확인
+        # (ka10076은 이 계좌에서 항상 빈 응답이라 2026-08-05 폐기, get_positions() 비교로 대체).
         # 미체결/부분체결이면 브로커에 주식이 그대로(또는 일부) 남으므로 위 FAILED
         # 분기와 동일하게 청산 미확정 상태로 두고 다음 실행에서 재시도한다.
         _sell_filled = await _loop.run_in_executor(
-            None, paper_trader.confirm_fill, _ticker, _sell_ord, _qty, False
+            None, paper_trader.confirm_fill, _ticker, _sell_ord, _qty, False, _qty_before
         )
         if _sell_filled < _qty:
             logger.warning("[paper-exit] %s 매도 체결 미확인 %d/%d주 (주문번호=%s)",
@@ -357,7 +362,10 @@ async def paper_open_entry_job(db_pool, paper_trader) -> None:
             )
             continue
 
-        # 매수주문 제출
+        # 매수주문 제출 직전 보유수량 스냅샷 — confirm_fill()의 델타 계산 기준.
+        _qty_before = await _loop.run_in_executor(
+            None, paper_trader.get_position_qty, _ticker
+        )
         try:
             _ord_no = await _loop.run_in_executor(
                 None, paper_trader.place_buy, _ticker, _qty
@@ -366,10 +374,11 @@ async def paper_open_entry_job(db_pool, paper_trader) -> None:
             logger.warning("[paper-entry] %s 매수주문 실패: %s", _ticker, _e)
             continue
 
-        # 주문 접수(ord_no) ≠ 체결 확정 — ka10076으로 실제 체결 수량 확인
-        # (2026-08-03 investigate: 접수만 되고 미체결인 주문이 조용히 성공 처리된 사고)
+        # 주문 접수(ord_no) ≠ 체결 확정 — 보유수량 스냅샷 델타로 실제 체결 수량 확인
+        # (ka10076은 이 계좌에서 항상 빈 응답이라 2026-08-05 폐기, get_positions() 비교로 대체.
+        #  2026-08-03 investigate: 애초에 접수만 되고 미체결인 주문이 조용히 성공 처리된 사고가 계기).
         _filled = await _loop.run_in_executor(
-            None, paper_trader.confirm_fill, _ticker, _ord_no, _qty, True
+            None, paper_trader.confirm_fill, _ticker, _ord_no, _qty, True, _qty_before
         )
 
         if _filled <= 0:

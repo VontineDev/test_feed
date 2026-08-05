@@ -217,30 +217,49 @@ class KiwoomPaperTrader:
                 pass
         return filled
 
+    def get_position_qty(self, ticker: str) -> int:
+        """get_positions()에서 특정 티커의 계좌 합산 보유수량 조회 (없으면 0).
+
+        다른 모델이 동시에 같은 티커를 보유 중이어도 이 값은 계좌 전체 합산이므로,
+        체결 확인은 항상 주문 전/후 스냅샷의 델타로 판단해야 한다(confirm_fill 참고).
+        """
+        stk_cd = _to_6digit(ticker)
+        for p in self.get_positions():
+            if p["stk_cd"] == stk_cd:
+                return p["rmnd_qty"]
+        return 0
+
     def confirm_fill(
-        self, ticker: str, ord_no: str, qty: int, is_buy: bool,
+        self, ticker: str, ord_no: str, qty: int, is_buy: bool, qty_before: int,
         attempts: int = 3, delay_s: float = 1.5,
     ) -> int:
-        """check_execution을 최대 attempts회 폴링해 실제 체결 수량을 반환.
+        """주문 전/후 계좌 보유수량 델타로 체결 수량을 추정, 최대 attempts회 폴링.
 
         누적 체결량이 qty 이상이면 즉시 종료. 동기 함수 — place_buy/place_sell과
         마찬가지로 호출부에서 run_in_executor로 감싼다.
 
-        모의투자 서버는 과거 체결 이력을 오래 보관하지 않는 것으로 확인됐다
-        (2026-08-04 라이브 확인 — 지난 주문을 조회하면 빈 응답). 그래서 서버
-        조회 결과에만 의존하지 않고, 확인 시점에 결과를 이 로그로 직접 남겨
-        우리 쪽이 스스로의 감사 기록을 갖도록 한다.
+        원래는 ka10076(체결요청, check_execution())으로 확인했으나, 이 모의투자
+        계좌에서는 신규 주문 직후든 몇 시간 뒤든 항상 빈 체결내역(cntr=[])만
+        반환하는 것으로 확인됐다(2026-08-05 라이브 검증 — 실제로는 100% 체결된
+        21건 전부가 미확인 처리되며 DB status가 broker 실보유와 어긋남). 그래서
+        get_positions()(kt00018) 스냅샷 비교로 대체한다.
+
+        qty_before는 호출부가 place_buy/place_sell 제출 **직전**에
+        get_position_qty()로 조회해 전달해야 한다 — 델타 계산이라 같은 티커를
+        동시에 보유한 다른 모델의 몫과 무관하게 이 주문이 실제로 바꾼 수량만 잡아낸다.
         """
         filled = 0
+        qty_now = qty_before
         for i in range(attempts):
             if i > 0:
                 time.sleep(delay_s)
-            filled = self.check_execution(ticker, ord_no, is_buy)
+            qty_now = self.get_position_qty(ticker)
+            filled = max(0, (qty_now - qty_before) if is_buy else (qty_before - qty_now))
             if filled >= qty:
                 break
         side = "매수" if is_buy else "매도"
-        logger.info("[paper] %s %s 체결 확인: %d/%d주 (주문번호=%s)",
-                    ticker, side, filled, qty, ord_no)
+        logger.info("[paper] %s %s 체결 확인: %d/%d주 (주문번호=%s, 보유수량 %d→%d)",
+                    ticker, side, filled, qty, ord_no, qty_before, qty_now)
         return filled
 
     # ── 계좌 조회 ────────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@ Items deferred from code review and planning sessions.
 
 ---
 
-## P1: 체결 확인 절차(ka10076) — 첫 실거래 로그 확인 필요
+## P1: 체결 확인 절차(ka10076) — 첫 실거래 로그 확인 필요 — ✅ 완료 (결함 발견 및 수정)
 
 **What:** 아래 항목("모의투자 — 매수/매도 주문 체결 확인 절차 부재")에서 구현한
 `confirm_fill()`/`check_execution()`이 실제 신규 주문에서 정상 동작하는지 아직
@@ -22,7 +22,31 @@ Items deferred from code review and planning sessions.
 **Effort:** XS (확인만, ~5분)
 **Priority:** P1
 **Found:** 2026-08-04, 체결확인 기능 구현 세션 — 라이브 검증이 막혀 다음 실거래로 이월
-**Depends on:** 다음 평일 09:05 KST 또는 15:20 KST 스케줄 실행
+
+**결과 (2026-08-05, 15:20 KST `paper_exit_checker_job` 라이브 로그 확인):** 매도 21건
+전부 `매도 체결 확인: 0/N주`(미확인) — 예상과 달리 "정상 동작 확인"이 아니라 **버그
+발견**. `get_positions()`로 실제 브로커 잔고 교차 확인 결과 21건 전부 실제로는 100%
+매도 완료(계좌 보유수량 0)였는데, `check_execution()`(ka10076)이 신규 주문 직후든
+4시간 뒤 재조회든 항상 빈 체결내역(`cntr: []`)만 반환하는 것으로 확인됨 — "과거
+이력만 안 남는다"가 아니라 이 계좌에서 ka10076 자체가 구조적으로 못 쓰는 TR이었음.
+`paper_positions` DB에는 21건 전부 `status='open'`으로 남아 브로커 실보유(0주)와
+어긋난 상태 확인 — 다음 실행에서 잔고 부족으로 재매도 실패가 예정돼 있었음(실제로
+같은 날 `000500.KS`에서 "매도가능수량 부족" 에러로 선행 관측됨). 매수 쪽도 동일
+로직이라, 체결된 매수가 `buy_never_filled`로 오판정될 위험도 동일하게 존재했음.
+
+**수정:** `confirm_fill()`을 ka10076 기반에서 `get_positions()`(kt00018) 전후 보유수량
+스냅샷 델타 비교로 교체 (`data/kiwoom_paper_trader.py:get_position_qty()` 신설). 호출부
+(`jobs/paper_jobs.py` 매수/매도 양쪽)에서 주문 제출 **직전** 보유수량을 스냅샷해
+`confirm_fill(..., qty_before=...)`로 전달 — 같은 티커를 동시에 보유한 다른 모델의
+몫과 무관하게 이 주문이 실제로 바꾼 수량만 델타로 잡아냄. `check_execution()`은 응답
+파싱 로직 자체는 정상이라 삭제하지 않고 유지(테스트 6건 그대로 통과), `confirm_fill()`
+내부에서만 더 이상 호출 안 함. `tests/test_kiwoom_execution_check.py`의
+`TestConfirmFill` 4개 테스트를 새 시그니처(`qty_before` 필수)로 재작성 + 동시보유
+델타 검증 테스트 2건 추가(12개 전체 통과). pyright/ruff 클린.
+DB에 남은 21건의 stale `open` 행 자체는 이번 세션에서 수동 정정하지 않음(코드 수정만
+범위) — 다음 15:20 실행 시 매도 재시도 → 새 로직이 즉시 (qty_before=0 또는 이미
+0이었던 잔고 확인) `filled=0`으로 정확히 판정할 것으로 예상되나, 이 경우도
+"매도가능수량 부족" API 에러 자체는 여전히 발생할 수 있어 별도 관찰 필요.
 
 ---
 
