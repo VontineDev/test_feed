@@ -30,6 +30,7 @@
 - `howto-watchlist.md`: 관심종목(Watchlist) 관리 및 알림 로직 구현 가이드
 - `howto-youtube-backfill.md`: 과거 유튜브 영상 데이터 백필(Backfill) 작업 가이드
 - `howto-youtube-run-backtest.md`: 유튜브 내러티브 기반 백테스트 실행 가이드
+- `howto-quant-backtest.md`: TechnicalQuant.md(펀더멘털+기술적 지표) 퀀트 전략 백테스트 실행 및 필터 스윕 가이드
 
 ## 02_reference (Specs & Timetables)
 정적인 스펙 데이터 및 외부 API 연동 명세입니다. 기능 구현 시 값을 참조할 때만 호출합니다.

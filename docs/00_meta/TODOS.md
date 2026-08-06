@@ -4,26 +4,37 @@ Items deferred from code review and planning sessions.
 
 ---
 
-## P3: TechnicalQuant SCENARIO2 청산 파라미터 최적화
+## P3: TechnicalQuant SCENARIO2 진입/청산 파라미터 최적화 (필터 최적화는 완료)
 
 **What:** `scripts/run_quant_backtest.py --condition SCENARIO2 --use-fundamentals`
-(시가총액 상위200 ∩ PER≤15 — 문서 2안 정확 재현, 2025-01-02~2026-08-06 기준
-승률 43.0%/평균수익 +2.9%, 신호 100건)만 세 가지 검증 방식(기술적단독/범용필터/
-문서정확재현) 전부에서 일관되게 양호 — 나머지 개별 조건(A~E)과 1안(문서 정확
-재현 시 승률 22.2%/평균수익 -1.3%, 마이너스)은 거래비용 감안 시 무의미하거나
-음의 엣지로 판정됨(`project_technicalquant_backtest` 메모리 참고). hard_stop_pct
-(현재 -7% 고정)와 RSI 손절/익절 임계값(30/70 고정)을 `scripts/run_sweep.py`
-패턴처럼 그리드서치해 개선 여지가 있는지 확인 필요.
+(시가총액 상위200 ∩ PER≤15 — 문서 2안 정확 재현)만 네 가지 검증 방식(기술적단독/
+범용필터/문서정확재현/필터스윕) 전부에서 일관되게 양호 — 나머지 개별 조건(A~E)과
+1안(문서 정확 재현 시 승률 22.2%/평균수익 -1.3%, 마이너스)은 거래비용 감안 시
+무의미하거나 음의 엣지로 판정됨(`project_technicalquant_backtest` 메모리 참고).
 
-**How to apply:** `analysis/backtest/quant_signals.py`의 `replay_quant()`를
-호출하는 스윕 스크립트 추가(`scripts/run_sweep.py`의 `sweep_compose_backtest`
-패턴 참고) — hard_stop_pct/rsi 임계값 조합별 train/val 샤프 비교.
+**필터(종목선택) 최적화 — ✅ 완료:** `scripts/run_quant_filter_sweep.py`로 PER 상한
+`[10,12,15,18,20,25]` × 시가총액 상위 `[100,150,200,300,500]` 30조합 그리드서치.
+매매타이밍(RSI 30/70, -7% 손절)은 고정. 결과: PER≤18, 시총상위200이 문서 원안
+(PER≤15)보다 우수(신호100→129건, 승률43.0%→46.5%, 평균+2.9%→+4.06%). 시총 상위500까지
+넓히면 PER 상한과 무관하게 전부 성능 하락(유니버스 품질 희석). 전체 결과:
+`results/quant_scenario2_filter_sweep.csv`.
+
+**남은 것 — 진입/청산 파라미터 최적화 (미착수):** hard_stop_pct(현재 -7% 고정)와
+RSI 진입/청산 임계값(30/70 고정) 자체를 그리드서치해 개선 여지가 있는지 확인 필요.
+이번 필터 스윕은 의도적으로 진입/청산은 안 건드렸음(범위를 "필터"로 좁힘 — 둘 다
+바꾸면 다른 전략이 됨).
+
+**How to apply:** `analysis/backtest/quant_signals.py`의 `replay_quant()`가 이미
+`hard_stop_pct`/`target_pct`/`use_rsi70_exit`를 파라미터로 받으므로, RSI 진입
+임계값(`_cond_scenario2_entry`의 하드코딩된 30)과 RSI 청산 임계값(`_scan_exit`의
+하드코딩된 70)만 파라미터화하면 됨. `scripts/run_quant_filter_sweep.py`를 템플릿으로
+써서 진입/청산 그리드 추가(유니버스는 PER≤18/시총상위200 고정하고 RSI/hard_stop만
+스윕 — 필터 스윕과 반대 방향).
 
 **Effort:** S (human: ~1h / CC: ~20min)
 **Priority:** P3
-**Found:** 2026-08-06, TechnicalQuant.md 백테스트 세션 — 펀더멘털 데이터 구축(전체시장
-`dart_fundamentals` 백필) 및 문서 1안/2안 정확 재현까지 완료됐고, 그 결과 2안만
-파라미터 최적화를 검토할 가치가 확인됨 — 최적화 자체는 계속 보류.
+**Found:** 2026-08-06, TechnicalQuant.md 백테스트 세션. **필터 최적화는 2026-08-07
+완료** — 남은 진입/청산 최적화만 계속 보류.
 
 ---
 
