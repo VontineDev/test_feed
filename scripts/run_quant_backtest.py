@@ -5,7 +5,10 @@ run_quant_backtest.py — TechnicalQuant.md 매매타이밍 조건 백테스트 
 1차 버전은 전체 시장 펀더멘털 데이터(PBR/PER/ROE/부채비율/매출증가율)가 없어
 기술적 조건만 검증했으나, 이후 dart_fundamentals 백필(scripts/
 dart_fundamentals_backfill.py) 완료로 --use-fundamentals 플래그를 추가해
-SCENARIO1/2 유니버스에 실제 펀더멘털 필터를 적용할 수 있다.
+SCENARIO1/2 각각에 문서가 명시한 고유 종목선택 조건(1안: PBR≤0.8·ROE≥10%·
+부채비율≤100%, 2안: PER≤15)을 정확히 적용할 수 있다 — 두 시나리오가 서로
+다른 숫자를 쓰므로 공통 범용 필터를 쓰면 안 된다(analysis/fundamentals.py의
+SCENARIO1_THRESHOLDS/SCENARIO2_THRESHOLDS 참고).
 
 사용법:
     # 개별 조건 5종 + 시나리오 2종 전체 비교 (펀더멘털 필터 없이)
@@ -174,10 +177,10 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--output", default="results/quant_backtest.csv")
     parser.add_argument("--use-fundamentals", action="store_true",
-                        help="SCENARIO1/2 유니버스에 실제 펀더멘털 필터(PBR 0.2~1.0 / "
-                             "PER 0~12 / ROE≥8%% / 부채비율≤150%% / 매출증가율≥0%%) 추가 "
-                             "적용 — analysis/fundamentals.py + dart_fundamentals 필요 "
-                             "(scripts/dart_fundamentals_backfill.py로 먼저 백필)")
+                        help="SCENARIO1/2 유니버스에 문서 1안/2안 각각의 종목선택 조건을 "
+                             "적용 — 1안: PBR≤0.8·ROE≥10%%·부채비율≤100%%, "
+                             "2안: PER≤15. analysis/fundamentals.py + dart_fundamentals "
+                             "필요 (scripts/dart_fundamentals_backfill.py로 먼저 백필)")
     args = parser.parse_args()
 
     start = date.fromisoformat(args.start)
@@ -234,32 +237,44 @@ def main() -> None:
 
     listed_shares = load_listed_shares(dsn)
 
-    fundamental_universe = None
+    fundamental_universe_s1 = None
+    fundamental_universe_s2 = None
     if args.use_fundamentals:
-        from analysis.fundamentals import compute_ratios, screen
+        from analysis.fundamentals import (
+            SCENARIO1_THRESHOLDS,
+            SCENARIO2_THRESHOLDS,
+            compute_ratios,
+            screen,
+        )
         logger.info("[quant] 펀더멘털 스크리닝 중 (dart_fundamentals)...")
         ratios_df = compute_ratios(dsn)
-        fundamental_universe = screen(ratios_df)
-        logger.info("[quant] 펀더멘털 필터 통과: %d/%d종목",
-                    len(fundamental_universe), len(ratios_df))
+        # 문서 1안/2안은 각자 다른 종목선택 숫자를 쓴다(1안: PBR/ROE/부채비율,
+        # 2안: PER만) — 동일한 범용 필터를 공유하면 두 시나리오 모두 문서와
+        # 어긋나므로 시나리오별로 따로 스크리닝한다.
+        fundamental_universe_s1 = screen(ratios_df, SCENARIO1_THRESHOLDS)
+        fundamental_universe_s2 = screen(ratios_df, SCENARIO2_THRESHOLDS)
+        logger.info("[quant] 1안 필터(PBR≤0.8, ROE≥10%%, 부채비율≤100%%) 통과: %d/%d종목",
+                    len(fundamental_universe_s1), len(ratios_df))
+        logger.info("[quant] 2안 필터(PER≤15) 통과: %d/%d종목",
+                    len(fundamental_universe_s2), len(ratios_df))
 
     universe_txamt = None
     universe_mktcap = None
     if "SCENARIO1" in targets:
         universe_txamt = _select_universe(ohlcv_map, listed_shares, start, end, "txamt_top20")
-        if fundamental_universe is not None:
+        if fundamental_universe_s1 is not None:
             before = len(universe_txamt)
-            universe_txamt &= fundamental_universe
-            logger.info("[quant] SCENARIO1 유니버스(거래대금 상위20%% ∩ 펀더멘털): %d→%d종목",
+            universe_txamt &= fundamental_universe_s1
+            logger.info("[quant] SCENARIO1 유니버스(거래대금 상위20%% ∩ 1안 펀더멘털): %d→%d종목",
                         before, len(universe_txamt))
         else:
             logger.info("[quant] SCENARIO1 유니버스(거래대금 상위20%%): %d종목", len(universe_txamt))
     if "SCENARIO2" in targets:
         universe_mktcap = _select_universe(ohlcv_map, listed_shares, start, end, "mktcap_top200")
-        if fundamental_universe is not None:
+        if fundamental_universe_s2 is not None:
             before = len(universe_mktcap)
-            universe_mktcap &= fundamental_universe
-            logger.info("[quant] SCENARIO2 유니버스(시가총액 상위200 ∩ 펀더멘털): %d→%d종목",
+            universe_mktcap &= fundamental_universe_s2
+            logger.info("[quant] SCENARIO2 유니버스(시가총액 상위200 ∩ 2안 펀더멘털): %d→%d종목",
                         before, len(universe_mktcap))
         else:
             logger.info("[quant] SCENARIO2 유니버스(시가총액 상위200): %d종목", len(universe_mktcap))

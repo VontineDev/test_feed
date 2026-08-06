@@ -18,14 +18,40 @@ import pandas as pd
 
 @dataclass
 class RatioThresholds:
-    """TechnicalQuant.md 문서의 기본 필터 값."""
-    pbr_min: float = 0.2
-    pbr_max: float = 1.0
-    per_min: float = 0.0
-    per_max: float = 12.0
-    roe_min: float = 0.08
-    debt_ratio_max: float = 1.5
-    revenue_growth_min: float = 0.0
+    """스크리닝 임계값. 필드를 None으로 두면 해당 조건은 검사하지 않는다
+    (그 컬럼이 NaN이어도 걸러지지 않음) — 시나리오별로 문서가 명시한 조건만
+    정확히 적용하기 위해 전부 Optional."""
+    pbr_min: Optional[float] = 0.2
+    pbr_max: Optional[float] = 1.0
+    per_min: Optional[float] = 0.0
+    per_max: Optional[float] = 12.0
+    roe_min: Optional[float] = 0.08
+    debt_ratio_max: Optional[float] = 1.5
+    revenue_growth_min: Optional[float] = 0.0
+
+
+# TechnicalQuant.md 1안/2안의 "종목 선택" 조건 그대로 — 위 기본값(문서 1절의
+# 범용 필터)과는 다른, 각 시나리오 고유 숫자다. 1안은 PER/매출증가율 조건이
+# 없고, 2안은 PBR/ROE/부채비율/매출증가율 조건이 없다 — 문서에 없는 조건을
+# 임의로 추가하지 않기 위해 나머지는 전부 None(미적용)으로 둔다.
+SCENARIO1_THRESHOLDS = RatioThresholds(
+    pbr_min=None, pbr_max=0.8,          # "PBR 0.8 이하"
+    per_min=None, per_max=None,          # 문서에 조건 없음
+    roe_min=0.10,                        # "ROE 10% 이상"
+    debt_ratio_max=1.0,                  # "부채비율 100% 이하"
+    revenue_growth_min=None,             # 문서에 조건 없음
+)
+
+# 2안 "PER 15 이하"는 하한을 명시하지 않았지만, 문서 1절 전반의 전제("적자
+# 기업은 제외")를 따라 PER>0(흑자 기업)으로 해석 — 음수 PER(적자)까지
+# "15 이하"로 통과시키는 건 문서 취지에 반한다고 판단.
+SCENARIO2_THRESHOLDS = RatioThresholds(
+    pbr_min=None, pbr_max=None,          # 문서에 조건 없음
+    per_min=0.0, per_max=15.0,           # "PER 15 이하" (+ 적자 제외 해석)
+    roe_min=None,                        # 문서에 조건 없음
+    debt_ratio_max=None,                 # 문서에 조건 없음
+    revenue_growth_min=None,             # 문서에 조건 없음
+)
 
 
 def load_fundamentals_raw(dsn: str, bsns_year: Optional[str] = None) -> pd.DataFrame:
@@ -146,21 +172,31 @@ def compute_ratios(dsn: str, bsns_year: Optional[str] = None) -> pd.DataFrame:
 
 
 def screen(df: pd.DataFrame, th: Optional[RatioThresholds] = None) -> set[str]:
-    """TechnicalQuant.md 기본 필터를 통과하는 ticker 집합 반환.
+    """th에 설정된(None이 아닌) 조건만 통과하는 ticker 집합 반환.
 
-    조건: pbr_min < PBR < pbr_max, per_min < PER < per_max (적자기업 제외),
-    ROE >= roe_min, 부채비율 <= debt_ratio_max, 매출증가율 >= revenue_growth_min.
-    NaN(계산 불가) 종목은 자동 제외.
+    조건: pbr_min < PBR < pbr_max, per_min < PER < per_max, ROE >= roe_min,
+    부채비율 <= debt_ratio_max, 매출증가율 >= revenue_growth_min. 필드가
+    None이면 그 조건은 아예 검사하지 않는다(해당 컬럼이 NaN이어도 안 걸림).
+    검사 대상 컬럼이 NaN인 행은 비교 결과 자동으로 False가 돼 제외된다.
     """
     th = th or RatioThresholds()
     if df.empty:
         return set()
 
-    mask = (
-        (df["pbr"] > th.pbr_min) & (df["pbr"] < th.pbr_max)
-        & (df["per"] > th.per_min) & (df["per"] < th.per_max)
-        & (df["roe"] >= th.roe_min)
-        & (df["debt_ratio"] <= th.debt_ratio_max)
-        & (df["revenue_growth"] >= th.revenue_growth_min)
-    )
+    mask = pd.Series(True, index=df.index)
+    if th.pbr_min is not None:
+        mask &= df["pbr"] > th.pbr_min
+    if th.pbr_max is not None:
+        mask &= df["pbr"] < th.pbr_max
+    if th.per_min is not None:
+        mask &= df["per"] > th.per_min
+    if th.per_max is not None:
+        mask &= df["per"] < th.per_max
+    if th.roe_min is not None:
+        mask &= df["roe"] >= th.roe_min
+    if th.debt_ratio_max is not None:
+        mask &= df["debt_ratio"] <= th.debt_ratio_max
+    if th.revenue_growth_min is not None:
+        mask &= df["revenue_growth"] >= th.revenue_growth_min
+
     return set(df.loc[mask, "ticker"])
