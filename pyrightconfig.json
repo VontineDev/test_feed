@@ -23,6 +23,7 @@
     "reports"
   ],
   "extraPaths": [
-    "dashboard/backend"
+    "dashboard/backend",
+    "scripts"
   ]
 }
