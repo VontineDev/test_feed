@@ -4,6 +4,37 @@ Items deferred from code review and planning sessions.
 
 ---
 
+## P2: 섹터통계 잡 — daily_ohlcv 컬럼명 불일치로 매일 조용히 실패 — ✅ 완료
+
+**What:** `jobs/sector_stats_job.py`(평일 20:30 KST)가 매일 `[섹터통계] 집계 쿼리
+실패: column o_today.ticker does not exist`로 실패 — 최소 07-31부터(도입 시점부터로
+추정) 하루도 빠짐없이 실패해 `sector_daily_stats` 테이블이 **0건**이었음.
+
+**원인:** `daily_ohlcv` 테이블의 실제 컬럼명은 `symbol`/`date`인데, 쿼리는
+`daily_flow`/`stage_classifications`와 같은 네이밍(`ticker`/`trade_date`)으로
+JOIN하고 있었음 — `daily_ohlcv`만 다른 네이밍 컨벤션.
+
+**영향:** 이 테이블을 읽는 대시보드/텔레그램 소비처가 아직 없어 사용자 영향은
+없었음 — 매일 에러 로그만 남기던 죽은 기능.
+
+**수정:** JOIN 조건 4곳을 실제 스키마(`symbol`/`date`)에 맞게 교체. 실 DB 대상
+라이브 스모크 테스트로 쿼리가 더 이상 크래시하지 않고(반환값 0, "집계 결과
+없음") 정상 동작함을 확인 — `daily_flow`에 실행 시점 기준 당일 데이터가 아직
+없어 0건인 것도 정상 동작(내일 20:30 정규 실행 시 데이터 있으면 실제 집계됨).
+이 잡을 커버하는 기존 테스트가 없고, 버그 자체가 "스키마와 안 맞는 컬럼명"이라
+목업 기반 단위테스트로는애초에 못 잡았을 유형이라 별도 유닛테스트는 추가하지
+않음 — 실 DB 스모크 테스트로 검증.
+
+**부수 수정:** 같은 세션에서 `tests/test_scheduler_collect.py`의 사이트맵 신선도
+테스트가 고정 날짜 문자열(`2026-08-05T20:10:21+09:00`)을 써서 다음 날 실행 시
+"24시간 초과"로 깨지는 걸 발견 — 테스트 실행 시각 기준 상대 타임스탬프로 교체.
+
+**Effort:** XS (human: ~15min / CC: ~10min)
+**Priority:** P2
+**Found:** 2026-08-06, "다음 작업 찾기" 세션 중 로그 이상치 스캔으로 발견
+
+---
+
 ## P1: Kiwoom 토큰 자동 만료 — 장시간 가동 시 손절 감시 완전 무력화 — ✅ 완료 (자동 재발급)
 
 **What:** `KiwoomClient.issue_token()`은 프로세스 시작 시 단 한 번만 호출되고

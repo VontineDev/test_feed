@@ -17,7 +17,13 @@ from jobs.scheduler_collect import (
     fetch_feed,
 )
 
-_SITEMAP_XML = """<?xml version="1.0" encoding="UTF-8"?>
+# 신선도(_is_fresh, 24시간 이내) 테스트가 실행 시점과 무관하게 항상 통과하도록
+# 고정 날짜 문자열 대신 테스트 실행 시각 기준 상대 타임스탬프를 사용한다
+# (2026-08-05에 고정 문자열로 작성했다가 다음 날 실행에서 "24시간 지남"으로
+# 필터링돼 깨진 사례 — 실행 시점에 항상 신선하도록 매번 새로 계산).
+_RECENT_DT = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+_SITEMAP_XML = f"""<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
         xmlns:news="http://www.google.com/schemas/sitemap-news/0.9"
         xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
@@ -28,7 +34,7 @@ _SITEMAP_XML = """<?xml version="1.0" encoding="UTF-8"?>
                 <news:name>한국경제</news:name>
                 <news:language>ko</news:language>
             </news:publication>
-            <news:publication_date>2026-08-05T20:10:21+09:00</news:publication_date>
+            <news:publication_date>{_RECENT_DT}</news:publication_date>
             <news:title><![CDATA[삼성전자 신고가 경신]]></news:title>
         </news:news>
         <image:image>

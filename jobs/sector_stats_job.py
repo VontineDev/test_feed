@@ -53,15 +53,15 @@ async def sector_stats_job(db_pool: asyncpg.Pool) -> int:
                  AND k.sector IS NOT NULL
                  AND k.sector <> ''
                 LEFT JOIN daily_ohlcv o_today
-                  ON o_today.ticker = f.ticker
-                 AND o_today.trade_date = $1
+                  ON o_today.symbol = f.ticker
+                 AND o_today.date = $1
                 LEFT JOIN daily_ohlcv o_prev
-                  ON o_prev.ticker = f.ticker
-                 AND o_prev.trade_date = (
-                     SELECT MAX(trade_date)
+                  ON o_prev.symbol = f.ticker
+                 AND o_prev.date = (
+                     SELECT MAX(date)
                      FROM daily_ohlcv
-                     WHERE ticker = f.ticker
-                       AND trade_date < $1
+                     WHERE symbol = f.ticker
+                       AND date < $1
                  )
                 LEFT JOIN stage_classifications sc
                   ON sc.ticker = f.ticker
