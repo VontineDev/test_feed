@@ -53,7 +53,6 @@ API 레퍼런스:
 from __future__ import annotations
 
 import argparse
-import json as _json
 import logging
 import os
 import sys
@@ -150,6 +149,10 @@ class KiwoomClient:
         self._session = _req.Session()
         self._token: Optional[str] = None
         self._token_expires: Optional[datetime] = None
+        # issue_token()에서 저장 — 만료 감지 시 _post()가 자동 재발급할 때 필요.
+        # inject_token()만 쓴 경우(외부 토큰 주입)는 None으로 남아 자동 재발급 불가.
+        self._appkey: Optional[str] = None
+        self._secretkey: Optional[str] = None
 
     # ── 인증 ───────────────────────────────────────────────────
 
@@ -172,13 +175,15 @@ class KiwoomClient:
         if data.get("return_code", -1) != 0:
             raise RuntimeError(f"토큰 발급 실패: {data.get('return_msg')}")
 
-        self._token = data["token"]
+        token: str = data["token"]
+        self._token = token
+        self._appkey, self._secretkey = appkey, secretkey
         # expires_dt: "20241107083713" → datetime
         exp_str = data.get("expires_dt", "")
         if len(exp_str) == 14:
             self._token_expires = datetime.strptime(exp_str, "%Y%m%d%H%M%S")
         logger.info("[kiwoom] 토큰 발급 완료 (만료: %s)", exp_str)
-        return self._token
+        return token
 
     def inject_token(self, token: str) -> None:
         """KIWOOM_TOKEN 환경변수로 토큰 직접 주입."""
@@ -217,15 +222,26 @@ class KiwoomClient:
         429(rate limit)는 지수 백오프(1s→2s→4s)로 최대 4회 시도 후에도
         실패하면 RuntimeError로 전달한다 (기존엔 raise_for_status()가
         즉시 HTTPError를 던져 aftermarket_snap 수집 전체가 크래시했음).
-        """
-        headers = self._auth_headers(api_id)
-        if cont_yn == "Y":
-            headers["cont-yn"] = "Y"
-            headers["next-key"] = next_key
 
+        토큰 만료(return_msg에 "8005" 포함, "Token이 유효하지 않습니다")도
+        자동 재발급 후 1회 재시도한다. 2026-08-04 라이브 확인: issue_token()은
+        프로세스 시작 시 단 한 번만 호출되고 이후 갱신 로직이 없어, 장시간
+        연속 가동 시(관측상 발급 후 ~18~21시간) 토큰이 만료되면 그 뒤로는
+        재시작 전까지 모든 API 호출(현재가 조회 포함)이 8005로 계속 실패했다
+        — 이 기간 동안 paper-exit이 포지션 40건 전부 "현재가 없음"으로 스킵해
+        손절 감시가 하루 이상 무력화됨. appkey/secretkey는 issue_token()에서
+        저장해둔 값만 쓰므로, inject_token()으로만 인증한 경우는 재발급 불가
+        (그 경우 기존처럼 즉시 예외).
+        """
         max_attempts = 4
         backoff = 1.0
+        token_refreshed = False
         for attempt in range(1, max_attempts + 1):
+            headers = self._auth_headers(api_id)
+            if cont_yn == "Y":
+                headers["cont-yn"] = "Y"
+                headers["next-key"] = next_key
+
             resp = self._session.post(
                 f"{self._base}{path}",
                 json=body,
@@ -246,9 +262,15 @@ class KiwoomClient:
                 raise RuntimeError("키움 API 점검 중 (HTML 응답) — 시스템작업알림 페이지 수신")
             data = resp.json()
             if data.get("return_code", -1) != 0:
-                raise RuntimeError(
-                    f"API 오류 [{api_id}]: {data.get('return_msg', '알 수 없음')}"
-                )
+                msg = data.get("return_msg", "알 수 없음")
+                if (not token_refreshed and "8005" in msg
+                        and self._appkey and self._secretkey):
+                    logger.warning("[kiwoom] %s 토큰 만료 감지 — 재발급 후 재시도: %s",
+                                   api_id, msg)
+                    self.issue_token(self._appkey, self._secretkey)
+                    token_refreshed = True
+                    continue
+                raise RuntimeError(f"API 오류 [{api_id}]: {msg}")
             return data, dict(resp.headers)
 
         raise RuntimeError(f"API 오류 [{api_id}]: 429 재시도 소진 ({max_attempts}회)")
