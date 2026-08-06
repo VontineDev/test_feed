@@ -436,7 +436,16 @@ async def sync_xbrl(
 # "먼저 나오는 행"(원본 재무제표 표시 순서상 총계가 최상단)을 채택한다.
 
 _FUND_BS_TARGETS = {"자산총계": "assets", "부채총계": "liabilities", "자본총계": "equity"}
-_FUND_IS_TARGETS = {"매출액": "revenue", "당기순이익": "net_income"}
+# 2026-08-06 라이브 확인: 회사마다 계정명 표기가 다르다 — "당기순이익" 대신
+# "당기순이익(손실)"(적자 가능 표기), "매출액" 대신 "수익(매출액)"(IFRS 수익 인식
+# 문구)을 쓰는 회사가 상당수라 별칭을 추가하지 않으면 매출/순이익 커버리지가
+# 크게 떨어진다(최초 백필 시 revenue 47%, net_income 17%까지 하락 확인).
+_FUND_IS_TARGETS = {
+    "매출액": "revenue",
+    "수익(매출액)": "revenue",
+    "당기순이익": "net_income",
+    "당기순이익(손실)": "net_income",
+}
 
 
 def _parse_amount(raw: Optional[str]) -> Optional[int]:

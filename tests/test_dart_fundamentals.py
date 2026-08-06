@@ -58,6 +58,20 @@ class TestExtractFundamentals:
         result = extract_fundamentals(items)
         assert result["net_income"] == 300
 
+    def test_net_income_loss_suffix_variant_matches(self):
+        """2026-08-06 라이브 확인: 상당수 회사가 "당기순이익" 대신
+        "당기순이익(손실)"을 쓴다 — 별칭 매칭 확인."""
+        items = [_row("CIS", "당기순이익(손실)", -500, -100)]
+        result = extract_fundamentals(items)
+        assert result["net_income"] == -500
+
+    def test_revenue_ifrs_wording_variant_matches(self):
+        """일부 회사가 "매출액" 대신 "수익(매출액)"을 쓴다."""
+        items = [_row("IS", "수익(매출액)", 2000, 1800)]
+        result = extract_fundamentals(items)
+        assert result["revenue"] == 2000
+        assert result["revenue_prev"] == 1800
+
     def test_missing_accounts_are_none(self):
         result = extract_fundamentals([_row("BS", "자산총계", 1000)])
         assert result.get("revenue") is None
