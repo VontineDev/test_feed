@@ -4,6 +4,27 @@ Items deferred from code review and planning sessions.
 
 ---
 
+## P3: TechnicalQuant SCENARIO2 청산 파라미터 최적화
+
+**What:** `scripts/run_quant_backtest.py --condition SCENARIO2`(시가총액 상위200 +
+RSI 30 상향돌파 매수 + RSI70 익절/-7% 손절, 2025-01-02~2026-08-06 전종목 기준
+승률 43.5%/평균수익 +4.8%, 신호 464건)만 다른 조건 대비 유의미한 성과 — 나머지
+개별 조건(A~E)과 SCENARIO1은 거래비용 감안 시 무의미한 엣지로 판정됨
+(`project_technicalquant_backtest` 메모리 참고). hard_stop_pct(현재 -7% 고정)와
+RSI 손절/익절 임계값(30/70 고정)을 `scripts/run_sweep.py` 패턴처럼 그리드서치해
+개선 여지가 있는지 확인 필요.
+
+**How to apply:** `analysis/backtest/quant_signals.py`의 `replay_quant()`를
+호출하는 스윕 스크립트 추가(`scripts/run_sweep.py`의 `sweep_compose_backtest`
+패턴 참고) — hard_stop_pct/rsi 임계값 조합별 train/val 샤프 비교.
+
+**Effort:** S (human: ~1h / CC: ~20min)
+**Priority:** P3
+**Found:** 2026-08-06, TechnicalQuant.md 백테스트 세션 — 사용자가 펀더멘털
+데이터 구축 우선으로 보류 결정
+
+---
+
 ## P2: 섹터통계 잡 — daily_ohlcv 컬럼명 불일치로 매일 조용히 실패 — ✅ 완료
 
 **What:** `jobs/sector_stats_job.py`(평일 20:30 KST)가 매일 `[섹터통계] 집계 쿼리

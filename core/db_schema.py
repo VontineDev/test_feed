@@ -297,6 +297,26 @@ CREATE TABLE IF NOT EXISTS dart_segments (
 );
 CREATE INDEX IF NOT EXISTS idx_dart_segments_corp_year
     ON dart_segments (corp_code, bsns_year DESC);
+
+-- 전체시장 핵심 재무 스냅샷 (2026-08-06: TechnicalQuant.md 펀더멘털 스크리닝용).
+-- dart_xbrl(계정과목 원장, 내러티브 기능 전용)과 별개 — fnlttSinglAcntAll 응답에서
+-- 재무상태표/손익계산서 5개 핵심 계정만 뽑아 회사당 1행으로 비정규화 저장.
+CREATE TABLE IF NOT EXISTS dart_fundamentals (
+    corp_code     VARCHAR(8)   NOT NULL REFERENCES dart_companies(corp_code),
+    stock_code    VARCHAR(6)   NOT NULL,
+    bsns_year     VARCHAR(4)   NOT NULL,
+    fs_div        VARCHAR(4)   NOT NULL,   -- CFS=연결, OFS=별도 (실제 사용된 쪽)
+    revenue       BIGINT,                  -- 매출액 (당기)
+    revenue_prev  BIGINT,                  -- 매출액 (전기, YoY 계산용)
+    net_income    BIGINT,                  -- 당기순이익 (당기)
+    equity        BIGINT,                  -- 자본총계 (당기)
+    liabilities   BIGINT,                  -- 부채총계 (당기)
+    assets        BIGINT,                  -- 자산총계 (당기)
+    fetched_at    TIMESTAMPTZ  DEFAULT NOW(),
+    UNIQUE (corp_code, bsns_year)
+);
+CREATE INDEX IF NOT EXISTS idx_dart_fundamentals_stock_code
+    ON dart_fundamentals (stock_code);
 """
 
 _CREATE_SECTOR_DAILY_STATS = """

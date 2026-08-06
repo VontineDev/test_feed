@@ -2,14 +2,17 @@
 run_quant_backtest.py — TechnicalQuant.md 매매타이밍 조건 백테스트 CLI
 
 2026-08-06: 사용자가 제공한 퀀트 전략 문서(종목선택 + 매매타이밍) 검증용.
-종목선택(펀더멘털: PBR/PER/ROE/부채비율/매출증가율)은 DB에 전체 시장 규모
-데이터가 없어 제외(사용자 결정) — 매매타이밍(기술적 지표)만 검증한다.
-유니버스 필터는 거래대금/시가총액만 지원(둘 다 daily_ohlcv/krx_listings로
-계산 가능, 펀더멘털 불필요).
+1차 버전은 전체 시장 펀더멘털 데이터(PBR/PER/ROE/부채비율/매출증가율)가 없어
+기술적 조건만 검증했으나, 이후 dart_fundamentals 백필(scripts/
+dart_fundamentals_backfill.py) 완료로 --use-fundamentals 플래그를 추가해
+SCENARIO1/2 유니버스에 실제 펀더멘털 필터를 적용할 수 있다.
 
 사용법:
-    # 개별 조건 5종 + 시나리오 2종 전체 비교
+    # 개별 조건 5종 + 시나리오 2종 전체 비교 (펀더멘털 필터 없이)
     python scripts/run_quant_backtest.py --start 2025-01-02 --end 2026-08-06
+
+    # 시나리오1/2에 실제 펀더멘털 필터까지 적용
+    python scripts/run_quant_backtest.py --start 2025-01-02 --end 2026-08-06 --use-fundamentals
 
     # 특정 조건만
     python scripts/run_quant_backtest.py --condition A_ma20_breakout --start 2025-01-02 --end 2026-08-06
@@ -170,6 +173,11 @@ def main() -> None:
     parser.add_argument("--max-tickers", type=int, default=0, help="0=전종목")
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--output", default="results/quant_backtest.csv")
+    parser.add_argument("--use-fundamentals", action="store_true",
+                        help="SCENARIO1/2 유니버스에 실제 펀더멘털 필터(PBR 0.2~1.0 / "
+                             "PER 0~12 / ROE≥8%% / 부채비율≤150%% / 매출증가율≥0%%) 추가 "
+                             "적용 — analysis/fundamentals.py + dart_fundamentals 필요 "
+                             "(scripts/dart_fundamentals_backfill.py로 먼저 백필)")
     args = parser.parse_args()
 
     start = date.fromisoformat(args.start)
@@ -226,14 +234,35 @@ def main() -> None:
 
     listed_shares = load_listed_shares(dsn)
 
+    fundamental_universe = None
+    if args.use_fundamentals:
+        from analysis.fundamentals import compute_ratios, screen
+        logger.info("[quant] 펀더멘털 스크리닝 중 (dart_fundamentals)...")
+        ratios_df = compute_ratios(dsn)
+        fundamental_universe = screen(ratios_df)
+        logger.info("[quant] 펀더멘털 필터 통과: %d/%d종목",
+                    len(fundamental_universe), len(ratios_df))
+
     universe_txamt = None
     universe_mktcap = None
     if "SCENARIO1" in targets:
         universe_txamt = _select_universe(ohlcv_map, listed_shares, start, end, "txamt_top20")
-        logger.info("[quant] SCENARIO1 유니버스(거래대금 상위20%%): %d종목", len(universe_txamt))
+        if fundamental_universe is not None:
+            before = len(universe_txamt)
+            universe_txamt &= fundamental_universe
+            logger.info("[quant] SCENARIO1 유니버스(거래대금 상위20%% ∩ 펀더멘털): %d→%d종목",
+                        before, len(universe_txamt))
+        else:
+            logger.info("[quant] SCENARIO1 유니버스(거래대금 상위20%%): %d종목", len(universe_txamt))
     if "SCENARIO2" in targets:
         universe_mktcap = _select_universe(ohlcv_map, listed_shares, start, end, "mktcap_top200")
-        logger.info("[quant] SCENARIO2 유니버스(시가총액 상위200): %d종목", len(universe_mktcap))
+        if fundamental_universe is not None:
+            before = len(universe_mktcap)
+            universe_mktcap &= fundamental_universe
+            logger.info("[quant] SCENARIO2 유니버스(시가총액 상위200 ∩ 펀더멘털): %d→%d종목",
+                        before, len(universe_mktcap))
+        else:
+            logger.info("[quant] SCENARIO2 유니버스(시가총액 상위200): %d종목", len(universe_mktcap))
 
     rows = []
     for cond in targets:

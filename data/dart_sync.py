@@ -26,7 +26,7 @@ import os
 import re
 import sys
 import zipfile
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from typing import Optional
 from xml.etree import ElementTree as ET
 
@@ -189,7 +189,6 @@ def _parse_corp_codes(zip_bytes: bytes) -> list[dict]:
         corp_code  = (item.findtext("corp_code") or "").strip()
         corp_name  = (item.findtext("corp_name") or "").strip()
         stock_code = (item.findtext("stock_code") or "").strip() or None
-        market     = (item.findtext("modify_date") or "").strip() or None
         if corp_code:
             records.append({
                 "corp_code":  corp_code,
@@ -428,6 +427,128 @@ async def sync_xbrl(
     return total
 
 
+# ── 전체시장 재무 스냅샷 (dart_fundamentals) ────────────────────
+# 2026-08-06: TechnicalQuant.md 펀더멘털 스크리닝(PBR/PER/ROE/부채비율/매출증가율)용.
+# fnlttSinglAcntAll은 재무상태표(BS)+손익계산서(IS/CIS)+자본변동표(SCE) 등을 한
+# 응답에 전부 섞어서 반환한다 — 같은 account_nm("자본총계"/"당기순이익" 등)이
+# 여러 섹션에 중복 등장하므로 sj_div로 먼저 걸러야 정확한 합계를 얻는다.
+# 당기순이익은 총계/지배기업귀속/비지배지분 3종이 같은 이름으로 나올 수 있어
+# "먼저 나오는 행"(원본 재무제표 표시 순서상 총계가 최상단)을 채택한다.
+
+_FUND_BS_TARGETS = {"자산총계": "assets", "부채총계": "liabilities", "자본총계": "equity"}
+_FUND_IS_TARGETS = {"매출액": "revenue", "당기순이익": "net_income"}
+
+
+def _parse_amount(raw: Optional[str]) -> Optional[int]:
+    if not raw:
+        return None
+    try:
+        return int(str(raw).replace(",", "").strip())
+    except ValueError:
+        return None
+
+
+def extract_fundamentals(items: list[dict]) -> dict[str, Optional[int]]:
+    """fetch_xbrl() 응답에서 핵심 5개 계정(당기+전기)만 추출.
+
+    반환 키: assets, liabilities, equity, revenue, revenue_prev, net_income
+    (각 값 없으면 None). BS 섹션은 자산총계/부채총계/자본총계, IS/CIS 섹션은
+    매출액/당기순이익만 본다 — sj_div 불일치 항목은 무시.
+    """
+    result: dict[str, Optional[int]] = {}
+    for it in items:
+        nm = (it.get("account_nm") or "").strip()
+        sj = (it.get("sj_div") or "").strip()
+
+        key = None
+        if sj == "BS" and nm in _FUND_BS_TARGETS:
+            key = _FUND_BS_TARGETS[nm]
+        elif sj in ("IS", "CIS") and nm in _FUND_IS_TARGETS:
+            key = _FUND_IS_TARGETS[nm]
+        if key is None or key in result:
+            continue  # 이미 채택됐으면 이후 중복(지배/비지배 분할 등)은 무시
+
+        result[key] = _parse_amount(it.get("thstrm_amount"))
+        if key == "revenue":
+            result["revenue_prev"] = _parse_amount(it.get("frmtrm_amount"))
+    return result
+
+
+async def sync_fundamentals(
+    pool,
+    corp_stock_pairs: list[tuple[str, str]],
+    bsns_year: Optional[str] = None,
+    api_key: Optional[str] = None,
+) -> int:
+    """corp_stock_pairs=[(corp_code, stock_code), ...]에 대해 사업보고서 핵심
+    재무수치를 dart_fundamentals에 upsert. CFS(연결) 우선, 없으면 OFS(별도) 폴백.
+    반환: upsert 건수.
+    """
+    key = api_key or os.environ.get("DART_API_KEY")
+    if not key:
+        logger.warning("[dart] DART_API_KEY 미설정 — sync_fundamentals 건너뜀")
+        return 0
+
+    if not bsns_year:
+        bsns_year = str(date.today().year - 1)
+
+    client = DartClient(key)
+    total = 0
+    try:
+        for corp_code, stock_code in corp_stock_pairs:
+            fund = None
+            used_fs_div = None
+            for fs_div in ("CFS", "OFS"):
+                try:
+                    items = await client.fetch_xbrl(corp_code, bsns_year, _REPRT_ANNUAL, fs_div)
+                except Exception as e:
+                    logger.debug("[dart] fundamentals 조회 실패 (%s/%s): %s", corp_code, fs_div, e)
+                    continue
+                if not items:
+                    continue
+                extracted = extract_fundamentals(items)
+                if extracted.get("revenue") is not None or extracted.get("equity") is not None:
+                    fund, used_fs_div = extracted, fs_div
+                    break  # CFS에서 값을 얻었으면 OFS는 볼 필요 없음
+
+            if fund is None:
+                await asyncio.sleep(0.2)
+                continue
+
+            async with pool.acquire() as conn:
+                result = await conn.execute(
+                    """
+                    INSERT INTO dart_fundamentals
+                        (corp_code, stock_code, bsns_year, fs_div,
+                         revenue, revenue_prev, net_income, equity, liabilities, assets)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                    ON CONFLICT (corp_code, bsns_year) DO UPDATE SET
+                        stock_code   = EXCLUDED.stock_code,
+                        fs_div       = EXCLUDED.fs_div,
+                        revenue      = EXCLUDED.revenue,
+                        revenue_prev = EXCLUDED.revenue_prev,
+                        net_income   = EXCLUDED.net_income,
+                        equity       = EXCLUDED.equity,
+                        liabilities  = EXCLUDED.liabilities,
+                        assets       = EXCLUDED.assets,
+                        fetched_at   = NOW()
+                    """,
+                    corp_code, stock_code, bsns_year, used_fs_div,
+                    fund.get("revenue"), fund.get("revenue_prev"), fund.get("net_income"),
+                    fund.get("equity"), fund.get("liabilities"), fund.get("assets"),
+                )
+                if result.endswith("1") or "UPDATE" in result:
+                    total += 1
+
+            await asyncio.sleep(0.2)  # API 호출 간격
+
+    finally:
+        await client.aclose()
+
+    logger.info("[dart] fundamentals upsert 완료: %d건 (연도: %s)", total, bsns_year)
+    return total
+
+
 # ── 사업보고서 섹션 설정 ─────────────────────────────────────
 
 _SECTION_TARGETS: dict[str, dict] = {
@@ -622,7 +743,7 @@ async def _call_ollama_segment_parse(
     반환: (parsed_dict_or_None, model_name)
     """
     from reports.summarizer import (
-        OLLAMA_BASE, OLLAMA_MODEL,
+        OLLAMA_MODEL,
         _call_ollama_native, _ollama_is_alive,
     )
 
