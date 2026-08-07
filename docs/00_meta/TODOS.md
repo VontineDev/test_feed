@@ -4,7 +4,7 @@ Items deferred from code review and planning sessions.
 
 ---
 
-## P3: TechnicalQuant SCENARIO2 진입/청산 파라미터 최적화 (필터 최적화는 완료)
+## P3: TechnicalQuant SCENARIO2 필터+진입/청산 파라미터 최적화 — ✅ 완료
 
 **What:** `scripts/run_quant_backtest.py --condition SCENARIO2 --use-fundamentals`
 (시가총액 상위200 ∩ PER≤15 — 문서 2안 정확 재현)만 네 가지 검증 방식(기술적단독/
@@ -12,29 +12,34 @@ Items deferred from code review and planning sessions.
 1안(문서 정확 재현 시 승률 22.2%/평균수익 -1.3%, 마이너스)은 거래비용 감안 시
 무의미하거나 음의 엣지로 판정됨(`project_technicalquant_backtest` 메모리 참고).
 
-**필터(종목선택) 최적화 — ✅ 완료:** `scripts/run_quant_filter_sweep.py`로 PER 상한
-`[10,12,15,18,20,25]` × 시가총액 상위 `[100,150,200,300,500]` 30조합 그리드서치.
-매매타이밍(RSI 30/70, -7% 손절)은 고정. 결과: PER≤18, 시총상위200이 문서 원안
-(PER≤15)보다 우수(신호100→129건, 승률43.0%→46.5%, 평균+2.9%→+4.06%). 시총 상위500까지
-넓히면 PER 상한과 무관하게 전부 성능 하락(유니버스 품질 희석). 전체 결과:
+**필터(종목선택) 최적화 — ✅ 완료(2026-08-07):** `scripts/run_quant_filter_sweep.py`로
+PER 상한 `[10,12,15,18,20,25]` × 시가총액 상위 `[100,150,200,300,500]` 30조합
+그리드서치. 매매타이밍(RSI 30/70, -7% 손절)은 고정. 결과: PER≤18, 시총상위200이
+문서 원안(PER≤15)보다 우수(신호100→129건, 승률43.0%→46.5%, 평균+2.9%→+4.06%). 시총
+상위500까지 넓히면 PER 상한과 무관하게 전부 성능 하락(유니버스 품질 희석). 전체 결과:
 `results/quant_scenario2_filter_sweep.csv`.
 
-**남은 것 — 진입/청산 파라미터 최적화 (미착수):** hard_stop_pct(현재 -7% 고정)와
-RSI 진입/청산 임계값(30/70 고정) 자체를 그리드서치해 개선 여지가 있는지 확인 필요.
-이번 필터 스윕은 의도적으로 진입/청산은 안 건드렸음(범위를 "필터"로 좁힘 — 둘 다
-바꾸면 다른 전략이 됨).
+**진입/청산 파라미터 최적화 — ✅ 완료(2026-08-07):** 필터를 위 최적값(PER≤18/
+시총상위200)으로 고정하고 RSI 진입 `[20,25,30,35,40]` × RSI 청산 `[60,65,70,75,80]`
+× 손절폭 `[5,7,9,12]%` 100조합 그리드서치(`scripts/run_quant_entry_exit_sweep.py`).
+패턴: RSI 청산/손절폭을 넓히는 방향(70→80, -7%→-12%)이 진입 임계값과 무관하게
+일관되게 평균수익 개선. 진입 임계값은 원안(30) 유지 시(=신호셋 129건 불변, 과최적화
+위험 낮음) 청산만 80/-12%로 넓히면 승률46.5%→50.4%, 평균+4.06%→+9.47%. 진입까지
+완화(예: 40)하면 표면상 더 높지만(+14%대) "과매도" 정의를 벗어나고 상승장 베타 포획
+위험이 있어 채택 보류. 상세 비교표는 `project_technicalquant_backtest` 메모리
+5단계 참고.
 
-**How to apply:** `analysis/backtest/quant_signals.py`의 `replay_quant()`가 이미
-`hard_stop_pct`/`target_pct`/`use_rsi70_exit`를 파라미터로 받으므로, RSI 진입
-임계값(`_cond_scenario2_entry`의 하드코딩된 30)과 RSI 청산 임계값(`_scan_exit`의
-하드코딩된 70)만 파라미터화하면 됨. `scripts/run_quant_filter_sweep.py`를 템플릿으로
-써서 진입/청산 그리드 추가(유니버스는 PER≤18/시총상위200 고정하고 RSI/hard_stop만
-스윕 — 필터 스윕과 반대 방향).
+`analysis/backtest/quant_signals.py`의 `replay_quant()`에 `rsi_oversold`/
+`rsi_overbought` 파라미터를 추가(기본값은 문서 원안과 동일 — 기존 호출부 무변경).
+
+**최종 권장 SCENARIO2 설정:** 유니버스 PER≤18∩시총상위200, 진입 RSI30, 청산 RSI80/
+손절-12%. 그럼에도 [[project_compose_strategies]]의 FUNNEL-1/SCORE-1 대비 여전히
+열위 — 주력 전략 채택은 보류, 참고용 보조 신호로만 남김.
 
 **Effort:** S (human: ~1h / CC: ~20min)
-**Priority:** P3
-**Found:** 2026-08-06, TechnicalQuant.md 백테스트 세션. **필터 최적화는 2026-08-07
-완료** — 남은 진입/청산 최적화만 계속 보류.
+**Priority:** P3 (완료)
+**Found:** 2026-08-06, TechnicalQuant.md 백테스트 세션. **필터 최적화 2026-08-07
+완료, 진입/청산 최적화도 2026-08-07 완료 — 항목 종결.**
 
 ---
 
