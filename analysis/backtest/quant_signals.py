@@ -120,11 +120,13 @@ def _cond_scenario1_entry(cur, prev) -> bool:
     return float(cur["Volume"]) >= 2.0 * float(cur["vol_prev"])
 
 
-def _cond_scenario2_entry(cur, prev) -> bool:
-    """시나리오2 매수: RSI(14) 30 하향 후 재상승 돌파 시 종가 매수 (= RSI 반등과 동일 정의)."""
+def _cond_scenario2_entry(cur, prev, rsi_oversold: float = 30.0) -> bool:
+    """시나리오2 매수: RSI(14)가 rsi_oversold 미만으로 하향 후 재상승 돌파 시 종가 매수
+    (문서 기본값 30 — = RSI 반등과 동일 정의). rsi_oversold는 진입/청산 파라미터
+    최적화(scripts/run_quant_entry_exit_sweep.py)에서 스윕 대상."""
     if pd.isna(cur.get("rsi14")) or pd.isna(prev.get("rsi14")):
         return False
-    return float(prev["rsi14"]) < 30 and float(cur["rsi14"]) >= 30
+    return float(prev["rsi14"]) < rsi_oversold and float(cur["rsi14"]) >= rsi_oversold
 
 
 # 수급 조건(E)은 flow_lookup이 필요해 별도 처리 — _replay_quant에서 직접 판정.
@@ -151,10 +153,12 @@ def _scan_exit(
     use_ma20_exit: bool,
     use_rsi70_exit: bool,
     tx_cost_rt: float,
+    rsi_overbought: float = 70.0,
 ) -> tuple[Optional[date], str, Optional[float], Optional[int]]:
     """진입 다음날부터 청산 조건을 스캔. (sell_date, sell_reason, sell_return, hold_days) 반환.
 
-    우선순위: 손절 → 목표가/RSI70 익절 → MA20 이탈 → 기간 종료.
+    우선순위: 손절 → 목표가/RSI 과열 익절 → MA20 이탈 → 기간 종료.
+    rsi_overbought(문서 기본값 70)는 진입/청산 파라미터 최적화 스윕 대상.
     """
     stop_price = entry_price * (1.0 - hard_stop_pct)
     target_price = entry_price * (1.0 + target_pct) if target_pct else None
@@ -177,9 +181,9 @@ def _scan_exit(
             target_pct_disp = target_price / entry_price - 1.0
             return row_date, f"목표가 +{target_pct_disp*100:.0f}%", ret, (row_date - signal_date).days
 
-        if use_rsi70_exit and not pd.isna(cur.get("rsi14")) and float(cur["rsi14"]) > 70:
+        if use_rsi70_exit and not pd.isna(cur.get("rsi14")) and float(cur["rsi14"]) > rsi_overbought:
             ret = (close / entry_price - 1.0) - tx_cost_rt
-            return row_date, "RSI70 익절", ret, (row_date - signal_date).days
+            return row_date, f"RSI{rsi_overbought:.0f} 익절", ret, (row_date - signal_date).days
 
         if use_ma20_exit and not pd.isna(cur.get("ma20")) and close < float(cur["ma20"]):
             ret = (close / entry_price - 1.0) - tx_cost_rt
@@ -207,6 +211,8 @@ def replay_quant(
     flow_lookup: Optional[dict[FlowKey, StreakValue]] = None,
     flow_streak_min: int = 3,
     tx_cost_rt: float = TX_COST_DEFAULT,
+    rsi_oversold: float = 30.0,
+    rsi_overbought: float = 70.0,
 ) -> list[SignalRecord]:
     """TechnicalQuant.md 매매타이밍 조건 walk-forward 재현.
 
@@ -214,6 +220,10 @@ def replay_quant(
     flow_lookup 필요). 청산은 exit_models.py와 별개의 자기완결 로직(_scan_exit).
     BacktestConfig을 쓰지 않는 이유: 라이브 모의투자가 공유하는 models.py의
     mode 화이트리스트를 이 리서치 전용 모드 때문에 건드리지 않기 위함.
+
+    rsi_oversold/rsi_overbought: SCENARIO2 전용(진입 RSI 반등 임계값 / 청산
+    RSI 과열 임계값, 문서 기본값 30/70) — 진입/청산 파라미터 최적화 스윕
+    (scripts/run_quant_entry_exit_sweep.py)에서만 기본값과 다르게 넘긴다.
     """
     if entry_key != "E_flow_streak" and entry_key not in ENTRY_CONDITIONS:
         raise ValueError(f"알 수 없는 entry_key: {entry_key!r}")
@@ -255,6 +265,9 @@ def replay_quant(
                     triggered = False  # 전이 판정 — 이미 조건 충족 중이면 스킵
             if not triggered:
                 continue
+        elif entry_key == "SCENARIO2":
+            if not _cond_scenario2_entry(cur, prev, rsi_oversold):
+                continue
         else:
             assert cond_fn is not None
             if not cond_fn(cur, prev):
@@ -267,7 +280,7 @@ def replay_quant(
         sell_date, sell_reason, sell_return, hold_days = _scan_exit(
             df, i, entry_price, row_date,
             hard_stop_pct, target_pct, use_ma20_exit, use_rsi70_exit,
-            tx_cost_rt,
+            tx_cost_rt, rsi_overbought,
         )
 
         sig = SignalRecord(

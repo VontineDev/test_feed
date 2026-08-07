@@ -106,6 +106,19 @@ class TestEntryConditions:
         )
         assert fired
 
+    def test_scenario2_rsi_oversold_threshold_is_configurable(self):
+        """진입/청산 파라미터 최적화 스윕용 — rsi_oversold를 바꾸면 발동 시점도 바뀐다."""
+        closes = [100.0 - i * 1.5 for i in range(20)] + [72.0 + i * 2 for i in range(10)]
+        df = compute_indicators(_make_df(closes))
+        fired_30 = [i for i in range(21, len(df))
+                    if _cond_scenario2_entry(df.iloc[i], df.iloc[i - 1], rsi_oversold=30.0)]
+        fired_50 = [i for i in range(21, len(df))
+                    if _cond_scenario2_entry(df.iloc[i], df.iloc[i - 1], rsi_oversold=50.0)]
+        assert fired_30 and fired_50
+        # RSI는 반등 중 30을 먼저 넘고 그 다음에 50을 넘으므로, 임계값이 낮을수록(30)
+        # 발동일이 더 빠르거나 같아야 함
+        assert min(fired_30) <= min(fired_50)
+
 
 class TestScanExit:
     def test_hard_stop_triggers_first(self):
@@ -129,6 +142,24 @@ class TestScanExit:
         )
         assert reason.startswith("목표가")
         assert ret is not None and ret > 0.10
+
+    def test_rsi_overbought_threshold_is_configurable(self):
+        """진입/청산 파라미터 최적화 스윕용 — rsi_overbought를 낮추면 더 일찍 청산돼야 함."""
+        # 완만한 상승 후 RSI가 서서히 60~80 사이를 지나가도록 구성
+        closes = [100.0 + i * 0.8 for i in range(30)]
+        df = compute_indicators(_make_df(closes))
+        sell_low, _reason_low, _ret_low, _hd_low = _scan_exit(
+            df, entry_idx=0, entry_price=100.0, signal_date=date(2025, 1, 1),
+            hard_stop_pct=0.30, target_pct=None, use_ma20_exit=False,
+            use_rsi70_exit=True, tx_cost_rt=0.0, rsi_overbought=60.0,
+        )
+        sell_high, _reason_high, _ret_high, _hd_high = _scan_exit(
+            df, entry_idx=0, entry_price=100.0, signal_date=date(2025, 1, 1),
+            hard_stop_pct=0.30, target_pct=None, use_ma20_exit=False,
+            use_rsi70_exit=True, tx_cost_rt=0.0, rsi_overbought=80.0,
+        )
+        assert sell_low is not None and sell_high is not None
+        assert sell_low <= sell_high  # 임계값 낮을수록(60) 더 일찍/같이 청산
 
     def test_period_end_when_no_condition_hit(self):
         closes = [100.0, 101.0, 100.5, 101.2]  # 횡보 — 아무 조건도 안 걸림
@@ -182,6 +213,33 @@ class TestReplayQuant:
         with pytest.raises(ValueError):
             replay_quant("005930.KS", "삼성전자", df, "KOSPI", self._start, self._end,
                          entry_key="E_flow_streak")
+
+    def test_scenario2_respects_custom_rsi_oversold(self):
+        """진입/청산 파라미터 최적화 스윕이 replay_quant를 거쳐 실제로 다른
+        신호를 만들어내는지 종단 확인 — 완전히 fixture에만 의존하지 않게
+        하드코딩된 30 대신 파라미터가 실제로 전달되는지 검증."""
+        closes = [100.0] * 121 + [100.0 - i * 1.5 for i in range(20)] + [72.0 + i * 2 for i in range(10)]
+        df = _make_df(closes)
+        signals_default = replay_quant(
+            "005930.KS", "삼성전자", df, "KOSPI", self._start, self._end,
+            entry_key="SCENARIO2", hard_stop_pct=0.07, target_pct=None,
+            use_ma20_exit=False, use_rsi70_exit=True,
+        )
+        signals_custom = replay_quant(
+            "005930.KS", "삼성전자", df, "KOSPI", self._start, self._end,
+            entry_key="SCENARIO2", hard_stop_pct=0.07, target_pct=None,
+            use_ma20_exit=False, use_rsi70_exit=True,
+            rsi_oversold=50.0, rsi_overbought=55.0,
+        )
+        # 임계값을 완화하면(50/55) 더 자주 발동하거나 최소한 청산 사유가 달라져야 함
+        assert len(signals_default) >= 1
+        assert len(signals_custom) >= 1
+        default_dates = {s.signal_date for s in signals_default}
+        custom_dates = {s.signal_date for s in signals_custom}
+        assert default_dates != custom_dates or any(
+            d.sell_reason != c.sell_reason
+            for d, c in zip(signals_default, signals_custom)
+        )
 
     def test_flow_streak_fires_on_transition_to_3day_streak(self):
         # replay_quant는 MA120 워밍업 때문에 인덱스 121부터 판정을 시작하므로
