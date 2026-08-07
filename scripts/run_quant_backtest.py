@@ -77,8 +77,15 @@ def _select_universe(
     start: date,
     end: date,
     mode: str,
+    pct: float = 0.20,
+    top_n: int = 200,
 ) -> set[str]:
-    """SCENARIO1/2 전용 유니버스 필터. mode='txamt_top20' | 'mktcap_top200'.
+    """SCENARIO1/2 전용 유니버스 필터. mode='txamt_top20'(거래대금 순위) |
+    'mktcap_top200'(시가총액 순위) — mode 문자열은 순위 기준(거래대금 vs
+    시가총액)만 고르고, 실제 컷오프는 pct(txamt 모드, 기본 20%)/top_n(mktcap
+    모드, 기본 200)로 조절한다. 기본값은 문서 원안과 동일해 기존 호출부는
+    무변경(scripts/run_quant_scenario_variants.py가 유니버스를 완화해볼 때
+    이 인자들을 사용).
 
     기간 평균 거래대금/시가총액으로 순위를 매긴다(일별 cross-sectional 순위
     대신 기간 평균을 쓰는 단순화 — 유니버스가 백테스트 기간 내내 크게 변하지
@@ -105,9 +112,9 @@ def _select_universe(
         return set()
     ranked = sorted(stats.items(), key=lambda kv: kv[1], reverse=True)
     if mode == "txamt_top20":
-        cutoff = max(1, int(len(ranked) * 0.20))
+        cutoff = max(1, int(len(ranked) * pct))
         return {t for t, _ in ranked[:cutoff]}
-    return {t for t, _ in ranked[:200]}
+    return {t for t, _ in ranked[:top_n]}
 
 
 def _metrics_from_signals(signals: list) -> dict:

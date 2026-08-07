@@ -73,3 +73,29 @@ class TestSelectUniverse:
         ohlcv_map = {"A.KS": _df([100.0] * 5, [1_000] * 5)}
         with pytest.raises(ValueError):
             _select_universe(ohlcv_map, {}, date(2025, 1, 1), date(2025, 1, 5), "bogus")
+
+    def test_txamt_custom_pct_widens_cutoff(self):
+        ohlcv_map = {
+            "A.KS": _df([100.0] * 10, [1_000_000] * 10),
+            "B.KS": _df([100.0] * 10, [10_000_000] * 10),  # 최고
+            "C.KS": _df([100.0] * 10, [100_000] * 10),
+            "D.KS": _df([100.0] * 10, [500_000] * 10),
+            "E.KS": _df([100.0] * 10, [200_000] * 10),
+        }
+        # pct=0.20(기본)이면 1종목(B)만, pct=0.50이면 5종목의 50%=2종목(B, A)
+        universe = _select_universe(
+            ohlcv_map, {}, date(2025, 1, 1), date(2025, 1, 10), "txamt_top20", pct=0.50
+        )
+        assert universe == {"B.KS", "A.KS"}
+
+    def test_mktcap_custom_top_n_narrows_cutoff(self):
+        ohlcv_map = {
+            "A.KS": _df([100.0] * 5, [1_000] * 5),
+            "B.KS": _df([100.0] * 5, [1_000] * 5),
+        }
+        listed_shares = {"A.KS": 1_000_000, "B.KS": 10_000_000}
+        # top_n=1이면 시총이 더 큰 B만 남는다(기본 top_n=200이면 둘 다 포함).
+        universe = _select_universe(
+            ohlcv_map, listed_shares, date(2025, 1, 1), date(2025, 1, 5), "mktcap_top200", top_n=1
+        )
+        assert universe == {"B.KS"}
