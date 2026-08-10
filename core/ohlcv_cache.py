@@ -30,7 +30,16 @@ from core.db_sync import connect as _connect
 def _get_coverage(
     dsn: str, symbols: list[str], start: date, end: date
 ) -> dict[str, tuple[date, date, int]]:
-    """심볼별 캐시 커버리지 단일 쿼리. {symbol: (min_date, max_date, count)}"""
+    """심볼별 캐시 커버리지 단일 쿼리. {symbol: (min_date, max_date, count)}
+
+    `start`는 하한으로 쓰지 않는다 — `WHERE date BETWEEN start AND end`로
+    자르면 MIN(date)가 정의상 절대 start보다 작아질 수 없어서, 실제로는
+    start 이전까지 데이터가 있어도 "커버리지 없음"으로 오판하게 된다
+    (2026-08-10 발견: daily_ohlcv를 2022년치까지 백필한 직후에도 캐시가
+    계속 히트 0으로 잡히던 진짜 원인 — 종목코드 접두사 버그와는 별개).
+    그래서 하한 없이 `date <= end`만 걸어 진짜 최초 데이터 날짜를 구하고,
+    `_classify_coverage()`에서 그 값과 fetch_start를 비교한다.
+    """
     conn = _connect(dsn)
     try:
         with conn.cursor() as cur:
@@ -38,43 +47,61 @@ def _get_coverage(
                 """
                 SELECT symbol, MIN(date)::date, MAX(date)::date, COUNT(*)
                 FROM daily_ohlcv
-                WHERE symbol = ANY(%s) AND date BETWEEN %s AND %s
+                WHERE symbol = ANY(%s) AND date <= %s
                 GROUP BY symbol
                 """,
-                (symbols, start, end),
+                (symbols, end),
             )
             return {row[0]: (row[1], row[2], int(row[3])) for row in cur.fetchall()}
     finally:
         conn.close()
 
 
-def _load_df(dsn: str, symbol: str, start: date, end: date) -> Optional[pd.DataFrame]:
-    """DB에서 단일 종목 일봉 DataFrame 로드. 유효 행 30개 미만이면 None."""
+def _load_df_bulk(
+    dsn: str, symbols: list[str], start: date, end: date
+) -> dict[str, pd.DataFrame]:
+    """DB에서 여러 종목 일봉을 단일 쿼리로 로드 (커넥션 1개 재사용).
+
+    2026-08-10 발견: 캐시 히트 로딩이 `_load_df()`를 종목마다 호출해 매번
+    새 DB 커넥션을 열고 있었다 — Supabase 풀러 네트워크 왕복 때문에 종목당
+    ~400ms, 1583종목이면 순차로 10분 넘게 걸림(daily_ohlcv를 제대로
+    백필해 캐시가 실제로 히트하기 시작하자 이 병목이 처음 드러남). 단일
+    쿼리 + Python 쪽 groupby로 교체 — 커넥션 1개, 쿼리 1번.
+    """
+    if not symbols:
+        return {}
     conn = _connect(dsn)
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT date, open, high, low, close, volume
+                SELECT symbol, date, open, high, low, close, volume
                 FROM daily_ohlcv
-                WHERE symbol = %s AND date BETWEEN %s AND %s
-                ORDER BY date
+                WHERE symbol = ANY(%s) AND date BETWEEN %s AND %s
+                ORDER BY symbol, date
                 """,
-                (symbol, start, end),
+                (symbols, start, end),
             )
             rows = cur.fetchall()
     finally:
         conn.close()
 
     if not rows:
-        return None
+        return {}
 
-    df = pd.DataFrame(rows, columns=pd.Index(["Date", "Open", "High", "Low", "Close", "Volume"]))
-    df["Date"] = pd.to_datetime(df["Date"], utc=True)
-    df = df.set_index("Date")
-    if df["Close"].notna().sum() < 30:
-        return None
-    return df
+    full = pd.DataFrame(
+        rows,
+        columns=pd.Index(["Symbol", "Date", "Open", "High", "Low", "Close", "Volume"]),
+    )
+    full["Date"] = pd.to_datetime(full["Date"], utc=True)
+
+    result: dict[str, pd.DataFrame] = {}
+    for sym, g in full.groupby("Symbol", sort=False):
+        df = g.drop(columns=["Symbol"]).set_index("Date")
+        if df["Close"].notna().sum() < 30:
+            continue
+        result[str(sym)] = df
+    return result
 
 
 def _save_df(dsn: str, symbol: str, market: str, df: pd.DataFrame) -> None:
@@ -127,6 +154,37 @@ def _save_df(dsn: str, symbol: str, market: str, df: pd.DataFrame) -> None:
         conn.close()
 
 
+def _classify_coverage(
+    symbols: list[str],
+    coverage: dict[str, tuple[date, date, int]],
+    fetch_start: date,
+    effective_end: date,
+    coverage_slack: timedelta = timedelta(days=4),
+) -> tuple[list[str], list[str]]:
+    """커버리지 정보로 심볼을 히트/미스로 분류 (순수 함수 — DB/네트워크 없음, 테스트 대상).
+
+    cov[1](DB의 마지막 날짜)이 effective_end보다 최대 coverage_slack일 이내로
+    앞서 있어도 히트로 간주한다 — 주말/공휴일에는 거래가 없어 캘린더상
+    "어제"와 "마지막 거래일"이 다를 수 있기 때문(2026-08-10 발견: 월요일마다
+    데이터가 완전히 최신이어도 항상 캐시 히트 0으로 잡히던 원인 — daily_ohlcv
+    KRX 백필 직후에도 재현돼 캐시 레이어 자체의 버그로 확인됨).
+    """
+    hits: list[str] = []
+    misses: list[str] = []
+    for sym in symbols:
+        cov = coverage.get(sym)
+        if (
+            cov is not None
+            and cov[0] <= fetch_start
+            and cov[1] >= effective_end - coverage_slack
+            and cov[2] >= 30
+        ):
+            hits.append(sym)
+        else:
+            misses.append(sym)
+    return hits, misses
+
+
 def batch_fetch_cached(
     tickers: list[tuple[str, str]],
     fetch_start: date,
@@ -156,19 +214,7 @@ def batch_fetch_cached(
         logger.warning("[cache] 커버리지 조회 실패 → yfinance 직접 수집: %s", e)
         coverage = {}
 
-    hits: list[str] = []
-    misses: list[str] = []
-    for sym in symbols:
-        cov = coverage.get(sym)
-        if (
-            cov is not None
-            and cov[0] <= fetch_start
-            and cov[1] >= effective_end
-            and cov[2] >= 30
-        ):
-            hits.append(sym)
-        else:
-            misses.append(sym)
+    hits, misses = _classify_coverage(symbols, coverage, fetch_start, effective_end)
 
     logger.info(
         "[cache] 캐시 히트: %d  미스: %d  전체: %d",
@@ -177,22 +223,17 @@ def batch_fetch_cached(
 
     result: dict[str, pd.DataFrame] = {}
 
-    # 2. 캐시 히트 — DB 로드
-    db_fail: list[str] = []
-    for sym in hits:
+    # 2. 캐시 히트 — DB 로드 (단일 쿼리, 커넥션 재사용)
+    if hits:
         try:
-            df = _load_df(dsn, sym, fetch_start, fetch_end)
-            if df is not None:
-                result[sym] = df
-            else:
-                db_fail.append(sym)
+            result = _load_df_bulk(dsn, hits, fetch_start, fetch_end)
         except Exception as e:
-            logger.debug("[cache] %s DB 로드 실패: %s", sym, e)
-            db_fail.append(sym)
-
-    if db_fail:
-        logger.warning("[cache] DB 로드 실패 → yfinance fallback: %d개", len(db_fail))
-        misses.extend(db_fail)
+            logger.warning("[cache] 벌크 DB 로드 실패 → yfinance fallback: %s", e)
+            result = {}
+        db_fail = [sym for sym in hits if sym not in result]
+        if db_fail:
+            logger.warning("[cache] DB 로드 실패 → yfinance fallback: %d개", len(db_fail))
+            misses.extend(db_fail)
 
     # 3. 캐시 미스 — yfinance 병렬 수집 + DB 저장
     def _fetch_and_cache(sym: str) -> tuple[str, Optional[pd.DataFrame]]:
