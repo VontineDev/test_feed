@@ -4,6 +4,48 @@ Items deferred from code review and planning sessions.
 
 ---
 
+## P1: daily_ohlcv 캐시가 사실상 무력 — 백테스트마다 yfinance 재수집 → rate-limit 유발 — ✅ 완료(백필 스크립트)
+
+**What:** `core/ohlcv_cache.py:batch_fetch_cached()`는 `daily_ohlcv`를 캐시로
+먼저 확인하고 없으면 yfinance로 받는 구조로 설계돼 있지만, 실제로는 항상
+"히트 0"이라 모든 백테스트가 매번 전종목을 yfinance로 처음부터 재수집하고
+있었다. 2026-08-10 교차조합 백테스트(TechnicalQuant.md 참고) 전체 실행 중
+이걸로 yfinance rate-limit에 걸려 15개 조합 중 13개 결과가 오염되는 사고로
+이어짐.
+
+**Why:** DB 확인 결과 `daily_ohlcv`가 종목당 2025-01-03부터 ~64행(주 1회
+정도의 스파스 스냅샷 — `_daily_market_snap_job`이 하루 100종목씩만 찍는
+것으로 추정)뿐이었다. 백테스트는 MA120 워밍업 때문에 `start-760일`(약
+2023년)까지 필요한데 DB엔 그보다 훨씬 짧게만 있어 캐시 커버리지 조건
+(`fetch_start 이전부터 데이터 있어야 함`)을 구조적으로 절대 만족 못 함 —
+캐시 레이어 자체는 버그 없이 정상 동작하지만(코드 검증 완료), **채워질
+데이터가 애초에 없어서** 캐시가 있으나 마나였음.
+
+**수정:** `scripts/daily_ohlcv_backfill.py` 신설 — 기존 `core/ohlcv_cache.py:
+fill_daily_from_krx()`를 거래일별로 반복 호출해 KRX OpenAPI(공식 거래소
+REST API, yfinance 미사용)로 daily_ohlcv를 채운다. KRX OpenAPI는 "하루치
+전종목"을 API 호출 2회(KOSPI+KOSDAQ)로 반환하므로(종목별 개별 호출이
+필요한 yfinance와 근본적으로 다름) 전체 종목·전체 기간을 백필해도 API
+호출 횟수는 "거래일수 × 2"뿐 — rate-limit 위험이 사실상 없음(공식 10 req/s,
+여기선 하루 2회만 사용). 이미 채워진 날짜는 자동 스킵(재실행 안전,
+`--force`로 강제 재수집 가능). 2023-01-09~13 스모크 테스트로 실제 저장까지
+확인(거래일당 ~2558종목, ~4초).
+
+**How to apply:** 2026-08-10 21:XX KST부터 `python scripts/daily_ohlcv_backfill.py
+--start 2022-01-01`(백그라운드) 실행 중 — 완료까지 추정 60~75분(거래일당
+~4초 × 약 1,100 거래일). 완료 후 검증: `SELECT symbol, MIN(date), MAX(date),
+COUNT(*) FROM daily_ohlcv WHERE symbol='005930.KS' GROUP BY symbol;`로
+2022년치부터 daily 단위로 채워졌는지 확인, 이후 아무 백테스트나 재실행해
+"[cache] 캐시 히트: N 미스: 0" 로그가 뜨는지로 캐시 정상화 확인. 정기
+유지보수로 스케줄러에 주기 실행(예: 주 1회, 최근 며칠치만) 등록하면 이
+문제가 재발하지 않음 — 아직 스케줄러 등록은 안 함(수동 백필만 완료).
+
+**Effort:** S (human: ~20min / CC: ~15min)
+**Priority:** P1
+**Found:** 2026-08-10, TechnicalQuant 교차조합 백테스트 결과 오염 원인 추적 중 발견
+
+---
+
 ## P3: TechnicalQuant SCENARIO2 필터+진입/청산 파라미터 최적화 — ✅ 완료
 
 **What:** `scripts/run_quant_backtest.py --condition SCENARIO2 --use-fundamentals`
