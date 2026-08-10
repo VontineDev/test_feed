@@ -385,7 +385,13 @@ async def paper_open_entry_job(db_pool, paper_trader) -> None:
             logger.warning("[paper-entry] %s 매수 미체결 (주문번호=%s) — closed 처리",
                             _ticker, _ord_no)
             try:
-                await update_to_closed(db_pool, _pos_id, 0.0, "buy_never_filled", _ord_no)
+                # exit_price에 0.0을 넣으면 실제로는 체결됐는데 confirm_fill()
+                # 오탐(예: 2026-08-05~10 종목코드 접두사 버그)으로 미체결 처리된
+                # 경우, 나중에 브로커 실보유와 대조해도 시도가를 복구할 방법이
+                # 없어진다 — 최소한 실제 주문에 쓴 시가(_open_px)는 남겨둔다
+                # (2026-08-10 investigate 세션에서 발견: 유령 보유 20건 중 상당수가
+                # entry_theory=0.0인 compose 모델이라 이 가격마저 없으면 완전 유실).
+                await update_to_closed(db_pool, _pos_id, float(_open_px), "buy_never_filled", _ord_no)
             except Exception as _e:
                 logger.warning("[paper-entry] %s DB 업데이트 실패: %s", _ticker, _e)
             try:
