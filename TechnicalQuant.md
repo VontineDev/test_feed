@@ -179,6 +179,56 @@ SCENARIO5(PBR 단독)가 지금까지 모든 필터 조합 중 최고 — 필터
 
 ---
 
+## 🔬 다음 실험: 매수신호 × 청산조건 교차 조합 (2026-08-10, 실행 대기)
+
+FUNNEL-1/SCORE-1과 2안을 동일 방법론(실현승률)으로 정밀 비교한 결과([howto-quant-backtest.md](docs/01_howto/howto-quant-backtest.md) 참고), **승률은 FUNNEL-1(64.1%)/SCORE-1(70.6%)이 2안(최고 55.2%)보다 확실히 높지만, 건당 평균수익은 2안 보수안(+9.47%)이 FUNNEL-1(+9.7%)/SCORE-1(+9.2%)과 거의 동급**이었습니다. 그렇다면 "compose의 높은 승률 매수신호"에 "2안이 찾아낸 넓은 청산(RSI80/-12%)"을 붙이거나, 반대로 "2안의 저확률·고수익 매수신호"에 "compose의 분할청산(TP1+트레일링)"을 붙이면 더 나아지는지 확인해볼 가치가 있습니다.
+
+**도구**: `scripts/run_cross_combo_backtest.py` — 기존에 각자 검증된 진입/청산 로직을 그대로 재사용해 섞습니다(새 로직을 만들지 않음). 두 방향 지원:
+
+- **A) compose 매수 × quant 청산**: FUNNEL-1/SCORE-1/AND-1의 매수신호에 `quant_signals.py`의 자기완결 청산(RSI 익절/MA20이탈/목표가/손절)을 적용
+- **B) quant 매수 × compose 청산**: 2안(SCENARIO2, PER≤18 또는 PBR단독 유니버스)의 매수신호에 `exit_models.py`의 분할청산 모델(CROSS/SCORE-1/FUNNEL-1 튜닝값 중 택1)을 적용
+
+**조합 매트릭스 (15개)**:
+
+| # | 매수신호 | 청산조건 | 실행 커맨드 |
+|---|----------|----------|-------------|
+| 1 | FUNNEL-1 | quant 원안(RSI70/-7%) | `--combo FUNNEL-1:quant_original` |
+| 2 | FUNNEL-1 | quant 최적화(RSI80/-12%) | `--combo FUNNEL-1:quant_optimized` |
+| 3 | FUNNEL-1 | 1안 원안(+20%/-5%/MA20) | `--combo FUNNEL-1:quant_scenario1` |
+| 4 | SCORE-1 | quant 원안 | `--combo SCORE-1:quant_original` |
+| 5 | SCORE-1 | quant 최적화 | `--combo SCORE-1:quant_optimized` |
+| 6 | SCORE-1 | 1안 원안 | `--combo SCORE-1:quant_scenario1` |
+| 7 | AND-1 | quant 원안 | `--combo AND-1:quant_original` |
+| 8 | AND-1 | quant 최적화 | `--combo AND-1:quant_optimized` |
+| 9 | AND-1 | 1안 원안 | `--combo AND-1:quant_scenario1` |
+| 10 | SCENARIO2(PER≤18) | CROSS 분할청산 | `--combo SCENARIO2_PER18:cross` |
+| 11 | SCENARIO2(PER≤18) | SCORE-1 분할청산 | `--combo SCENARIO2_PER18:score1` |
+| 12 | SCENARIO2(PER≤18) | FUNNEL-1 분할청산 | `--combo SCENARIO2_PER18:funnel1` |
+| 13 | SCENARIO2(PBR단독) | CROSS 분할청산 | `--combo SCENARIO2_PBR:cross` |
+| 14 | SCENARIO2(PBR단독) | SCORE-1 분할청산 | `--combo SCENARIO2_PBR:score1` |
+| 15 | SCENARIO2(PBR단독) | FUNNEL-1 분할청산 | `--combo SCENARIO2_PBR:funnel1` |
+
+전체 실행(15개 조합 순차 처리, 결과는 `results/cross_combo_backtest.csv` + 콘솔 요약표):
+
+```bash
+python scripts/run_cross_combo_backtest.py --start 2025-01-02 --end 2026-08-06
+```
+
+특정 조합만 실행하려면 `--combo` 플래그 사용(위 표의 커맨드 그대로). 전체 실행은 조합마다 티커별 OHLCV를 재수집/재계산하므로 **1개 조합에서 신호 수천 건(FUNNEL-1 등) 기준 수 분씩, 15개 전체는 상당히 오래 걸릴 수 있습니다** — 2026-08-10 스모크 테스트(2개월 짧은 구간, 정식 결과 아님)에서 조합 1건에 약 2~3분 소요됨을 확인했습니다.
+
+**스모크 테스트 결과(2026-01-01~2026-03-01, 짧은 구간 — 정식 백테스트 아님, 동작 확인용)**:
+
+| 조합 | 신호 | 승률 | 평균수익 |
+|------|------|------|----------|
+| FUNNEL-1매수 × quant_optimized청산 | 750 | 46.0% | +12.1% |
+| SCENARIO2_PER18매수 × score1분할청산 | 3 | 100.0% | +9.0% |
+
+두 방향 다 정상 동작 확인(표본 크기가 극단적으로 다른 것도 정상 — compose는 원래 신호가 훨씬 많고, 2안은 원래 희소함). 특히 흥미로운 점: FUNNEL-1의 매수신호에 quant의 넓은 청산(RSI80/-12%)을 붙이자 **승률은 46.0%로 FUNNEL-1 원래 승률(64.1%)보다 오히려 떨어짐** — RSI80/-12% 청산이 SCENARIO2의 RSI30 반등 진입에 맞춰 최적화된 것이라 다른 진입 로직에 그대로 옮기면 성능이 그대로 이어지지 않을 수 있음을 시사(다만 표본 750건 자체는 짧은 2개월 구간이라 확정적이지 않음 — 전체 구간 재실행 필요).
+
+**결론은 아직 없습니다** — 전체 기간(2025-01-02~2026-08-06)으로 15개 조합을 다 돌려봐야 어느 조합이 실제로 개선인지 판단 가능합니다. 신호 30건 미만 조합(특히 AND-1, SCENARIO2 계열)은 표본 부족으로 참고용에 그칠 가능성이 큽니다.
+
+---
+
 이 조건들을 토대로 백테스트를 설계해 보시면 됩니다. 혹시 사용하시려는 백테스트 플랫폼(예: 젠포트, 퀀터스, 파이썬 코드 등)이 무엇인지 알려주시면, 해당 플랫폼의 문법이나 입력 방식에 맞게 조건을 조금 더 다듬어 드릴 수 있습니다. 혹은 어떤 플랫폼이 좋은지 추천이 필요하신가요?
 
 *AI 대답에는 오류가 있을 수 있습니다. 자세히 알아보기*
