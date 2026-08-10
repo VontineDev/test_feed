@@ -277,8 +277,17 @@ class KiwoomPaperTrader:
         items = data.get("acnt_evlt_remn_indv_tot", [])
         result = []
         for item in items:
+            # kt00018은 종목코드를 "A005930"처럼 거래소 접두사를 붙여 반환한다.
+            # 반면 주문 제출(kt10000/kt10001)과 _to_6digit()은 접두사 없는 6자리를
+            # 쓰므로, 여기서 정규화해두지 않으면 get_position_qty()의 stk_cd 비교가
+            # 항상 실패해 보유수량이 0으로 잡힌다 (confirm_fill() 전체를 무력화시킨
+            # 버그 — 2026-08-05 도입 이후 매수/매도 체결 확인이 전부 오탐 처리됨,
+            # 2026-08-10 investigate 세션에서 발견).
+            _stk_cd = item.get("stk_cd", "")
+            if _stk_cd.startswith("A") and _stk_cd[1:].isdigit():
+                _stk_cd = _stk_cd[1:]
             result.append({
-                "stk_cd":     item.get("stk_cd", ""),
+                "stk_cd":     _stk_cd,
                 "stk_nm":     item.get("stk_nm", ""),
                 "cur_prc":    int(item.get("cur_prc", "0") or 0),
                 "rmnd_qty":   int(item.get("rmnd_qty", "0") or 0),

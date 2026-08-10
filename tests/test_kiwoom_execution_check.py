@@ -142,3 +142,58 @@ class TestConfirmFill:
             "005930", "0000001", qty=100, is_buy=False, qty_before=150, delay_s=0
         )
         assert filled == 100
+
+
+class TestGetPositionsStkCdNormalization:
+    """kt00018은 종목코드를 "A005930"처럼 거래소 접두사를 붙여 반환한다.
+
+    2026-08-05 ~ 2026-08-10 회귀 버그: get_positions()가 접두사를 그대로 남겨두면
+    get_position_qty()의 `stk_cd == _to_6digit(ticker)` 비교가 절대 참이 될 수
+    없어 보유수량이 항상 0으로 잡힌다 → confirm_fill()이 모든 매수/매도를
+    미체결로 오판 → 실제로는 체결된 매도 주문이 DB에서 청산 확정되지 않고
+    청산 필요 수량이 부풀려진 채 open 상태로 남아, 다음 실행에서 "매도가능수량이
+    부족합니다"(800033) 브로커 거부로 이어졌다(2026-08-10 investigate 세션에서
+    실계좌 대조로 확인).
+    """
+
+    def _positions_response(self, rows: list[dict]) -> tuple[dict, dict]:
+        return {"acnt_evlt_remn_indv_tot": rows}, {}
+
+    def test_strips_exchange_prefix(self):
+        mock_post = MagicMock(
+            return_value=self._positions_response(
+                [{"stk_cd": "A005930", "stk_nm": "삼성전자", "rmnd_qty": "10"}]
+            )
+        )
+        trader = _make_trader(mock_post)
+        positions = trader.get_positions()
+        assert positions[0]["stk_cd"] == "005930"
+
+    def test_get_position_qty_matches_prefixed_broker_response(self):
+        """kt00018의 실제 응답 형태("A"+6자리)를 그대로 넣어도 매칭돼야 한다."""
+        mock_post = MagicMock(
+            return_value=self._positions_response(
+                [{"stk_cd": "A000500", "stk_nm": "가온전선", "rmnd_qty": "7"}]
+            )
+        )
+        trader = _make_trader(mock_post)
+        assert trader.get_position_qty("000500.KS") == 7
+
+    def test_get_position_qty_returns_zero_when_not_held(self):
+        mock_post = MagicMock(
+            return_value=self._positions_response(
+                [{"stk_cd": "A005930", "stk_nm": "삼성전자", "rmnd_qty": "10"}]
+            )
+        )
+        trader = _make_trader(mock_post)
+        assert trader.get_position_qty("000660.KS") == 0
+
+    def test_non_prefixed_stk_cd_left_untouched(self):
+        """접두사가 없는 응답이 와도 (방어적으로) 그대로 통과시켜야 한다."""
+        mock_post = MagicMock(
+            return_value=self._positions_response(
+                [{"stk_cd": "005930", "stk_nm": "삼성전자", "rmnd_qty": "5"}]
+            )
+        )
+        trader = _make_trader(mock_post)
+        assert trader.get_position_qty("005930.KS") == 5
