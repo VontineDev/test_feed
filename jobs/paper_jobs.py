@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import random
+from collections import defaultdict
 from datetime import date
 
 import httpx
@@ -31,10 +32,96 @@ from telegram.telegram_notify import _get_token, _get_chat_id, _post_message
 logger = logging.getLogger(__name__)
 
 
+async def _reconcile_stale_positions(db_pool, paper_trader) -> int:
+    """직전 실행에서 "매도 체결 미확인"으로 남은 open 포지션을 브로커 실보유와
+    대조해 자동 정정.
+
+    2026-08-11 발견: confirm_fill()의 폴링 창(기본 3회×1.5초 ≈ 수 초)이 이
+    모의투자 서버의 실제 체결 지연(수 분~10분+, 같은 날 반복 관측)보다
+    훨씬 짧아 "같은 실행 안에서 확인"이 구조적으로 거의 불가능하다. 그
+    결과 실제로는 (부분)체결된 매도가 매번 "미확인" 상태로 open + 부풀려진
+    qty로 남고, 다음 실행에서 그 부풀려진 수량으로 재매도를 시도해
+    "매도가능수량 부족"(800033) 에러가 반복 재발한다 — 지난 며칠간 A/B/C
+    그룹 유령 보유 정리로 계속 손댄 것과 동일한 근본 원인.
+
+    exit 조건 판정 전에 매번 이 재조정을 먼저 돌려 직전 실행의 미확인분을
+    브로커 실보유 기준으로 self-heal한다 — confirm_fill() 자체를 더 오래
+    기다리게 만드는 대신(포지션 수만큼 곱해져 잡 실행시간이 비현실적으로
+    길어짐), "확인은 다음 실행에서"로 설계를 바꾼 것.
+
+    같은 티커를 여러 모델이 동시 보유하면 브로커 잔고가 모델별로 분리되지
+    않아 어느 쪽이 얼마나 팔렸는지 안전하게 판단할 수 없다 — 그 경우는
+    건드리지 않고 로그만 남긴다(수동 확인 필요, 2026-08-11 investigate
+    세션에서 A/B/C 그룹 정리 때와 동일한 제약).
+    """
+    _loop = asyncio.get_running_loop()
+    _open_positions = await get_open_positions(db_pool)
+    if not _open_positions:
+        return 0
+
+    _by_ticker: dict[str, list] = defaultdict(list)
+    for _p in _open_positions:
+        _by_ticker[_p["ticker"]].append(_p)
+
+    _n_fixed = 0
+    for _ticker, _positions in _by_ticker.items():
+        if len(_positions) > 1:
+            logger.info("[paper-exit] %s 같은 티커 %d개 모델 동시보유 — 자동 재조정 스킵(수동 확인 필요)",
+                        _ticker, len(_positions))
+            continue
+
+        _pos = _positions[0]
+        _recorded_qty = _pos["qty"] or 0
+        if _recorded_qty <= 0:
+            continue
+
+        _actual_qty = await _loop.run_in_executor(None, paper_trader.get_position_qty, _ticker)
+        if _actual_qty == _recorded_qty:
+            continue
+        if _actual_qty > _recorded_qty:
+            logger.warning("[paper-exit] %s 브로커 보유(%d)가 DB(%d)보다 많음 — 원인불명, 스킵",
+                           _ticker, _actual_qty, _recorded_qty)
+            continue
+
+        # _actual_qty < _recorded_qty: 직전 실행에서 미확인 처리된 매도가 실제로는
+        # (부분)체결됐던 것 — 브로커 실보유 기준으로 정정.
+        if _actual_qty == 0:
+            _price = await _loop.run_in_executor(None, paper_trader.get_current_price, _ticker)
+            if not _price:
+                logger.warning("[paper-exit] %s 재조정용 현재가 조회 실패 — 다음 실행에서 재시도", _ticker)
+                continue
+            _entry = _pos["entry_actual"] or _pos["entry_theory"]
+            _blended = (float(_price) - _entry) / _entry if _entry else None
+            try:
+                await update_to_closed(db_pool, _pos["id"], float(_price), "reconciled_prev_fill", "", _blended)
+                logger.info("[paper-exit] %s 직전 미확인 매도 재조정 → 전량체결 확인, closed 처리(근사 청산가=%s)",
+                            _ticker, _price)
+                _n_fixed += 1
+            except Exception as _e:
+                logger.warning("[paper-exit] %s 재조정 DB 업데이트 실패: %s", _ticker, _e)
+        else:
+            try:
+                async with db_pool.acquire() as _conn:
+                    await _conn.execute(
+                        "UPDATE paper_positions SET qty=$1 WHERE id=$2", _actual_qty, _pos["id"],
+                    )
+                logger.info("[paper-exit] %s 직전 미확인 매도 재조정 → qty %d→%d 정정 (open 유지)",
+                            _ticker, _recorded_qty, _actual_qty)
+                _n_fixed += 1
+            except Exception as _e:
+                logger.warning("[paper-exit] %s 재조정 qty 업데이트 실패: %s", _ticker, _e)
+
+    return _n_fixed
+
+
 async def paper_exit_checker_job(db_pool, paper_trader) -> None:
     """정규장 마감 직전(15:20 KST) — 오픈 포지션 전체에 대해 exit 조건 판정 → 시장가 매도주문."""
     today = date.today()
     _loop = asyncio.get_running_loop()
+
+    _n_reconciled = await _reconcile_stale_positions(db_pool, paper_trader)
+    if _n_reconciled:
+        logger.info("[paper-exit] 직전 실행 미확인분 재조정: %d건", _n_reconciled)
 
     _open_positions = await get_open_positions(db_pool)
     if not _open_positions:

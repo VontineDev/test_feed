@@ -253,7 +253,7 @@ class KiwoomPaperTrader:
 
     def confirm_fill(
         self, ticker: str, ord_no: str, qty: int, is_buy: bool, qty_before: int,
-        attempts: int = 3, delay_s: float = 1.5,
+        attempts: int = 5, delay_s: float = 3.0,
     ) -> int:
         """주문 전/후 계좌 보유수량 델타로 체결 수량을 추정, 최대 attempts회 폴링.
 
@@ -269,6 +269,15 @@ class KiwoomPaperTrader:
         qty_before는 호출부가 place_buy/place_sell 제출 **직전**에
         get_position_qty()로 조회해 전달해야 한다 — 델타 계산이라 같은 티커를
         동시에 보유한 다른 모델의 몫과 무관하게 이 주문이 실제로 바꾼 수량만 잡아낸다.
+
+        기본값 5회×3초(≈12초 총 대기)로 2026-08-11 상향(기존 3회×1.5초≈4.5초).
+        이 모의투자 서버의 실제 체결 지연은 수 분~10분+까지 관측돼(같은 날
+        반복 확인) 어떤 폴링 창을 잡아도 "같은 실행 안 확인"을 완전히
+        보장할 수 없다 — 여기서는 초 단위로 빠르게 끝나는 체결만 잡아내는
+        용도로만 늘렸고, 느린 체결은 잡지 못한다는 전제로
+        `jobs/paper_jobs.py:_reconcile_stale_positions()`가 다음 실행에서
+        브로커 실보유 기준으로 self-heal한다(포지션 수만큼 곱해지는 이
+        함수 자체를 몇 분 단위로 늘리면 잡 실행시간이 비현실적으로 길어짐).
         """
         filled = 0
         qty_now = qty_before
