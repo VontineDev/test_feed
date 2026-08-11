@@ -661,13 +661,19 @@ async def main(interval: int, enable_summary: bool) -> None:
     if state.paper_trader:
         scheduler.add_job(
             _paper_exit_checker_job,
-            CronTrigger(day_of_week="mon-fri", hour=6, minute=20, timezone="UTC"),  # 15:20 KST
+            CronTrigger(day_of_week="mon-fri", hour=5, minute=30, timezone="UTC"),  # 14:30 KST
             id="paper_exit_checker",
             max_instances=1,
             misfire_grace_time=600,
             replace_existing=True,
         )
-        logger.info("[paper] Exit Checker 등록 완료 (15:20 KST)")
+        # 2026-08-11: 15:20→14:30으로 앞당김 — 종가 기준 청산 판정이라는 백테스트
+        # 로직과의 정합성은 거의 유지하면서(여전히 장 막판 가격 근사), 체결까지
+        # 몇 분~10분+ 걸리는 이 모의투자 서버 특성상 마감(15:30) 10분 전이던
+        # 기존 시각은 체결 완료 전에 장이 끝나 다음날로 미체결이 이월되는 사고가
+        # 반복됐음(_reconcile_stale_positions 도입 계기). 마감까지 1시간 여유를
+        # 둬 체결 완료 가능성을 크게 높임.
+        logger.info("[paper] Exit Checker 등록 완료 (14:30 KST)")
         scheduler.add_job(
             _paper_eod_sampler_job,
             CronTrigger(day_of_week="mon-fri", hour=7, minute=40, timezone="UTC"),  # 16:40 KST
