@@ -197,3 +197,51 @@ class TestGetPositionsStkCdNormalization:
         )
         trader = _make_trader(mock_post)
         assert trader.get_position_qty("005930.KS") == 5
+
+
+class TestCancelOrder:
+    """cancel_order(): kt10003 주식 취소주문.
+
+    2026-08-11: 시장가 매도가 12분 넘게 전혀 안 움직이는 종목(008470.KQ)이
+    발견돼 도입 — 원주문이 남아있으면 그 수량이 계속 잠겨 재주문도
+    "매도가능수량 부족"으로 거부된다(실제로 라이브에서 확인). 원주문을
+    취소해야 재시도 가능. 요청 스키마는 `docs/02_reference/키움 REST API
+    문서.pdf` p.429(kt10003) 원문 확인.
+    """
+
+    def test_request_body_fields(self):
+        mock_post = MagicMock(
+            return_value=({"ord_no": "0155217"}, {})
+        )
+        trader = _make_trader(mock_post)
+        trader.cancel_order("008470.KQ", "0148583", cncl_qty=0)
+        call_body = mock_post.call_args[0][2]
+        assert call_body["dmst_stex_tp"] == "KRX"
+        assert call_body["orig_ord_no"] == "0148583"
+        assert call_body["stk_cd"] == "008470"   # 접두사/시장 suffix 없는 6자리
+        assert call_body["cncl_qty"] == "0"      # '0' = 잔량 전부 취소
+
+    def test_uses_correct_endpoint_and_api_id(self):
+        mock_post = MagicMock(return_value=({"ord_no": "0155217"}, {}))
+        trader = _make_trader(mock_post)
+        trader.cancel_order("005930.KS", "0000140", cncl_qty=1)
+        call_args = mock_post.call_args[0]
+        assert call_args[0] == "/api/dostk/ordr"
+        assert call_args[1] == "kt10003"
+
+    def test_partial_cancel_qty_passed_as_string(self):
+        mock_post = MagicMock(return_value=({"ord_no": "0000141"}, {}))
+        trader = _make_trader(mock_post)
+        trader.cancel_order("005930.KS", "0000140", cncl_qty=100)
+        call_body = mock_post.call_args[0][2]
+        assert call_body["cncl_qty"] == "100"
+
+    def test_returns_new_order_number(self):
+        mock_post = MagicMock(return_value=({"ord_no": "0155217"}, {}))
+        trader = _make_trader(mock_post)
+        assert trader.cancel_order("008470.KQ", "0148583") == "0155217"
+
+    def test_missing_ord_no_in_response_returns_empty_string(self):
+        mock_post = MagicMock(return_value=({}, {}))
+        trader = _make_trader(mock_post)
+        assert trader.cancel_order("008470.KQ", "0148583") == ""

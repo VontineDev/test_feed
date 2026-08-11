@@ -186,6 +186,28 @@ class KiwoomPaperTrader:
         logger.info("[paper] 매도주문 %s %d주 → 주문번호=%s", stk_cd, qty, ord_no)
         return ord_no
 
+    def cancel_order(self, ticker: str, orig_ord_no: str, cncl_qty: int = 0) -> str:
+        """kt10003 주식 취소주문. 원주문번호로 미체결분을 취소하고 새 주문번호 반환.
+
+        cncl_qty=0(기본값)이면 잔량 전부 취소(API 스펙: "'0' 입력시 잔량 전부
+        취소" — docs/02_reference/키움 REST API 문서.pdf p.429). 부분체결된
+        주문도 잔량만 취소되고 이미 체결된 수량은 그대로 유지된다.
+        """
+        stk_cd = _to_6digit(ticker)
+        data, _ = self._client._post(
+            "/api/dostk/ordr", "kt10003",
+            {
+                "dmst_stex_tp": _EXCHANGE,
+                "orig_ord_no":  orig_ord_no,
+                "stk_cd":       stk_cd,
+                "cncl_qty":     str(cncl_qty),
+            },
+        )
+        ord_no = data.get("ord_no", "")
+        logger.info("[paper] 취소주문 %s 원주문=%s 취소수량=%s → 신규주문번호=%s",
+                    stk_cd, orig_ord_no, cncl_qty, ord_no)
+        return ord_no
+
     def check_execution(self, ticker: str, ord_no: str, is_buy: bool) -> int:
         """ka10076 체결요청으로 특정 주문의 실제 체결 수량을 조회.
 
