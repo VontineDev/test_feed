@@ -40,11 +40,30 @@ def _compute_macd(
     return macd_line, signal_line
 
 
+def _compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """ATR(period) — Wilder 방식(True Range의 지수이동평균, _compute_rsi와 동일한
+    ewm(com=period-1) 컨벤션). True Range = max(H-L, |H-PrevClose|, |L-PrevClose|)."""
+    high, low, close = cast(pd.Series, df["High"]), cast(pd.Series, df["Low"]), cast(pd.Series, df["Close"])
+    prev_close = close.shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    return cast(pd.Series, tr.ewm(com=period - 1, min_periods=period).mean())
+
+
 def compute_indicators(daily_df: pd.DataFrame) -> pd.DataFrame:
     """OHLCV 일봉에 문서의 매매타이밍 조건에 필요한 지표 컬럼을 붙여 반환.
 
     추가 컬럼: ma5/ma20/ma60/ma120, rsi14, macd/macd_signal,
-    high20_prev(전일까지 20일 최고가 — 오늘 돌파 여부 판정용), vol_prev(전일 거래량).
+    high20_prev(전일까지 20일 최고가 — 오늘 돌파 여부 판정용), vol_prev(전일 거래량),
+    bb_mid/bb_lower(볼린저밴드 20일 중심선/하단 -2σ), atr14(Wilder ATR),
+    low10_prev(전일까지 10일 최저가 — Donchian 청산 채널), high_prev/low_prev
+    (전일 고가/저가 — 변동성 돌파 매수가 계산용).
+
+    2026-08-11: F(볼린저+RSI+거래량)/G(변동성 돌파)/H(Donchian+ATR 청산) 3개
+    신규 방법론 추가하며 함께 확장.
     """
     df = daily_df.copy()
     closes = cast(pd.Series, df["Close"])
@@ -59,6 +78,17 @@ def compute_indicators(daily_df: pd.DataFrame) -> pd.DataFrame:
     # 전일까지의 20일 최고가 — 오늘 종가가 이를 넘으면 "신고가 돌파"
     df["high20_prev"] = df["High"].shift(1).rolling(20, min_periods=20).max()
     df["vol_prev"] = df["Volume"].shift(1)
+
+    bb_std20 = closes.rolling(20, min_periods=20).std()
+    df["bb_mid"] = df["ma20"]
+    df["bb_lower"] = df["ma20"] - 2.0 * bb_std20
+
+    df["atr14"] = _compute_atr(df, period=14)
+    # 전일까지의 10일 최저가 — Donchian 청산 채널(H). high20_prev와 동일하게
+    # "오늘"은 제외하고 계산해야 당일 청산 판정 시 미래참조가 안 생긴다.
+    df["low10_prev"] = df["Low"].shift(1).rolling(10, min_periods=10).min()
+    df["high_prev"] = df["High"].shift(1)
+    df["low_prev"] = df["Low"].shift(1)
     return df
 
 
@@ -129,6 +159,35 @@ def _cond_scenario2_entry(cur, prev, rsi_oversold: float = 30.0) -> bool:
     return float(prev["rsi14"]) < rsi_oversold and float(cur["rsi14"]) >= rsi_oversold
 
 
+def _cond_bb_rsi_volume(cur, prev) -> bool:
+    """F. 볼린저밴드+RSI+거래량 3중확인(평균회귀): 종가가 하단밴드(MA20-2σ) 이하
+    AND RSI(14)<30 AND 당일 거래량이 전일 대비 150% 이상(스파이크) — 상태 전이.
+    RSI 단독(SCENARIO2)보다 확인 조건을 늘려 노이즈를 줄이는 게 목적."""
+    def _state(row) -> bool:
+        vals = [row.get("bb_lower"), row.get("rsi14"), row.get("vol_prev")]
+        if any(pd.isna(v) for v in vals):
+            return False
+        if float(row["vol_prev"]) <= 0:
+            return False
+        below_band = float(row["Close"]) <= float(row["bb_lower"])
+        oversold = float(row["rsi14"]) < 30.0
+        vol_spike = float(row["Volume"]) >= 1.5 * float(row["vol_prev"])
+        return below_band and oversold and vol_spike
+    return _state(cur) and not _state(prev)
+
+
+def _cond_volatility_breakout(cur, prev, k: float = 0.5) -> bool:
+    """G. Larry Williams 변동성 돌파: 당일 종가가 (당일 시가 + k×전일 레인지
+    (전일고가-전일저가))를 상회하면 매수. 저변동성 뒤 변동성 확장을 노리는
+    로직이라 MA20돌파류와 달리 "하루짜리 이벤트"— 다른 조건들과 달리 상태
+    전이가 아니라 그날의 조건 자체를 그대로 판정(전날 상태 비교 불필요)."""
+    vals = [cur.get("Open"), prev.get("High"), prev.get("Low")]
+    if any(pd.isna(v) for v in vals):
+        return False
+    buy_price = float(cur["Open"]) + k * (float(prev["High"]) - float(prev["Low"]))
+    return float(cur["Close"]) >= buy_price
+
+
 # 수급 조건(E)은 flow_lookup이 필요해 별도 처리 — _replay_quant에서 직접 판정.
 
 ENTRY_CONDITIONS: dict[str, Callable] = {
@@ -136,6 +195,8 @@ ENTRY_CONDITIONS: dict[str, Callable] = {
     "B_ma_alignment":    _cond_ma_alignment,
     "C_rsi_macd_rebound": _cond_rsi_macd_rebound,
     "D_new_high20":      _cond_new_high20,
+    "F_bb_rsi_volume":   _cond_bb_rsi_volume,
+    "G_volatility_breakout": _cond_volatility_breakout,
     "SCENARIO1":         _cond_scenario1_entry,
     "SCENARIO2":         _cond_scenario2_entry,
 }
@@ -283,6 +344,191 @@ def replay_quant(
             tx_cost_rt, rsi_overbought,
         )
 
+        sig = SignalRecord(
+            ticker=ticker, name=name, signal_date=row_date,
+            close_at_signal=entry_price, mode="quant", market=market,
+        )
+        sig.sell_date = sell_date
+        sig.sell_reason = sell_reason
+        sig.sell_return = sell_return
+        sig.blended_return = sell_return
+        sig.hold_days = hold_days
+        signals.append(sig)
+
+    return signals
+
+
+# ── F. 볼린저밴드+RSI+거래량 전용 청산 (중심선 복귀/RSI50/진입캔들 저점 손절) ──
+# _scan_exit(하드% 손절/목표/MA20/RSI70)와는 다른 자기완결 청산 규칙이라 별도 스캐너로 분리.
+
+def _scan_exit_bb(
+    df: pd.DataFrame,
+    entry_idx: int,
+    entry_price: float,
+    signal_date: date,
+    tx_cost_rt: float,
+    rsi_exit: float = 50.0,
+) -> tuple[Optional[date], str, Optional[float], Optional[int]]:
+    """진입 다음날부터 스캔. 우선순위: 손절(진입캔들 저점) → 목표(중심선 복귀)
+    → RSI 과매도 탈출(RSI>50) → 기간 종료."""
+    entry_low = float(df.iloc[entry_idx]["Low"])
+
+    for j in range(entry_idx + 1, len(df)):
+        ts = df.index[j]
+        row_date = ts.date() if isinstance(ts, datetime) else cast(date, ts)
+        cur = df.iloc[j]
+        if pd.isna(cur["Close"]):
+            continue
+        close = float(cur["Close"])
+        is_last = (j == len(df) - 1)
+
+        def _ret(p: float) -> float:
+            return (p / entry_price - 1.0) - tx_cost_rt
+
+        if close <= entry_low:
+            return row_date, "손절(진입캔들저점)", _ret(close), (row_date - signal_date).days
+
+        if not pd.isna(cur.get("bb_mid")) and close >= float(cur["bb_mid"]):
+            return row_date, "목표(중심선복귀)", _ret(close), (row_date - signal_date).days
+
+        if not pd.isna(cur.get("rsi14")) and float(cur["rsi14"]) > rsi_exit:
+            return row_date, f"RSI{rsi_exit:.0f} 탈출", _ret(close), (row_date - signal_date).days
+
+        if is_last:
+            return row_date, "보유 중 (기간 종료)", _ret(close), (row_date - signal_date).days
+
+    return None, "보유 중", None, None
+
+
+def replay_quant_bb_exit(
+    ticker: str,
+    name: str,
+    daily_df: pd.DataFrame,
+    market: str,
+    start: date,
+    end: date,
+    tx_cost_rt: float = TX_COST_DEFAULT,
+    rsi_exit: float = 50.0,
+) -> list[SignalRecord]:
+    """F(볼린저+RSI+거래량 3중확인) 진입 + 전용 청산(_scan_exit_bb) 재현.
+
+    replay_quant의 표준 청산(hard_stop_pct/target_pct 고정%)과 달리 진입캔들
+    저점 손절·중심선 복귀 익절이라는 서로 다른 로직이라 별도 함수로 분리했다
+    — replay_quant 시그니처를 건드리지 않기 위함(기존 A-E/SCENARIO1-2 호출부 무변경)."""
+    df = compute_indicators(daily_df)
+    signals: list[SignalRecord] = []
+    min_start = 121
+
+    for i in range(min_start, len(df)):
+        ts = df.index[i]
+        row_date = ts.date() if isinstance(ts, datetime) else cast(date, ts)
+        if row_date < start or row_date > end:
+            continue
+        cur, prev = df.iloc[i], df.iloc[i - 1]
+        if pd.isna(cur["Close"]):
+            continue
+        if not _cond_bb_rsi_volume(cur, prev):
+            continue
+
+        entry_price = float(cur["Close"])
+        if entry_price <= 0:
+            continue
+
+        sell_date, sell_reason, sell_return, hold_days = _scan_exit_bb(
+            df, i, entry_price, row_date, tx_cost_rt, rsi_exit,
+        )
+        sig = SignalRecord(
+            ticker=ticker, name=name, signal_date=row_date,
+            close_at_signal=entry_price, mode="quant", market=market,
+        )
+        sig.sell_date = sell_date
+        sig.sell_reason = sell_reason
+        sig.sell_return = sell_return
+        sig.blended_return = sell_return
+        sig.hold_days = hold_days
+        signals.append(sig)
+
+    return signals
+
+
+# ── H. Donchian 20일 신고가 진입 + ATR 기반 청산(2×ATR 손절/10일저가 이탈) ──
+# 진입은 D_new_high20을 그대로 재사용 — 손절·사이징 로직만 바꿔서 D의 성과가
+# 개선되는지 분리 측정하는 게 목적("D는 이미 있지만 ATR 손절 없이 단순 진입만
+# 측정됐다"는 관찰에서 착안).
+
+def _scan_exit_donchian_atr(
+    df: pd.DataFrame,
+    entry_idx: int,
+    entry_price: float,
+    signal_date: date,
+    atr_stop_mult: float,
+    tx_cost_rt: float,
+) -> tuple[Optional[date], str, Optional[float], Optional[int]]:
+    """우선순위: 손절(진입가 - atr_stop_mult×ATR14) → Donchian 10일저가 이탈 → 기간 종료.
+    ATR을 못 구하면(워밍업 부족) 손절 없이 채널 이탈/기간종료만 판정."""
+    entry_atr = df.iloc[entry_idx].get("atr14")
+    stop_price = (
+        entry_price - atr_stop_mult * float(entry_atr)
+        if entry_atr is not None and not pd.isna(entry_atr) else None
+    )
+
+    for j in range(entry_idx + 1, len(df)):
+        ts = df.index[j]
+        row_date = ts.date() if isinstance(ts, datetime) else cast(date, ts)
+        cur = df.iloc[j]
+        if pd.isna(cur["Close"]):
+            continue
+        close = float(cur["Close"])
+        is_last = (j == len(df) - 1)
+
+        def _ret(p: float) -> float:
+            return (p / entry_price - 1.0) - tx_cost_rt
+
+        if stop_price is not None and close <= stop_price:
+            return row_date, f"손절(ATR×{atr_stop_mult:.0f})", _ret(close), (row_date - signal_date).days
+
+        if not pd.isna(cur.get("low10_prev")) and close < float(cur["low10_prev"]):
+            return row_date, "Donchian10 이탈", _ret(close), (row_date - signal_date).days
+
+        if is_last:
+            return row_date, "보유 중 (기간 종료)", _ret(close), (row_date - signal_date).days
+
+    return None, "보유 중", None, None
+
+
+def replay_quant_donchian_atr(
+    ticker: str,
+    name: str,
+    daily_df: pd.DataFrame,
+    market: str,
+    start: date,
+    end: date,
+    atr_stop_mult: float = 2.0,
+    tx_cost_rt: float = TX_COST_DEFAULT,
+) -> list[SignalRecord]:
+    """D_new_high20 진입 + ATR/Donchian10 청산(_scan_exit_donchian_atr) 재현."""
+    df = compute_indicators(daily_df)
+    signals: list[SignalRecord] = []
+    min_start = 121
+
+    for i in range(min_start, len(df)):
+        ts = df.index[i]
+        row_date = ts.date() if isinstance(ts, datetime) else cast(date, ts)
+        if row_date < start or row_date > end:
+            continue
+        cur, prev = df.iloc[i], df.iloc[i - 1]
+        if pd.isna(cur["Close"]):
+            continue
+        if not _cond_new_high20(cur, prev):
+            continue
+
+        entry_price = float(cur["Close"])
+        if entry_price <= 0:
+            continue
+
+        sell_date, sell_reason, sell_return, hold_days = _scan_exit_donchian_atr(
+            df, i, entry_price, row_date, atr_stop_mult, tx_cost_rt,
+        )
         sig = SignalRecord(
             ticker=ticker, name=name, signal_date=row_date,
             close_at_signal=entry_price, mode="quant", market=market,
