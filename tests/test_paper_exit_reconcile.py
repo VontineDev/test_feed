@@ -115,13 +115,42 @@ async def test_partially_sold_updates_qty_keeps_open():
 
 
 @pytest.mark.asyncio
-async def test_broker_qty_higher_than_db_is_skipped():
-    """브로커 보유가 DB보다 많은 경우(원인불명)는 건드리지 않는다."""
+async def test_broker_qty_higher_than_db_updates_qty_and_avg_price():
+    """브로커 보유가 DB보다 많으면(매수 잔량 추가체결) 평균단가 기준으로
+    qty/entry_actual을 정정하고 open을 유지한다 (2026-08-13)."""
     from jobs.paper_jobs import _reconcile_stale_positions
 
     pool, conn = _make_pool()
     trader = MagicMock()
     trader.get_position_qty.return_value = 150  # DB(100)보다 많음
+    trader.get_position_avg_price.return_value = 34200
+    positions = [_pos(1, "005930.KS", 100)]
+
+    mock_update_closed = AsyncMock()
+    with (
+        patch("jobs.paper_jobs.get_open_positions", AsyncMock(return_value=positions)),
+        patch("jobs.paper_jobs.update_to_closed", mock_update_closed),
+    ):
+        n = await _reconcile_stale_positions(pool, trader)
+
+    assert n == 1
+    mock_update_closed.assert_not_called()  # 여전히 open
+    conn.execute.assert_called_once()
+    sql, qty_arg, price_arg, id_arg = conn.execute.call_args[0]
+    assert qty_arg == 150
+    assert price_arg == 34200.0
+    assert id_arg == 1
+
+
+@pytest.mark.asyncio
+async def test_broker_qty_higher_than_db_skipped_when_avg_price_unavailable():
+    """평균단가 조회가 실패하면(0/None) 정정하지 않고 다음 실행에 재시도한다."""
+    from jobs.paper_jobs import _reconcile_stale_positions
+
+    pool, conn = _make_pool()
+    trader = MagicMock()
+    trader.get_position_qty.return_value = 150  # DB(100)보다 많음
+    trader.get_position_avg_price.return_value = None
     positions = [_pos(1, "005930.KS", 100)]
 
     mock_update_closed = AsyncMock()

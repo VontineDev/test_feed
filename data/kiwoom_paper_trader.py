@@ -251,6 +251,22 @@ class KiwoomPaperTrader:
                 return p["rmnd_qty"]
         return 0
 
+    def get_position_avg_price(self, ticker: str) -> Optional[int]:
+        """get_positions()에서 특정 티커의 평균매입단가(pur_pric) 조회 (없거나 0이면 None).
+
+        2026-08-13 도입: 매수 주문이 confirm_fill()의 짧은 폴링 창 안에서는
+        부분체결로만 확인되고 남은 잔량이 이후(같은 날 또는 다음 실행 전까지)
+        마저 체결되는 경우, 브로커 실보유가 DB보다 커진다. 이때 qty를 브로커
+        기준으로 올려 잡으면서 entry_actual도 다시 맞춰야 하는데, 직접 체결가를
+        추적하는 대신 kt00018이 이미 계산해 주는 계좌 평균단가를 그대로 쓴다
+        (_reconcile_stale_positions()의 매수 잔량 재조정용).
+        """
+        stk_cd = _to_6digit(ticker)
+        for p in self.get_positions():
+            if p["stk_cd"] == stk_cd:
+                return p["pur_pric"] or None
+        return None
+
     def confirm_fill(
         self, ticker: str, ord_no: str, qty: int, is_buy: bool, qty_before: int,
         attempts: int = 5, delay_s: float = 3.0,
@@ -568,6 +584,26 @@ async def get_open_slot_count(pool, model: str) -> int:
             model,
         )
     return row["count"]
+
+
+async def get_open_or_pending_tickers(pool, model: str) -> set[str]:
+    """model이 이미 open/pending으로 보유 중인 티커 집합.
+
+    2026-08-13 도입: paper_eod_sampler_job이 슬롯 수(get_open_slot_count)만 보고
+    당일 신호를 무작위 샘플링해 pending을 삽입하다 보니, 같은 모델이 이미
+    보유 중인 티커에 신호가 다시 뜨면 별도의 새 포지션이 또 열렸다(241710.KQ
+    사례: kosdaq/cross 모델이 이틀 연속 신호를 받아 각각 2개씩, 총 4개 포지션
+    동시보유). 같은 티커를 여러 모델(과 같은 모델 내 여러 포지션)이 동시보유하면
+    브로커 잔고가 모델별로 분리되지 않아 _reconcile_stale_positions()가 자동
+    보정을 포기하고 스킵하므로, 애초에 샘플링 단계에서 이미 보유 중인 티커를
+    후보에서 제외해 재발을 막는다.
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT DISTINCT ticker FROM paper_positions WHERE model=$1 AND status IN ('open','pending')",
+            model,
+        )
+    return {r["ticker"] for r in rows}
 
 
 # ── 빠른 동작 테스트 ─────────────────────────────────────────────────────────
