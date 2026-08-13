@@ -192,19 +192,61 @@ async def test_same_ticker_multiple_models_skipped():
 
 
 @pytest.mark.asyncio
-async def test_zero_recorded_qty_skipped():
-    """DB qty가 0/None이면 재조정 대상이 아님(비교 자체가 무의미)."""
+async def test_zero_recorded_qty_still_zero_confirms_never_filled():
+    """DB qty=0(매수 체결 미확인 보류 상태)에서 브로커도 여전히 0이면 —
+    재확인 결과 진짜 미체결 확정, closed 처리한다 (2026-08-13, 003010.KS 등
+    유령 보유 재발 원인 수정)."""
     from jobs.paper_jobs import _reconcile_stale_positions
 
     pool, _conn = _make_pool()
     trader = MagicMock()
-    positions = [_pos(1, "005930.KS", 0)]
+    trader.get_position_qty.return_value = 0
+    # 실제 흐름에서 update_to_open()은 qty=0이어도 entry_actual을 시가로 채운다
+    # (jobs/paper_jobs.py paper_open_entry_job의 미확인 보류 분기 참고).
+    positions = [_pos(1, "005930.KS", 0, entry_actual=1000.0, entry_theory=1000.0)]
 
-    with patch("jobs.paper_jobs.get_open_positions", AsyncMock(return_value=positions)):
+    mock_update_closed = AsyncMock()
+    with (
+        patch("jobs.paper_jobs.get_open_positions", AsyncMock(return_value=positions)),
+        patch("jobs.paper_jobs.update_to_closed", mock_update_closed),
+    ):
         n = await _reconcile_stale_positions(pool, trader)
 
-    assert n == 0
-    trader.get_position_qty.assert_not_called()
+    assert n == 1
+    mock_update_closed.assert_called_once()
+    call_args = mock_update_closed.call_args[0]
+    assert call_args[1] == 1                  # pos_id
+    assert call_args[2] == 1000.0              # exit_price = entry_actual(시가)
+    assert call_args[3] == "buy_never_filled"
+    assert call_args[5] is None                # blended_return — 실거래 없었으므로 통계 제외
+
+
+@pytest.mark.asyncio
+async def test_zero_recorded_qty_late_fill_uses_avg_price_catchup():
+    """DB qty=0인데 브로커에 실제로 체결된 게 있으면(뒤늦은 체결) — 매수
+    잔량 추가체결과 동일한 브로커 평균단가 재조정 경로를 그대로 탄다."""
+    from jobs.paper_jobs import _reconcile_stale_positions
+
+    pool, conn = _make_pool()
+    trader = MagicMock()
+    trader.get_position_qty.return_value = 80
+    trader.get_position_avg_price.return_value = 15000
+    positions = [_pos(1, "005930.KS", 0)]
+
+    mock_update_closed = AsyncMock()
+    with (
+        patch("jobs.paper_jobs.get_open_positions", AsyncMock(return_value=positions)),
+        patch("jobs.paper_jobs.update_to_closed", mock_update_closed),
+    ):
+        n = await _reconcile_stale_positions(pool, trader)
+
+    assert n == 1
+    mock_update_closed.assert_not_called()  # open 유지 — 체결된 매수로 확정
+    conn.execute.assert_called_once()
+    sql, qty_arg, price_arg, id_arg = conn.execute.call_args[0]
+    assert qty_arg == 80
+    assert price_arg == 15000.0
+    assert id_arg == 1
 
 
 @pytest.mark.asyncio
