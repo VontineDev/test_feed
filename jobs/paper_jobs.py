@@ -73,12 +73,31 @@ async def _reconcile_stale_positions(db_pool, paper_trader) -> int:
 
         _pos = _positions[0]
         _recorded_qty = _pos["qty"] or 0
-        if _recorded_qty <= 0:
+        if _recorded_qty < 0:
             continue
 
         _actual_qty = await _loop.run_in_executor(None, paper_trader.get_position_qty, _ticker)
-        if _actual_qty == _recorded_qty:
+
+        if _recorded_qty == 0:
+            # 2026-08-13 도입: paper_open_entry_job이 매수 체결 미확인 시 즉시
+            # closed 대신 open(qty=0)으로 보류해두는 대상 — 여기서 브로커 실보유
+            # 기준으로 최종 판정한다. actual>0이면 아래 "매수 잔량 추가체결"
+            # 분기가 그대로 처리하므로(actual>recorded=0), 여기서는 정말로
+            # 여전히 0인(최소 하루 경과 후 재확인한) 진짜 미체결 확정만 처리한다.
+            if _actual_qty == 0:
+                try:
+                    _entry_ref = _pos["entry_actual"] or _pos["entry_theory"] or 0.0
+                    await update_to_closed(db_pool, _pos["id"], float(_entry_ref),
+                                            "buy_never_filled", "", None)
+                    logger.info("[paper-exit] %s 매수 미체결 최종 확정(재조정 재확인) → closed 처리",
+                                _ticker)
+                    _n_fixed += 1
+                except Exception as _e:
+                    logger.warning("[paper-exit] %s 미체결 확정 DB 업데이트 실패: %s", _ticker, _e)
+                continue
+        elif _actual_qty == _recorded_qty:
             continue
+
         if _actual_qty > _recorded_qty:
             # 2026-08-13 발견: 매수 주문이 confirm_fill()의 짧은 폴링 창 안에서는
             # 부분체결로만 확인되고, DB엔 그 수량으로 확정 기록된 뒤 주문이
@@ -507,28 +526,31 @@ async def paper_open_entry_job(db_pool, paper_trader) -> None:
         )
 
         if _filled <= 0:
-            logger.warning("[paper-entry] %s 매수 미체결 (주문번호=%s) — closed 처리",
-                            _ticker, _ord_no)
+            # 2026-08-13 발견(003010.KS 등): confirm_fill()의 폴링창(5회×3초)이 이
+            # 모의투자 서버의 실제 체결 지연(수 분~10분+)보다 훨씬 짧은 건 매도쪽과
+            # 동일 — 그런데 매수쪽은 여기서 즉시 buy_never_filled로 영구 종결시켜서
+            # 나중에 실제로 체결됐다는 게 밝혀져도 브로커 실보유와 대조할 열린 행이
+            # DB에 아예 없어져(status='closed') 유령 보유가 반복 재발했다(과거 20건과
+            # 동일 근본 원인). 매도쪽처럼 즉시 확정 대신 open(qty=0)으로 보류 — 다음
+            # exit-checker의 _reconcile_stale_positions()가 브로커 실보유 기준으로
+            # 최종 판정한다(qty=0 그대로면 진짜 미체결 확정 closed, qty>0 확인되면
+            # 평균단가로 open 채움).
+            logger.warning("[paper-entry] %s 매수 체결 미확인 (주문번호=%s) — open(qty=0)로 보류, "
+                            "다음 실행 재조정에서 최종 판정", _ticker, _ord_no)
             try:
-                # exit_price에 0.0을 넣으면 실제로는 체결됐는데 confirm_fill()
-                # 오탐(예: 2026-08-05~10 종목코드 접두사 버그)으로 미체결 처리된
-                # 경우, 나중에 브로커 실보유와 대조해도 시도가를 복구할 방법이
-                # 없어진다 — 최소한 실제 주문에 쓴 시가(_open_px)는 남겨둔다
-                # (2026-08-10 investigate 세션에서 발견: 유령 보유 20건 중 상당수가
-                # entry_theory=0.0인 compose 모델이라 이 가격마저 없으면 완전 유실).
-                await update_to_closed(db_pool, _pos_id, float(_open_px), "buy_never_filled", _ord_no)
+                await update_to_open(db_pool, _pos_id, float(_open_px), 0, _ord_no)
             except Exception as _e:
                 logger.warning("[paper-entry] %s DB 업데이트 실패: %s", _ticker, _e)
             try:
                 async with httpx.AsyncClient() as _http:
                     await _post_message(
                         _http, _get_token(), _get_chat_id(),
-                        f"⚠️ 매수 미체결 — {_ticker} ({_model}) 주문번호={_ord_no}, "
-                        f"청산(buy_never_filled) 처리",
+                        f"⚠️ 매수 체결 미확인 — {_ticker} ({_model}) 주문번호={_ord_no}, "
+                        f"다음 실행 재조정에서 최종 판정 (open qty=0 보류)",
                         label="paper-entry", parse_mode=None,
                     )
             except Exception as _e:
-                logger.warning("[paper-entry] %s 미체결 알림 전송 실패: %s", _ticker, _e)
+                logger.warning("[paper-entry] %s 미확인 알림 전송 실패: %s", _ticker, _e)
             continue
 
         if _filled < _qty:
