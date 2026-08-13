@@ -251,6 +251,22 @@ class KiwoomPaperTrader:
                 return p["rmnd_qty"]
         return 0
 
+    def get_position_avg_price(self, ticker: str) -> Optional[int]:
+        """get_positions()에서 특정 티커의 평균매입단가(pur_pric) 조회 (없거나 0이면 None).
+
+        2026-08-13 도입: 매수 주문이 confirm_fill()의 짧은 폴링 창 안에서는
+        부분체결로만 확인되고 남은 잔량이 이후(같은 날 또는 다음 실행 전까지)
+        마저 체결되는 경우, 브로커 실보유가 DB보다 커진다. 이때 qty를 브로커
+        기준으로 올려 잡으면서 entry_actual도 다시 맞춰야 하는데, 직접 체결가를
+        추적하는 대신 kt00018이 이미 계산해 주는 계좌 평균단가를 그대로 쓴다
+        (_reconcile_stale_positions()의 매수 잔량 재조정용).
+        """
+        stk_cd = _to_6digit(ticker)
+        for p in self.get_positions():
+            if p["stk_cd"] == stk_cd:
+                return p["pur_pric"] or None
+        return None
+
     def confirm_fill(
         self, ticker: str, ord_no: str, qty: int, is_buy: bool, qty_before: int,
         attempts: int = 5, delay_s: float = 3.0,

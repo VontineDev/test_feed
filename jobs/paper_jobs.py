@@ -79,8 +79,34 @@ async def _reconcile_stale_positions(db_pool, paper_trader) -> int:
         if _actual_qty == _recorded_qty:
             continue
         if _actual_qty > _recorded_qty:
-            logger.warning("[paper-exit] %s 브로커 보유(%d)가 DB(%d)보다 많음 — 원인불명, 스킵",
-                           _ticker, _actual_qty, _recorded_qty)
+            # 2026-08-13 발견: 매수 주문이 confirm_fill()의 짧은 폴링 창 안에서는
+            # 부분체결로만 확인되고, DB엔 그 수량으로 확정 기록된 뒤 주문이
+            # 재확인 없이 방치된다. 남은 잔량이 이후 마저 체결되면 브로커
+            # 실보유가 DB보다 커지는데, 이 케이스도 매도 쪽과 동일한 근본
+            # 원인(체결 지연 vs 짧은 폴링)이므로 브로커 평균단가(pur_pric)
+            # 기준으로 qty/entry_actual을 self-heal한다.
+            _avg_price = await _loop.run_in_executor(
+                None, paper_trader.get_position_avg_price, _ticker
+            )
+            if not _avg_price:
+                logger.warning(
+                    "[paper-exit] %s 브로커 보유(%d)가 DB(%d)보다 많음 — 평균단가 조회 실패, 스킵",
+                    _ticker, _actual_qty, _recorded_qty,
+                )
+                continue
+            try:
+                async with db_pool.acquire() as _conn:
+                    await _conn.execute(
+                        "UPDATE paper_positions SET qty=$1, entry_actual=$2 WHERE id=$3",
+                        _actual_qty, float(_avg_price), _pos["id"],
+                    )
+                logger.info(
+                    "[paper-exit] %s 매수 잔량 추가체결 재조정 → qty %d→%d, entry_actual=%s (open 유지)",
+                    _ticker, _recorded_qty, _actual_qty, _avg_price,
+                )
+                _n_fixed += 1
+            except Exception as _e:
+                logger.warning("[paper-exit] %s 매수 잔량 재조정 DB 업데이트 실패: %s", _ticker, _e)
             continue
 
         # _actual_qty < _recorded_qty: 직전 실행에서 미확인 처리된 매도가 실제로는
