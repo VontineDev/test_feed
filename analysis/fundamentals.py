@@ -58,7 +58,9 @@ def load_fundamentals_raw(dsn: str, bsns_year: Optional[str] = None) -> pd.DataF
     """dart_fundamentals에서 (연도 지정 시 해당 연도, 아니면 종목별 최신) 원장 로드.
 
     반환 컬럼: stock_code, bsns_year, revenue, revenue_prev, net_income,
-    equity, liabilities, assets.
+    equity, liabilities, assets, cogs, gross_profit, operating_cash_flow, capex
+    (뒤 4개는 2026-08-11 QVM 퀄리티 팩터용 추가 — 커버리지가 5개 핵심 계정보다
+    낮을 수 있음, DART 계정명 별칭 미포함분은 NULL).
     """
     import psycopg2
 
@@ -69,7 +71,8 @@ def load_fundamentals_raw(dsn: str, bsns_year: Optional[str] = None) -> pd.DataF
                 cur.execute(
                     """
                     SELECT stock_code, bsns_year, revenue, revenue_prev,
-                           net_income, equity, liabilities, assets
+                           net_income, equity, liabilities, assets,
+                           cogs, gross_profit, operating_cash_flow, capex
                     FROM dart_fundamentals
                     WHERE bsns_year = %s
                     """,
@@ -80,17 +83,62 @@ def load_fundamentals_raw(dsn: str, bsns_year: Optional[str] = None) -> pd.DataF
                     """
                     SELECT DISTINCT ON (stock_code)
                            stock_code, bsns_year, revenue, revenue_prev,
-                           net_income, equity, liabilities, assets
+                           net_income, equity, liabilities, assets,
+                           cogs, gross_profit, operating_cash_flow, capex
                     FROM dart_fundamentals
                     ORDER BY stock_code, bsns_year DESC
                     """
                 )
             rows = cur.fetchall()
             cols = ["stock_code", "bsns_year", "revenue", "revenue_prev",
-                    "net_income", "equity", "liabilities", "assets"]
+                    "net_income", "equity", "liabilities", "assets",
+                    "cogs", "gross_profit", "operating_cash_flow", "capex"]
     finally:
         conn.close()
     return pd.DataFrame(rows, columns=pd.Index(cols))
+
+
+def load_momentum(dsn: str, lookback_3m: int = 63, lookback_6m: int = 126) -> pd.DataFrame:
+    """daily_ohlcv에서 종목별 최신 종가 기준 3개월/6개월 모멘텀(수익률) 계산.
+
+    거래일 기준 N일 전 종가 대비 최신 종가의 수익률 — screen()과 동일하게
+    "현재 시점" 스냅샷이다(과거 특정 시점 기준 point-in-time 아님, fundamentals.py
+    모듈 docstring의 lookahead 주의사항과 동일 전제).
+
+    반환 컬럼: ticker(yfinance_symbol), mom_3m, mom_6m.
+    """
+    import psycopg2
+
+    conn = psycopg2.connect(dsn)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH ranked AS (
+                    SELECT symbol, close,
+                           LAG(close, %s) OVER (PARTITION BY symbol ORDER BY date) AS close_3m_ago,
+                           LAG(close, %s) OVER (PARTITION BY symbol ORDER BY date) AS close_6m_ago,
+                           ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
+                    FROM daily_ohlcv
+                    WHERE market = 'KR'
+                )
+                SELECT symbol, close, close_3m_ago, close_6m_ago
+                FROM ranked WHERE rn = 1
+                """,
+                (lookback_3m, lookback_6m),
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    out = []
+    for symbol, close, close_3m_ago, close_6m_ago in rows:
+        if close is None:
+            continue
+        mom_3m = (float(close) / float(close_3m_ago) - 1.0) if close_3m_ago else None
+        mom_6m = (float(close) / float(close_6m_ago) - 1.0) if close_6m_ago else None
+        out.append({"ticker": symbol, "mom_3m": mom_3m, "mom_6m": mom_6m})
+    return pd.DataFrame(out)
 
 
 def load_market_cap(dsn: str) -> pd.DataFrame:
@@ -139,6 +187,10 @@ def compute_ratio_columns(merged: pd.DataFrame) -> pd.DataFrame:
     프레임에 pbr/per/roe/debt_ratio/revenue_growth 컬럼을 계산해 붙인다 (순수 함수 —
     DB 의존 compute_ratios()에서 분리해 유닛테스트 가능하게 함).
 
+    2026-08-11: cogs/gross_profit/operating_cash_flow/capex 컬럼이 있으면(QVM 팩터용)
+    gross_margin/fcf_to_debt/accrual_ratio도 함께 계산 — 없으면(구버전 프레임 호환)
+    NaN으로 채운다.
+
     분모가 0/None이면 결과는 NaN(계산 불가로 취급, screen()에서 자동 제외됨).
     """
     df = merged.copy()
@@ -149,26 +201,113 @@ def compute_ratio_columns(merged: pd.DataFrame) -> pd.DataFrame:
     df["roe"] = _safe_div(cast(pd.Series, df["net_income"]), cast(pd.Series, df["equity"]))
     df["debt_ratio"] = _safe_div(cast(pd.Series, df["liabilities"]), cast(pd.Series, df["equity"]))
     df["revenue_growth"] = _safe_div(revenue - revenue_prev, cast(pd.Series, revenue_prev.abs()))
-    return cast(pd.DataFrame, df[["ticker", "stock_code", "market_cap", "pbr", "per", "roe",
-                                  "debt_ratio", "revenue_growth"]])
+
+    cols = ["ticker", "stock_code", "market_cap", "pbr", "per", "roe",
+            "debt_ratio", "revenue_growth"]
+    if "gross_profit" in df.columns:
+        # 매출총이익률 — 높을수록 고품질(가격결정력 있는 사업)
+        df["gross_margin"] = _safe_div(cast(pd.Series, df["gross_profit"]), revenue)
+        # FCF/부채 — capex는 CF표에서 보통 음수(유출)라 부호를 되돌려 차감
+        # (extract_fundamentals에서 이미 절댓값 합으로 저장했으므로 그대로 차감).
+        fcf = cast(pd.Series, df["operating_cash_flow"]) - cast(pd.Series, df["capex"])
+        df["fcf_to_debt"] = _safe_div(fcf, cast(pd.Series, df["liabilities"]))
+        # 발생액비율(accrual ratio) — (순이익-영업현금흐름)/자산. 낮을수록(이익이
+        # 실제 현금흐름과 가까울수록) 이익의 질이 높다고 해석(회계상 발생액 남용 적음).
+        df["accrual_ratio"] = _safe_div(
+            cast(pd.Series, df["net_income"]) - cast(pd.Series, df["operating_cash_flow"]),
+            cast(pd.Series, df["assets"]),
+        )
+        cols += ["gross_margin", "fcf_to_debt", "accrual_ratio"]
+    return cast(pd.DataFrame, df[cols])
 
 
 def compute_ratios(dsn: str, bsns_year: Optional[str] = None) -> pd.DataFrame:
-    """재무 원장 + 시가총액을 합쳐 PBR/PER/ROE/부채비율/매출증가율 계산.
+    """재무 원장 + 시가총액을 합쳐 PBR/PER/ROE/부채비율/매출증가율(+QVM 퀄리티
+    팩터: gross_margin/fcf_to_debt/accrual_ratio) 계산.
 
     반환 컬럼: ticker, stock_code, market_cap, pbr, per, roe, debt_ratio,
-    revenue_growth (계산 불가 항목은 NaN — 분모 0/None/음수인 경우 포함).
+    revenue_growth, gross_margin, fcf_to_debt, accrual_ratio (계산 불가 항목은
+    NaN — 분모 0/None/음수인 경우 포함).
     """
     fund = load_fundamentals_raw(dsn, bsns_year)
     mcap = load_market_cap(dsn)
     if fund.empty or mcap.empty:
         return pd.DataFrame(columns=pd.Index([
             "ticker", "stock_code", "market_cap", "pbr", "per", "roe",
-            "debt_ratio", "revenue_growth",
+            "debt_ratio", "revenue_growth", "gross_margin", "fcf_to_debt", "accrual_ratio",
         ]))
 
     merged = mcap.merge(fund, on="stock_code", how="inner")
     return compute_ratio_columns(merged)
+
+
+# ── QVM(퀄리티+밸류+모멘텀) 복합 팩터 랭킹 (2026-08-11, 방법론4) ──────────
+# AND 필터가 아니라 팩터별 백분위 순위를 합산하는 방식 — 6단계 결론("필터를
+# 더 결합한다고 좋아지는 게 아니라 어떤 단일 팩터냐가 중요")과 달리, 개별
+# 팩터를 AND로 좁히지 않고 종합 점수로 순위만 매겨 상위 N%를 취하는 게 핵심
+# 차이. quant-investing.com의 QVM 전략(품질 하위 제거→밸류 상위20%→모멘텀
+# 상위50%) 리서치에서 착안했으나, 여기서는 순차 필터 대신 랭킹 합산으로 구현
+# (표본이 이미 좁은 한국 시장에서 순차 AND 필터를 쓰면 6단계처럼 유니버스가
+# 급격히 줄어들 위험이 커서).
+
+def _percentile_rank(s: pd.Series, ascending: bool = True) -> pd.Series:
+    """0~1 백분위 순위. ascending=True면 값이 클수록 순위(점수)도 높음.
+    NaN은 순위 계산에서 제외되고 결과도 NaN으로 유지된다(=팩터 결측 종목은
+    합산에서 0으로 취급되지 않고 별도 처리 — compute_qvm_score 참고)."""
+    return cast(pd.Series, s.rank(pct=True, ascending=ascending))
+
+
+QVM_FACTORS = ("quality", "value", "momentum")
+
+
+def compute_qvm_score(
+    ratios_df: pd.DataFrame,
+    momentum_df: pd.DataFrame,
+    factors: tuple[str, ...] = QVM_FACTORS,
+) -> pd.DataFrame:
+    """퀄리티(gross_margin/fcf_to_debt/-accrual_ratio 평균) + 밸류(-PER) +
+    모멘텀(6개월 수익률) 3개 팩터를 각각 백분위 순위로 변환해 동일가중 합산.
+
+    2026-08-12: factors로 부분집합을 지정하면 그 팩터들만 동일가중 합산
+    (기본은 3개 전부 — QVM_FACTORS). 방법론4 팩터 분해 실험용 —
+    6단계에서 "필터를 더 결합한다고 좋아지는 게 아니라 어떤 단일 팩터냐가
+    중요"했던 것처럼, QVM 3팩터 중 실제로 엣지를 만드는 게 무엇인지(단일/
+    2개조합/전체) 비교하기 위함.
+
+    3개 팩터 그룹 중 하나라도(선택된 것 중) 전부 결측이면 그 종목은 제외
+    (합산 왜곡 방지). 반환: ratios_df + mom_3m/mom_6m + quality_score/
+    value_score/momentum_score(계산 안 한 팩터는 NaN)/qvm_score 컬럼,
+    qvm_score 내림차순 정렬.
+    """
+    unknown = set(factors) - set(QVM_FACTORS)
+    if unknown:
+        raise ValueError(f"알 수 없는 팩터: {unknown} (가능: {QVM_FACTORS})")
+    if not factors:
+        raise ValueError("factors는 최소 1개 이상이어야 합니다")
+
+    df = ratios_df.merge(momentum_df, on="ticker", how="inner")
+
+    q_parts = pd.concat([
+        _percentile_rank(cast(pd.Series, df["gross_margin"])),
+        _percentile_rank(cast(pd.Series, df["fcf_to_debt"])),
+        _percentile_rank(cast(pd.Series, df["accrual_ratio"]), ascending=False),
+    ], axis=1)
+    df["quality_score"] = q_parts.mean(axis=1, skipna=True)
+    df["value_score"] = _percentile_rank(cast(pd.Series, df["per"]), ascending=False)
+    df["momentum_score"] = _percentile_rank(cast(pd.Series, df["mom_6m"]))
+
+    score_cols = [f"{f}_score" for f in factors]
+    df = df.dropna(subset=score_cols)
+    df["qvm_score"] = df[score_cols].mean(axis=1)
+    return cast(pd.DataFrame, df.sort_values("qvm_score", ascending=False).reset_index(drop=True))
+
+
+def screen_qvm_top_pct(qvm_df: pd.DataFrame, top_pct: float = 0.20) -> set[str]:
+    """qvm_score 상위 top_pct(기본 20%) 종목의 ticker 집합 반환."""
+    if qvm_df.empty:
+        return set()
+    cutoff = max(1, int(len(qvm_df) * top_pct))
+    return set(qvm_df.head(cutoff)["ticker"])
 
 
 def screen(df: pd.DataFrame, th: Optional[RatioThresholds] = None) -> set[str]:

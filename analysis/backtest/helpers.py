@@ -137,6 +137,31 @@ def _compute_portfolio_returns_from_intervals(
     return period_returns
 
 
+def _compute_signal_interval_mdd(
+    signals: list[SignalRecord], period_days: int = 7
+) -> Optional[float]:
+    """가변 보유기간 신호(진입~매도 구간)의 MDD.
+
+    2026-08-11: quant_signals.py류(analysis/backtest/quant_signals.py의
+    replay_quant/replay_quant_bb_exit/replay_quant_donchian_atr)가 만드는
+    신호는 compose 신호와 달리 return_28d 같은 고정기간 필드를 채우지 않고
+    signal_date/sell_date/blended_return(실현수익률)만 채운다 —
+    _compute_group_metrics의 m.mdd는 return_28d 기반이라 이 신호들에는
+    항상 None이 나온다("MDD 미계산" 이슈, project_technicalquant_backtest
+    메모리 참고). signal_date~sell_date 구간을 그대로 _compute_portfolio_
+    returns_from_intervals에 넘겨 겹치는 보유기간을 반영한 MDD를 별도 계산한다.
+    """
+    intervals = [
+        (s.signal_date, s.sell_date, s.blended_return)
+        for s in signals
+        if s.sell_date is not None and s.blended_return is not None
+    ]
+    if not intervals:
+        return None
+    portfolio_returns = _compute_portfolio_returns_from_intervals(intervals, period_days)
+    return _compute_mdd(portfolio_returns)
+
+
 def _compute_portfolio_returns(
     signals: list[SignalRecord],
     hold_days: int = 28,

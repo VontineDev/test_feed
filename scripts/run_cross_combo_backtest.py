@@ -76,6 +76,10 @@ logger = logging.getLogger(__name__)
 
 COMPOSE_ENTRY_STRATEGIES = ["FUNNEL-1", "SCORE-1", "AND-1"]
 QUANT_ENTRY_UNIVERSES = ["SCENARIO2_PER18", "SCENARIO2_PBR"]
+# 2026-08-12: 방법론4(QVM) 팩터분해에서 momentum 단독(top20%)이 3팩터 조합보다도
+# 우수(승률64.1%/평균+11.4%/MDD-12.6%, RSI30/70/-7% 원안청산 기준)했음이 확인돼
+# 추가 — 여기서도 진입만 재사용하고 compose의 검증된 분할청산으로 교체해본다.
+QVM_ENTRY_UNIVERSES = ["QVM_TOP20", "MOMENTUM_TOP20"]
 
 # quant_signals._scan_exit()에 그대로 넘기는 파라미터 (자기완결 RSI/MA20/목표가 청산)
 QUANT_EXIT_VARIANTS: dict[str, dict] = {
@@ -103,7 +107,7 @@ def _build_combo_matrix() -> list[tuple[str, str, str]]:
     for strat in COMPOSE_ENTRY_STRATEGIES:
         for exit_key in QUANT_EXIT_VARIANTS:
             combos.append(("compose_entry", strat, exit_key))
-    for uni in QUANT_ENTRY_UNIVERSES:
+    for uni in QUANT_ENTRY_UNIVERSES + QVM_ENTRY_UNIVERSES:
         for exit_key in COMPOSE_EXIT_VARIANTS:
             combos.append(("quant_entry", uni, exit_key))
     return combos
@@ -194,13 +198,17 @@ def _generate_quant_entries(universe_key: str, dsn: str, start: date, end: date,
     from analysis.backtest.models import SignalRecord
     from analysis.backtest.quant_signals import replay_quant
     from analysis.chart_screener import fetch_kind_sector_map, get_all_tickers
-    from analysis.fundamentals import compute_ratios, screen
+    from analysis.fundamentals import (
+        compute_qvm_score,
+        compute_ratios,
+        load_momentum,
+        screen,
+        screen_qvm_top_pct,
+    )
     from core.ohlcv_cache import batch_fetch_cached, load_listed_shares
     from run_quant_entry_exit_sweep import build_fundamental_thresholds
     from run_quant_filter_sweep import _rank_by_market_cap
 
-    filter_mode = "pbr" if universe_key == "SCENARIO2_PBR" else "per"
-    per_max = 18.0
     mktcap_top_n = 200
 
     sector_map = fetch_kind_sector_map()
@@ -215,9 +223,20 @@ def _generate_quant_entries(universe_key: str, dsn: str, start: date, end: date,
     ranked = _rank_by_market_cap(ohlcv_map, listed_shares, start, end)
     mktcap_universe = {t for t, _ in ranked[:mktcap_top_n]}
 
-    ratios_df = compute_ratios(dsn)
-    thresholds = build_fundamental_thresholds(filter_mode, per_max)
-    fund_universe = screen(ratios_df, thresholds)
+    if universe_key in ("QVM_TOP20", "MOMENTUM_TOP20"):
+        # 2026-08-12: QVM(방법론4) 팩터분해 결과 재사용 — momentum 단독이
+        # 3팩터 조합보다 우수했으므로 둘 다 지원.
+        factors = ("momentum",) if universe_key == "MOMENTUM_TOP20" else ("quality", "value", "momentum")
+        ratios_df = compute_ratios(dsn)
+        momentum_df = load_momentum(dsn)
+        qvm_df = compute_qvm_score(ratios_df, momentum_df, factors=factors)
+        fund_universe = screen_qvm_top_pct(qvm_df, 0.20)
+    else:
+        filter_mode = "pbr" if universe_key == "SCENARIO2_PBR" else "per"
+        per_max = 18.0
+        ratios_df = compute_ratios(dsn)
+        thresholds = build_fundamental_thresholds(filter_mode, per_max)
+        fund_universe = screen(ratios_df, thresholds)
 
     universe = mktcap_universe & fund_universe
     logger.info("[quant-entry] %s 유니버스: %d종목", universe_key, len(universe))
@@ -270,7 +289,7 @@ def _apply_compose_exit(signals, ohlcv_map: dict, start: date, end: date,
 
 def run_combo(combo: tuple[str, str, str], dsn: str, start: date, end: date,
               workers: int) -> Optional[dict]:
-    from analysis.backtest.helpers import _compute_group_metrics
+    from analysis.backtest.helpers import _compute_group_metrics, _compute_signal_interval_mdd
 
     entry_kind, entry_key, exit_key = combo
     if entry_kind == "compose_entry":
@@ -287,6 +306,11 @@ def run_combo(combo: tuple[str, str, str], dsn: str, start: date, end: date,
         label = f"{entry_key}매수 × {exit_key}분할청산"
 
     m = _compute_group_metrics(signals, rf_annual=0.03, hold_weeks=None)
+    # quant_entry(SCENARIO2/QVM/MOMENTUM) × compose_exit 조합은 return_28d를
+    # 채우지 않아 m.mdd(고정기간 기반)가 항상 None — signal_date~sell_date
+    # 구간 기반 _compute_signal_interval_mdd로 대체(2026-08-12, 가변보유기간
+    # 신호용 MDD 함수, project_technicalquant_backtest 메모리 참고).
+    mdd = m.mdd if m.mdd is not None else _compute_signal_interval_mdd(signals)
     return {
         "combo": label,
         "entry": entry_key,
@@ -297,7 +321,7 @@ def run_combo(combo: tuple[str, str, str], dsn: str, start: date, end: date,
         "win_rate": m.win_rate_sell,
         "avg_return": m.avg_return_sell,
         "median_return": m.median_return_sell,
-        "mdd": m.mdd,
+        "mdd": mdd,
     }
 
 

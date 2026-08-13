@@ -445,7 +445,20 @@ _FUND_IS_TARGETS = {
     "수익(매출액)": "revenue",
     "당기순이익": "net_income",
     "당기순이익(손실)": "net_income",
+    # 2026-08-11: QVM 퀄리티 팩터(매출총이익률)용 — 적자 매출총이익 표기 "(손실)"
+    # 별칭도 net_income과 동일한 패턴으로 추가.
+    "매출원가": "cogs",
+    "매출총이익": "gross_profit",
+    "매출총이익(손실)": "gross_profit",
 }
+# 2026-08-11: QVM 퀄리티 팩터(FCF/부채, 발생액비율)용 — CF(현금흐름표) 섹션.
+# capex는 단일 계정이 아니라 "유형자산의 취득"+"무형자산의 취득" 두 계정의 합으로
+# 근사한다(realized capex와 정확히 같지 않지만 별도 계정이 없어 표준적으로 쓰는 근사).
+_FUND_CF_TARGETS = {
+    "영업활동현금흐름": "operating_cash_flow",
+    "영업활동으로 인한 현금흐름": "operating_cash_flow",
+}
+_FUND_CF_CAPEX_ACCOUNTS = ("유형자산의 취득", "무형자산의 취득")
 
 
 def _parse_amount(raw: Optional[str]) -> Optional[int]:
@@ -458,28 +471,43 @@ def _parse_amount(raw: Optional[str]) -> Optional[int]:
 
 
 def extract_fundamentals(items: list[dict]) -> dict[str, Optional[int]]:
-    """fetch_xbrl() 응답에서 핵심 5개 계정(당기+전기)만 추출.
+    """fetch_xbrl() 응답에서 핵심 계정(당기+전기)만 추출.
 
-    반환 키: assets, liabilities, equity, revenue, revenue_prev, net_income
-    (각 값 없으면 None). BS 섹션은 자산총계/부채총계/자본총계, IS/CIS 섹션은
-    매출액/당기순이익만 본다 — sj_div 불일치 항목은 무시.
+    반환 키: assets, liabilities, equity, revenue, revenue_prev, net_income,
+    cogs, gross_profit, operating_cash_flow, capex (각 값 없으면 None).
+    BS 섹션은 자산총계/부채총계/자본총계, IS/CIS 섹션은 매출액/당기순이익/
+    매출원가/매출총이익, CF 섹션은 영업활동현금흐름과 capex 근사(유형자산+
+    무형자산의 취득 합)만 본다 — sj_div 불일치 항목은 무시.
     """
     result: dict[str, Optional[int]] = {}
+    capex_parts: dict[str, int] = {}
     for it in items:
         nm = (it.get("account_nm") or "").strip()
         sj = (it.get("sj_div") or "").strip()
+
+        if sj == "CF" and nm in _FUND_CF_CAPEX_ACCOUNTS and nm not in capex_parts:
+            amt = _parse_amount(it.get("thstrm_amount"))
+            if amt is not None:
+                capex_parts[nm] = amt
+            continue
 
         key = None
         if sj == "BS" and nm in _FUND_BS_TARGETS:
             key = _FUND_BS_TARGETS[nm]
         elif sj in ("IS", "CIS") and nm in _FUND_IS_TARGETS:
             key = _FUND_IS_TARGETS[nm]
+        elif sj == "CF" and nm in _FUND_CF_TARGETS:
+            key = _FUND_CF_TARGETS[nm]
         if key is None or key in result:
             continue  # 이미 채택됐으면 이후 중복(지배/비지배 분할 등)은 무시
 
         result[key] = _parse_amount(it.get("thstrm_amount"))
         if key == "revenue":
             result["revenue_prev"] = _parse_amount(it.get("frmtrm_amount"))
+
+    if capex_parts:
+        # 취득은 현금흐름표에서 보통 음수(현금유출)로 표시되므로 절댓값 합으로 근사.
+        result["capex"] = sum(abs(v) for v in capex_parts.values())
     return result
 
 
@@ -529,22 +557,29 @@ async def sync_fundamentals(
                     """
                     INSERT INTO dart_fundamentals
                         (corp_code, stock_code, bsns_year, fs_div,
-                         revenue, revenue_prev, net_income, equity, liabilities, assets)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                         revenue, revenue_prev, net_income, equity, liabilities, assets,
+                         cogs, gross_profit, operating_cash_flow, capex)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
                     ON CONFLICT (corp_code, bsns_year) DO UPDATE SET
-                        stock_code   = EXCLUDED.stock_code,
-                        fs_div       = EXCLUDED.fs_div,
-                        revenue      = EXCLUDED.revenue,
-                        revenue_prev = EXCLUDED.revenue_prev,
-                        net_income   = EXCLUDED.net_income,
-                        equity       = EXCLUDED.equity,
-                        liabilities  = EXCLUDED.liabilities,
-                        assets       = EXCLUDED.assets,
-                        fetched_at   = NOW()
+                        stock_code          = EXCLUDED.stock_code,
+                        fs_div              = EXCLUDED.fs_div,
+                        revenue             = EXCLUDED.revenue,
+                        revenue_prev        = EXCLUDED.revenue_prev,
+                        net_income          = EXCLUDED.net_income,
+                        equity              = EXCLUDED.equity,
+                        liabilities         = EXCLUDED.liabilities,
+                        assets              = EXCLUDED.assets,
+                        cogs                = EXCLUDED.cogs,
+                        gross_profit        = EXCLUDED.gross_profit,
+                        operating_cash_flow = EXCLUDED.operating_cash_flow,
+                        capex               = EXCLUDED.capex,
+                        fetched_at          = NOW()
                     """,
                     corp_code, stock_code, bsns_year, used_fs_div,
                     fund.get("revenue"), fund.get("revenue_prev"), fund.get("net_income"),
                     fund.get("equity"), fund.get("liabilities"), fund.get("assets"),
+                    fund.get("cogs"), fund.get("gross_profit"),
+                    fund.get("operating_cash_flow"), fund.get("capex"),
                 )
                 if result.endswith("1") or "UPDATE" in result:
                     total += 1

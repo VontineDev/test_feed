@@ -312,6 +312,13 @@ CREATE TABLE IF NOT EXISTS dart_fundamentals (
     equity        BIGINT,                  -- 자본총계 (당기)
     liabilities   BIGINT,                  -- 부채총계 (당기)
     assets        BIGINT,                  -- 자산총계 (당기)
+    -- 2026-08-11: QVM(퀄리티+밸류+모멘텀) 복합 팩터용 추가 — 매출원가/매출총이익(IS),
+    -- 영업활동현금흐름/유형자산+무형자산의 취득(CF)은 기존과 동일한 fnlttSinglAcntAll
+    -- 응답에 이미 포함돼 있어 신규 API 호출 없이 추출 로직만 확장하면 된다.
+    cogs                BIGINT,            -- 매출원가 (당기)
+    gross_profit        BIGINT,            -- 매출총이익 (당기)
+    operating_cash_flow BIGINT,            -- 영업활동현금흐름 (당기)
+    capex               BIGINT,            -- 유형자산+무형자산의 취득 합계 (당기, 설비투자 근사)
     fetched_at    TIMESTAMPTZ  DEFAULT NOW(),
     UNIQUE (corp_code, bsns_year)
 );
@@ -407,6 +414,20 @@ async def init_db(pool: asyncpg.Pool) -> None:
         )
         await conn.execute(
             "ALTER TABLE watchlist_vol_log ADD COLUMN IF NOT EXISTS s1_txamt BIGINT"
+        )
+        # 2026-08-11: QVM 복합 팩터용 — 기존에 채워진 행이 있으므로 CREATE TABLE IF
+        # NOT EXISTS만으로는 컬럼이 추가되지 않아 ALTER TABLE로 별도 반영.
+        await conn.execute(
+            "ALTER TABLE dart_fundamentals ADD COLUMN IF NOT EXISTS cogs BIGINT"
+        )
+        await conn.execute(
+            "ALTER TABLE dart_fundamentals ADD COLUMN IF NOT EXISTS gross_profit BIGINT"
+        )
+        await conn.execute(
+            "ALTER TABLE dart_fundamentals ADD COLUMN IF NOT EXISTS operating_cash_flow BIGINT"
+        )
+        await conn.execute(
+            "ALTER TABLE dart_fundamentals ADD COLUMN IF NOT EXISTS capex BIGINT"
         )
         # RLS: 반드시 존재하는 테이블은 개별 실행 (한 번에 보내면 한 테이블 실패 시 전체 롤백)
         for _tbl in _RLS_ALWAYS:
