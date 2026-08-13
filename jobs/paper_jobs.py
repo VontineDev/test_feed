@@ -24,6 +24,7 @@ from data.kiwoom_paper_trader import (
     _qty_from_price,
     insert_pending,
     get_open_slot_count,
+    get_open_or_pending_tickers,
     compute_slot_krw,
     deployable_capital,
 )
@@ -383,8 +384,19 @@ async def paper_eod_sampler_job(db_pool, paper_trader) -> None:
             logger.info("[paper-sampler] [%s] 슬롯 없음 (%d/%d)", _model, _open_cnt, _cfg["max_slots"])
             continue
 
+        # 이미 이 모델이 open/pending으로 보유 중인 티커는 후보에서 제외 —
+        # 그대로 두면 같은 티커에 포지션이 중복으로 열려 브로커 잔고가 모델별로
+        # 분리되지 않고, 이후 exit 재조정도 안전하게 못 하게 된다(241710.KQ 사례).
+        _held = await get_open_or_pending_tickers(db_pool, _model)
+        _candidates = [s for s in _signals if s["ticker"] not in _held]
+        if len(_candidates) < len(_signals):
+            logger.info("[paper-sampler] [%s] 이미 보유 중인 티커 %d건 제외",
+                        _model, len(_signals) - len(_candidates))
+        if not _candidates:
+            continue
+
         random.seed(seed_base ^ (hash(_model) & 0xFFFFFFFF))
-        _selected = random.sample(_signals, min(_available, len(_signals)))
+        _selected = random.sample(_candidates, min(_available, len(_candidates)))
 
         for _sig in _selected:
             try:

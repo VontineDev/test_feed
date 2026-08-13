@@ -586,6 +586,26 @@ async def get_open_slot_count(pool, model: str) -> int:
     return row["count"]
 
 
+async def get_open_or_pending_tickers(pool, model: str) -> set[str]:
+    """model이 이미 open/pending으로 보유 중인 티커 집합.
+
+    2026-08-13 도입: paper_eod_sampler_job이 슬롯 수(get_open_slot_count)만 보고
+    당일 신호를 무작위 샘플링해 pending을 삽입하다 보니, 같은 모델이 이미
+    보유 중인 티커에 신호가 다시 뜨면 별도의 새 포지션이 또 열렸다(241710.KQ
+    사례: kosdaq/cross 모델이 이틀 연속 신호를 받아 각각 2개씩, 총 4개 포지션
+    동시보유). 같은 티커를 여러 모델(과 같은 모델 내 여러 포지션)이 동시보유하면
+    브로커 잔고가 모델별로 분리되지 않아 _reconcile_stale_positions()가 자동
+    보정을 포기하고 스킵하므로, 애초에 샘플링 단계에서 이미 보유 중인 티커를
+    후보에서 제외해 재발을 막는다.
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT DISTINCT ticker FROM paper_positions WHERE model=$1 AND status IN ('open','pending')",
+            model,
+        )
+    return {r["ticker"] for r in rows}
+
+
 # ── 빠른 동작 테스트 ─────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
