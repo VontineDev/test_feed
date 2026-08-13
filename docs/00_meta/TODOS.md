@@ -448,6 +448,18 @@ DB `paper_positions`에 대응 행이 아예 없음 — 예: CJ CGV 976주, F&F 
    (현재 잔여 2,422주 추정 — 재조회 권장). DB 행(id=82)은 기존
    `exit_type='reconciled_no_data'` 그대로 둠(entry_theory=0.0이라 애초에
    복구할 진입가 데이터가 없어 open 행 재생성 불가 — A/C그룹과 다른 케이스).
+
+   **✅ 완료(2026-08-13):** 위 "entry_theory=0.0이라 복구 불가" 결론은 무효화됨 —
+   같은 날 매수 잔량 재조정 작업(`_reconcile_stale_positions()`)에서
+   `KiwoomPaperTrader.get_position_avg_price()`(kt00018 평균매입가 `pur_pric`)를
+   추가하면서, 우리 DB에 원가 기록이 없어도 브로커가 자체 보관하는 평균매입가로
+   복구 가능함을 확인. 실계좌 재확인 결과 잔여수량은 추정치(2,422)가 아니라
+   **2,334주**(평균매입가 2,060원, 평가손익 -112,617원/-2.34%)로 안정화돼있었음
+   — 그 사이 매수/매도 추가 체결은 없었던 것으로 보이나 정확한 원인은 미추적.
+   재사용 가능한 `scripts/revive_ghost_position.py`(dry-run 기본, `--apply`로 반영)로
+   새 `open` 행(id=119, entry_actual=2060, qty=2334) 복원 — 원본 closed 행(id=82)은
+   감사 추적을 위해 그대로 둠. 이제부터 `paper_exit_checker_job`의 정상 감시
+   대상에 포함됨.
 4. **C그룹 (3건) — 원인 확인 완료, 부분 수정.** `000650.KS`/`001080.KS`/`003480.KS`.
    `exit_date`는 2026-08-06(created_at 2026-05-16은 포지션 최초 진입일일 뿐)
    — 08-03~08-04 이틀 연속 손절 감시가 죽어있던(별도 항목 "Kiwoom 토큰 자동
