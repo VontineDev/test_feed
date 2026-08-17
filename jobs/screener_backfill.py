@@ -81,12 +81,45 @@ def week_of_to_monday(week_of: str) -> date:
     return date.fromisocalendar(int(year), int(w), 1)
 
 
+# ma_120w(120주 이동평균) 워밍업 + 여유분. 이 주수만큼 백필 대상 최초 주차보다
+# 앞서서 주봉을 받아와야 가장 이른 대상 주차부터 정확히 계산된다.
+_FETCH_LOOKBACK_WEEKS = 150
+
+
+def compute_fetch_window(missing: list[str]) -> tuple[date, date]:
+    """백필 대상 주차 목록(오름차순 'IYYY-Www')으로부터 OHLCV fetch 구간 산정.
+
+    대상 주차 범위 전체 + ma_120w 워밍업(_FETCH_LOOKBACK_WEEKS)을 커버해야
+    가장 이른 대상 주차부터도 120주 이동평균이 정확히 계산된다. 2026-08-17
+    이전엔 이 계산 없이 고정 period="3y"(오늘 기준 최근 3년)를 썼는데, 백필
+    대상이 과거 주차(예: 2022년)일 때 그 주봉 자체가 3년 롤링 윈도우 밖이라
+    조용히 빈 슬라이스만 나와 "통과 종목 0개"로 실패하는 버그가 있었다.
+    """
+    earliest_monday = week_of_to_monday(missing[0])
+    latest_monday = week_of_to_monday(missing[-1])
+    fetch_start = earliest_monday - timedelta(weeks=_FETCH_LOOKBACK_WEEKS)
+    fetch_end = latest_monday + timedelta(days=7)
+    return fetch_start, fetch_end
+
+
 # ── 단일 종목 OHLCV 프리페치 ──────────────────────────────────
-def _fetch_ohlcv(ticker: str) -> Optional[pd.DataFrame]:
-    """yfinance에서 3년치 주봉 OHLCV 1회 다운로드. 실패 시 None."""
+def _fetch_ohlcv(ticker: str, fetch_start: date, fetch_end: date) -> Optional[pd.DataFrame]:
+    """yfinance에서 [fetch_start, fetch_end] 구간 주봉 OHLCV 1회 다운로드. 실패 시 None.
+
+    2026-08-17 발견: 예전엔 period="3y"(오늘 기준 최근 3년 고정)를 썼는데, 이
+    누락 주차 자동탐지가 과거(2022~2024) 주차까지 대상으로 잡을 때 그 주차의
+    주봉 자체가 3년 롤링 윈도우 밖이라 매번 빈 슬라이스 → "통과 종목 0개"로
+    조용히 실패했다(에러 없이 그냥 아무것도 안 뽑힘 — chart_signals 백필이
+    2022~2024 전체를 "성공"했다고 로그에 찍혔지만 실제로는 2024-W47 이후만
+    유효했던 사고). explicit start/end로 대상 주차 범위 전체 + 워밍업 lookback을
+    커버하도록 수정.
+    """
     try:
         tkr = yf.Ticker(ticker)
-        df = tkr.history(period="3y", interval="1wk", auto_adjust=True)
+        df = tkr.history(
+            start=fetch_start.isoformat(), end=fetch_end.isoformat(),
+            interval="1wk", auto_adjust=True,
+        )
         if df.empty:
             return None
         return normalize_ohlcv(df)
@@ -98,12 +131,19 @@ def _fetch_ohlcv(ticker: str) -> Optional[pd.DataFrame]:
 def prefetch_all(
     tickers: list[tuple[str, str, str]],
     workers: int,
+    fetch_start: date,
+    fetch_end: date,
 ) -> dict[str, pd.DataFrame]:
     """모든 티커 OHLCV를 병렬로 1회씩 다운로드. {ticker: df} 반환.
 
     스켈레톤은 stage_shared.prefetch_ohlcv."""
-    logger.info("[프리페치] %d종목 주봉 OHLCV 다운로드 중 (workers=%d)...", len(tickers), workers)
-    return prefetch_ohlcv([t for t, _, _ in tickers], _fetch_ohlcv, workers, "[프리페치]")
+    logger.info("[프리페치] %d종목 주봉 OHLCV 다운로드 중 (workers=%d, %s~%s)...",
+                len(tickers), workers, fetch_start, fetch_end)
+    return prefetch_ohlcv(
+        [t for t, _, _ in tickers],
+        lambda t: _fetch_ohlcv(t, fetch_start, fetch_end),
+        workers, "[프리페치]",
+    )
 
 
 # ── 단일 종목×주차 스크리닝 (프리페치 데이터 사용) ──────────────
@@ -281,7 +321,8 @@ async def main(args: argparse.Namespace) -> None:
         return
 
     # ── 핵심 최적화: 티커당 1회만 yfinance 호출 ──────────────────
-    ohlcv_map = prefetch_all(tickers, args.workers)
+    fetch_start, fetch_end = compute_fetch_window(missing)
+    ohlcv_map = prefetch_all(tickers, args.workers, fetch_start, fetch_end)
 
     total_saved = 0
     for week_of in missing:
