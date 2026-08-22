@@ -54,19 +54,28 @@ MODEL_CONFIG: dict[str, dict] = {
     "compose-score1":  {"max_slots":  5},
 }
 
-# kosdaq: stage_job의 KOSDAQ 분류 버그로 신호가 전혀 생성되지 않는다는 전제로
-# (역대 0건, 2026-07-29 investigate 세션 확인) 자본 배분에서 제외했다 — 죽은
-# 모델에 1/N 자본이 영구히 묶여 나머지 모델 몫이 줄어드는 걸 막기 위함.
+# kosdaq: 한때 "stage_job의 KOSDAQ 분류 버그로 신호가 전혀 생성되지 않는다"는
+# 전제(역대 0건, 2026-07-29 investigate 세션 확인)로 자본 배분에서 제외돼 있었다.
 #
-# **이 전제는 깨졌다(2026-08-20/21 확인)**: kosdaq이 실제로 pending 후보를
-# 만들어냈다(070300.KQ, 294570.KQ) — 신호 생성 자체는 다시 되고 있다는 뜻.
-# 그래도 kosdaq은 여전히 ACTIVE_MODELS 밖으로 남겨뒀다: jobs/paper_jobs.py의
-# paper_eod_sampler_job/paper_open_entry_job 양쪽에 가드를 추가해 후보가 나와도
-# 자본 배정 없이 조용히 스킵하도록 만들었다(2026-08-22, jobs/paper_jobs.py 참고).
-# kosdaq을 다시 활성화할지는 별도 검토가 필요한 결정이지 자동 복귀가 아니다 —
-# 신호 생성이 재개된 원인(stage_job 버그가 실제로 고쳐진 건지, 다른 요인인지)이
-# 아직 확인되지 않았다.
-ACTIVE_MODELS: list[str] = [m for m in MODEL_CONFIG if m != "kosdaq"]
+# **2026-08-23 investigate 세션에서 그 전제 자체가 처음부터 사실이 아니었음을
+# 확인**: stage_classifications를 직접 조회하면 KOSDAQ stage=1 신호는 2022년
+# 부터 지금까지 계속 나오고 있었다(누적 454건, 최근 90일만도 26건/15일 —
+# KOSPI 41건/19일의 약 63% 수준). "역대 0건" 주석이 쓰인 2026-08-02 커밋
+# (595314d) 시점 기준으로도 그 직전(7/10, 7/17)과 직후(8/4)에 이미 KOSDAQ
+# 신호가 있었다 — DB를 재확인하지 않고 옛 가정을 그대로 옮겨 적은 것으로 보임.
+# 진짜 있었던 버그(9f31cbb, 2026-07-24: 티커 캡이 KOSPI를 먼저 채우던 문제,
+# market_map이 항상 빈 sector로 판정해 전종목을 KOSPI로 오분류하던 문제)는
+# 이미 그 이전에 고쳐져 있었다. 참고로 과거 백테스트에서 Stage KOSDAQ 모드는
+# 오히려 전체 모드 중 최고 성과였다(val Sharpe 5.48, 초과수익 +6.1% —
+# [[project_technicalquant_backtest]] 계열 학습 기록). 다만 모의투자 1기
+# 라이브 실적(gen1)에서는 kosdaq 3건 전부 마이너스(-12.24%, 표본 극소)였다는
+# 점도 함께 고려할 것 — 백테스트 우위가 실전에서도 재현된다는 보장은 없다.
+#
+# → ACTIVE_MODELS에 재편입(2026-08-23). jobs/paper_jobs.py의 kosdaq 관련
+# 가드(paper_eod_sampler_job/paper_open_entry_job)는 특정 모델을 겨냥한 게
+# 아니라 "ACTIVE_MODELS 밖 모델은 스킵"하는 일반 로직이라 그대로 유지 —
+# 앞으로 다른 모델이 잘못 빠지거나 들어와도 동일하게 보호된다.
+ACTIVE_MODELS: list[str] = list(MODEL_CONFIG)
 
 # 계좌 총자산(추정예탁자산) 중 신규 진입에 쓰지 않고 현금으로 남겨둘 비중.
 # 2026-07-31: 고정 슬롯 금액(모델당 1000만~2000만원 × 슬롯수, 합계 약 7억원)이

@@ -112,13 +112,15 @@ async def test_no_held_tickers_inserts_all_within_slot_limit():
 
 
 @pytest.mark.asyncio
-async def test_kosdaq_model_skipped_no_pending_created():
-    """kosdaq은 ACTIVE_MODELS 밖(자본배분 대상 아님) — 신호가 있어도 pending을
-    아예 만들지 않는다.
+async def test_model_outside_active_models_skipped_no_pending_created():
+    """ACTIVE_MODELS 밖 모델은 신호가 있어도 pending을 아예 만들지 않는다.
 
     2026-08-22 code-review 발견: 이 가드가 없으면 paper_open_entry_job이 매번
-    스킵만 하고 절대 처리되지 않는 pending이 쌓인다 (144/145번 사례, 8/20·8/21
-    생성 후 계속 미처리)."""
+    스킵만 하고 절대 처리되지 않는 pending이 쌓인다 (kosdaq 144/145번 사례,
+    8/20·8/21 생성 후 계속 미처리 — 단, kosdaq 자체는 2026-08-23 investigate로
+    "역대 0건" 전제가 틀렸음이 확인돼 ACTIVE_MODELS에 재편입됨. 가드 로직 자체는
+    "어떤 모델이든 ACTIVE_MODELS 밖이면 스킵"이라는 일반 규칙이므로, 특정
+    모델명에 의존하지 않고 ACTIVE_MODELS를 패치해 검증한다)."""
     from jobs.paper_jobs import paper_eod_sampler_job
 
     pool, _conn = _make_pool([_row("241710.KQ")])
@@ -128,6 +130,7 @@ async def test_kosdaq_model_skipped_no_pending_created():
     slot_count_mock = AsyncMock(return_value=0)
     held_tickers_mock = AsyncMock(return_value=set())
     with (
+        patch("jobs.paper_jobs.ACTIVE_MODELS", {"stage", "cross", "ichimoku"}),  # kosdaq 제외
         patch("jobs.paper_jobs.load_chart_signals_latest",
               AsyncMock(return_value=("2026-W33", []))),
         patch("jobs.paper_jobs.get_open_slot_count", slot_count_mock),
@@ -146,10 +149,42 @@ async def test_kosdaq_model_skipped_no_pending_created():
 
 
 @pytest.mark.asyncio
-async def test_telegram_summary_notes_kosdaq_is_skipped_when_present():
-    """kosdaq 신호가 있으면(스킵되더라도) 텔레그램 요약에 "자본배분 대상 아님"
-    문구가 붙는다 — 그냥 개수만 보여주면 마치 kosdaq도 진입 후보에 포함된
-    것처럼 오해할 수 있음(2026-08-22 adversarial review 발견)."""
+async def test_telegram_summary_notes_when_kosdaq_style_model_is_inactive():
+    """ACTIVE_MODELS 밖 모델의 신호가 있으면(스킵되더라도) 텔레그램 요약에
+    "자본배분 대상 아님" 문구가 붙는다 — 그냥 개수만 보여주면 마치 진입 후보에
+    포함된 것처럼 오해할 수 있음(2026-08-22 adversarial review 발견).
+
+    kosdaq 자체는 2026-08-23 ACTIVE_MODELS에 재편입돼 이 문구가 안 뜨므로,
+    가드 로직 검증을 위해 ACTIVE_MODELS를 패치해 kosdaq이 빠진 상황을 재현한다."""
+    from jobs.paper_jobs import paper_eod_sampler_job
+
+    pool, _conn = _make_pool([_row("241710.KQ"), _row("999999.KS")])
+    trader = MagicMock()
+
+    post_message_mock = AsyncMock()
+    with (
+        patch("jobs.paper_jobs.ACTIVE_MODELS", {"stage", "cross", "ichimoku"}),  # kosdaq 제외
+        patch("jobs.paper_jobs.load_chart_signals_latest",
+              AsyncMock(return_value=("2026-W33", []))),
+        patch("jobs.paper_jobs.get_open_slot_count", AsyncMock(return_value=0)),
+        patch("jobs.paper_jobs.get_open_or_pending_tickers", AsyncMock(return_value=set())),
+        patch("jobs.paper_jobs.insert_pending", AsyncMock(return_value=1)),
+        patch("jobs.paper_jobs._post_message", post_message_mock),
+    ):
+        await paper_eod_sampler_job(pool, trader)
+
+    post_message_mock.assert_called_once()
+    sent_msg = post_message_mock.call_args[0][3]
+    assert "KOSDAQ 1건" in sent_msg
+    assert "자본배분 대상 아님" in sent_msg
+    assert "pending 삽입: 1건" in sent_msg  # 999999.KS(stage)만 실제로 삽입됨
+
+
+@pytest.mark.asyncio
+async def test_telegram_summary_omits_note_when_kosdaq_is_active():
+    """kosdaq이 ACTIVE_MODELS 안에 있는 현재 상태에서는(2026-08-23 재편입),
+    kosdaq 신호가 있어도 "자본배분 대상 아님" 문구를 붙이지 않는다 — 실제로는
+    정상 진입 후보로 처리되는데 스킵된 것처럼 오해하게 만들면 안 된다."""
     from jobs.paper_jobs import paper_eod_sampler_job
 
     pool, _conn = _make_pool([_row("241710.KQ"), _row("999999.KS")])
@@ -168,9 +203,8 @@ async def test_telegram_summary_notes_kosdaq_is_skipped_when_present():
 
     post_message_mock.assert_called_once()
     sent_msg = post_message_mock.call_args[0][3]
-    assert "KOSDAQ 1건" in sent_msg
-    assert "자본배분 대상 아님" in sent_msg
-    assert "pending 삽입: 1건" in sent_msg  # 999999.KS(stage)만 실제로 삽입됨
+    assert "자본배분 대상 아님" not in sent_msg
+    assert "pending 삽입: 2건" in sent_msg  # kosdaq(241710.KQ)도 실제로 삽입됨
 
 
 @pytest.mark.asyncio
@@ -184,6 +218,7 @@ async def test_telegram_summary_omits_kosdaq_note_when_no_kosdaq_signals():
 
     post_message_mock = AsyncMock()
     with (
+        patch("jobs.paper_jobs.ACTIVE_MODELS", {"stage", "cross", "ichimoku"}),  # kosdaq 제외
         patch("jobs.paper_jobs.load_chart_signals_latest",
               AsyncMock(return_value=("2026-W33", []))),
         patch("jobs.paper_jobs.get_open_slot_count", AsyncMock(return_value=0)),

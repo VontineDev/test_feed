@@ -450,10 +450,13 @@ async def paper_eod_sampler_job(db_pool, paper_trader) -> None:
 
     if total_inserted > 0:
         try:
+            _kosdaq_note = (
+                " (자본배분 대상 아님 — 전부 스킵)"
+                if stage_kosdaq and "kosdaq" not in ACTIVE_MODELS else ""
+            )
             _msg = (
                 f"모의투자 EOD 샘플링 ({today})\n"
-                f"Stage KOSPI {len(stage_kospi)}건 / KOSDAQ {len(stage_kosdaq)}건"
-                f"{' (자본배분 대상 아님 — 전부 스킵)' if stage_kosdaq else ''} / "
+                f"Stage KOSPI {len(stage_kospi)}건 / KOSDAQ {len(stage_kosdaq)}건{_kosdaq_note} / "
                 f"Cross {len(cross_signals)}건 / Ichimoku {len(ichi_signals)}건\n"
                 f"→ pending 삽입: {total_inserted}건"
             )
