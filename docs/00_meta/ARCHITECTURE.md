@@ -584,6 +584,14 @@ class BacktestConfig:
 
 **자동 스케줄**: 매주 일요일 20:00 KST — `jobs/screener_job.py`에서 호출 후 결과를 텔레그램 발송.
 
+**모델 레지스트리 (2026-08-22~)**: 위 표의 청산 파라미터를 포함해 지금까지 테스트된
+모든 진입조건·유니버스 필터·청산모델은 `analysis/backtest/model_registry.py`에
+`ENTRY_COMPONENTS`/`UNIVERSE_COMPONENTS`/`EXIT_COMPONENTS` 3개 dict로 카탈로그화돼
+있다(기존 dict를 재참조만 함, 새 로직 없음). 성과·표본수·상태(생산중/후보/폐기)까지
+포함한 전체 목록은 [reference-model-registry.md](../02_reference/reference-model-registry.md)
+참고 — 새 조합을 만들 때는 여기서 컴포넌트를 골라 섞으면 된다
+(`scripts/run_cross_combo_backtest.py`가 이미 이 방식으로 entry×exit 15개 조합을 실행한 전례).
+
 ---
 
 ### 3-8. `analysis/chart_screener.py` — 주봉 차트 스크리너

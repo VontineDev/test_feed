@@ -1,5 +1,11 @@
 # 퀀트 백테스트 조건 정리
 
+> 이 문서는 각 실험의 과정·근거를 설명하는 서술형 랩노트입니다. "지금까지 테스트된
+> 모델을 성과 순으로 한눈에" 보려면 구조화된 색인인
+> [reference-model-registry.md](docs/02_reference/reference-model-registry.md)를,
+> 각 컴포넌트(진입/유니버스/청산)를 코드에서 바로 가져다 조합하려면
+> `analysis/backtest/model_registry.py`를 참고하세요.
+
 실제 백테스트 프로그램(젠포트, 퀀터스, 파이썬 등)에 바로 입력하여 시뮬레이션할 수 있도록 1. 퀀트 종목 선택(필터링) 조건과 2. 매매 타이밍(진입/청산) 조건을 명확한 수식 형태로 나열해 드립니다. 원하는 조합을 골라 백테스트 시스템에 그대로 대입해 보세요.
 
 ## 🏁 실제 검증 결과 요약 (2025-01-02~2026-08-06, 전종목 백테스트)
@@ -233,7 +239,7 @@ python scripts/run_cross_combo_backtest.py --start 2025-01-02 --end 2026-08-06
 - SCORE-1 계열 3개 조합: 원래 신호 1,658건이어야 하는데 4~6건만 나옴.
 - SCENARIO2_PER18 유니버스가 조합마다 18/11/7종목으로 제각각(원래는 고정 64종목이어야 함) — 시가총액 랭킹에 쓰는 OHLCV도 같이 오염.
 - AND-1의 2개 조합은 신호가 0건이라 결과표에서 통째로 누락.
-- 원인: `analysis/backtest/fetch.py:_fetch_single_ohlcv`가 fetch 실패를 `logger.debug`로만 남기고 `None`을 조용히 반환 — 대량 실패가 나도 에러 로그가 전혀 안 남는 관측성 문제가 겹쳐 있었음(별도 개선 필요, 아직 미수정).
+- 원인: `analysis/backtest/fetch.py:_fetch_single_ohlcv`가 fetch 실패를 `logger.debug`로만 남기고 `None`을 조용히 반환 — 대량 실패가 나도 에러 로그가 전혀 안 남는 관측성 문제가 겹쳐 있었음(**2026-08-22 수정 완료**: `_batch_fetch_ohlcv`에 실패율 90%+ 시 `logger.error` 경보 추가, `tests/test_backtest_fetch.py` 회귀 테스트 3건. 개별종목 결측은 여전히 정상 동작이라 raise는 하지 않음 — 일괄 장애만 감지).
 
 **신뢰 가능한 2개 조합**(런 초반이라 오염 전에 끝남, 신호수가 기존 검증된 FUNNEL-1 기준선 4,643/4,492와 일치):
 
