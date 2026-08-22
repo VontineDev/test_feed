@@ -54,9 +54,18 @@ MODEL_CONFIG: dict[str, dict] = {
     "compose-score1":  {"max_slots":  5},
 }
 
-# kosdaq: stage_job의 KOSDAQ 분류 버그로 신호가 전혀 생성되지 않음(역대 0건,
-# 2026-07-29 investigate 세션 확인). 고쳐지기 전까지 자본 배분에서 제외 —
-# 안 그러면 죽은 모델에 1/N 자본이 영구히 묶여 나머지 모델 몫이 줄어든다.
+# kosdaq: stage_job의 KOSDAQ 분류 버그로 신호가 전혀 생성되지 않는다는 전제로
+# (역대 0건, 2026-07-29 investigate 세션 확인) 자본 배분에서 제외했다 — 죽은
+# 모델에 1/N 자본이 영구히 묶여 나머지 모델 몫이 줄어드는 걸 막기 위함.
+#
+# **이 전제는 깨졌다(2026-08-20/21 확인)**: kosdaq이 실제로 pending 후보를
+# 만들어냈다(070300.KQ, 294570.KQ) — 신호 생성 자체는 다시 되고 있다는 뜻.
+# 그래도 kosdaq은 여전히 ACTIVE_MODELS 밖으로 남겨뒀다: jobs/paper_jobs.py의
+# paper_eod_sampler_job/paper_open_entry_job 양쪽에 가드를 추가해 후보가 나와도
+# 자본 배정 없이 조용히 스킵하도록 만들었다(2026-08-22, jobs/paper_jobs.py 참고).
+# kosdaq을 다시 활성화할지는 별도 검토가 필요한 결정이지 자동 복귀가 아니다 —
+# 신호 생성이 재개된 원인(stage_job 버그가 실제로 고쳐진 건지, 다른 요인인지)이
+# 아직 확인되지 않았다.
 ACTIVE_MODELS: list[str] = [m for m in MODEL_CONFIG if m != "kosdaq"]
 
 # 계좌 총자산(추정예탁자산) 중 신규 진입에 쓰지 않고 현금으로 남겨둘 비중.

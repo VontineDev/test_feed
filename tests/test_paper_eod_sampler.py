@@ -125,15 +125,21 @@ async def test_kosdaq_model_skipped_no_pending_created():
     trader = MagicMock()
 
     insert_mock = AsyncMock(return_value=1)
+    slot_count_mock = AsyncMock(return_value=0)
+    held_tickers_mock = AsyncMock(return_value=set())
     with (
         patch("jobs.paper_jobs.load_chart_signals_latest",
               AsyncMock(return_value=("2026-W33", []))),
-        patch("jobs.paper_jobs.get_open_slot_count", AsyncMock(return_value=0)),
-        patch("jobs.paper_jobs.get_open_or_pending_tickers",
-              AsyncMock(return_value=set())),
+        patch("jobs.paper_jobs.get_open_slot_count", slot_count_mock),
+        patch("jobs.paper_jobs.get_open_or_pending_tickers", held_tickers_mock),
         patch("jobs.paper_jobs.insert_pending", insert_mock),
         patch("jobs.paper_jobs._post_message", AsyncMock()),
     ):
         await paper_eod_sampler_job(pool, trader)
 
     insert_mock.assert_not_called()
+    # 2026-08-22 review 발견: ACTIVE_MODELS 밖 모델은 슬롯 조회/held-ticker
+    # 조회 이전에 걸러져야 한다 — insert만 안 됐다고 효율성 의도까지
+    # 검증되는 건 아니다.
+    slot_count_mock.assert_not_called()
+    held_tickers_mock.assert_not_called()
