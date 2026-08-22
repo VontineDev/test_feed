@@ -239,7 +239,7 @@ python scripts/run_cross_combo_backtest.py --start 2025-01-02 --end 2026-08-06
 - SCORE-1 계열 3개 조합: 원래 신호 1,658건이어야 하는데 4~6건만 나옴.
 - SCENARIO2_PER18 유니버스가 조합마다 18/11/7종목으로 제각각(원래는 고정 64종목이어야 함) — 시가총액 랭킹에 쓰는 OHLCV도 같이 오염.
 - AND-1의 2개 조합은 신호가 0건이라 결과표에서 통째로 누락.
-- 원인: `analysis/backtest/fetch.py:_fetch_single_ohlcv`가 fetch 실패를 `logger.debug`로만 남기고 `None`을 조용히 반환 — 대량 실패가 나도 에러 로그가 전혀 안 남는 관측성 문제가 겹쳐 있었음(**2026-08-22 수정 완료**: `_batch_fetch_ohlcv`에 실패율 90%+ 시 `logger.error` 경보 추가, `tests/test_backtest_fetch.py` 회귀 테스트 3건. 개별종목 결측은 여전히 정상 동작이라 raise는 하지 않음 — 일괄 장애만 감지).
+- 원인: `analysis/backtest/fetch.py:_fetch_single_ohlcv`가 fetch 실패를 `logger.debug`로만 남기고 `None`을 조용히 반환 — 대량 실패가 나도 에러 로그가 전혀 안 남는 관측성 문제가 겹쳐 있었음(**2026-08-22 수정, 22일 1차 수정이 실제 사고 경로를 놓쳤던 것까지 재수정**: 1차로 `analysis/backtest/fetch.py::_batch_fetch_ohlcv`에 실패율 90%+ 시 `logger.error` 경보를 추가했으나, adversarial review로 이 함수는 `dsn` 미설정 폴백 경로에서만 호출되고, `run_cross_combo_backtest.py` 등 `dsn`이 항상 설정되는 실제 사고 경로는 `core/ohlcv_cache.py::batch_fetch_cached`를 타 전혀 보호되지 않는다는 게 드러남 — 같은 가드를 `batch_fetch_cached`의 미스 수집 루프에도 추가해 실제 경로를 덮음. `tests/test_backtest_fetch.py` + `tests/test_ohlcv_cache_fetch_ratio.py` 회귀 테스트 총 7건. 개별종목 결측은 여전히 정상 동작이라 raise는 하지 않음 — 일괄 장애만 감지).
 
 **신뢰 가능한 2개 조합**(런 초반이라 오염 전에 끝남, 신호수가 기존 검증된 FUNNEL-1 기준선 4,643/4,492와 일치):
 

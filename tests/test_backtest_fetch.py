@@ -66,3 +66,21 @@ def test_empty_ticker_list_does_not_crash():
     """빈 티커 리스트는 0으로 나누기 없이 그냥 빈 dict를 반환한다."""
     result = _batch_fetch_ohlcv([], date(2025, 1, 1), date(2025, 6, 1), workers=4)
     assert result == {}
+
+
+def test_just_below_threshold_does_not_log_error(caplog):
+    """90% 문턱 바로 아래(85%)에서는 에러가 발생하지 않는다 — 경계값 회귀 방지
+    (2026-08-22 review 발견: 기존엔 정확히 10%/90% 두 지점만 검증돼 임계치
+    비교 연산자(>= vs >)의 회귀를 못 잡았음)."""
+    tickers = [f"{i:06d}.KS" for i in range(20)]
+
+    def _fake_fetch(ticker, _start, _end):
+        return None if ticker in tickers[:17] else _fake_df()  # 17/20 = 85%
+
+    with (
+        patch("analysis.backtest.fetch._fetch_single_ohlcv", side_effect=_fake_fetch),
+        caplog.at_level(logging.ERROR, logger="analysis.backtest.fetch"),
+    ):
+        _batch_fetch_ohlcv(tickers, date(2025, 1, 1), date(2025, 6, 1), workers=4)
+
+    assert not any("실패율" in r.message for r in caplog.records)

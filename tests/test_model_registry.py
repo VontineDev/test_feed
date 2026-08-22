@@ -80,3 +80,54 @@ def test_all_components_returns_sorted_name_lists():
     for names in result.values():
         assert names == sorted(names)
         assert len(names) > 0
+
+
+def test_entry_components_sources_are_disjoint():
+    """compose 전략과 quant 조건 이름이 겹치면 한쪽이 조용히 덮어써진다 —
+    ENTRY_COMPONENTS 전체 크기가 두 소스 크기의 합과 정확히 같아야 한다
+    (2026-08-22 review 발견)."""
+    from analysis.strategy_compose import STRATEGIES
+    from analysis.backtest.quant_signals import ENTRY_CONDITIONS
+
+    assert not (set(STRATEGIES) & set(ENTRY_CONDITIONS)), "compose/quant 진입조건 이름 충돌"
+    assert len(ENTRY_COMPONENTS) == len(STRATEGIES) + len(ENTRY_CONDITIONS)
+
+
+def test_exit_components_no_silent_key_collisions():
+    """EXIT_COMPONENTS를 채우는 세 소스(분할청산/quant변형/F,H 전용)가 서로 겹치면
+    앞서 넣은 항목이 조용히 덮어써진다 (2026-08-22 review 발견)."""
+    split_names = {"stage_kospi", "stage_kosdaq", "cross", "score1", "funnel1", "ichimoku"}
+    quant_names = {"quant_original", "quant_optimized", "quant_scenario1"}
+    special_names = {"bb_center_rsi50", "atr2x_donchian10"}
+    assert not (split_names & quant_names)
+    assert not (split_names & special_names)
+    assert not (quant_names & special_names)
+    assert set(EXIT_COMPONENTS) == split_names | quant_names | special_names
+
+
+def test_ref_mutation_does_not_leak_into_production_config():
+    """Component.ref를 실험 삼아 수정해도 analysis/strategy_compose.STRATEGIES나
+    analysis/backtest/config.OPTIMAL_EXIT_PARAMS* 원본은 오염되지 않는다 —
+    카탈로그는 이 워크플로(ref를 골라 바로 실험)를 문서에서 권장하므로,
+    defensive copy 없이는 실 운용 설정까지 조용히 바뀔 위험이 있었다
+    (2026-08-22 adversarial review 발견)."""
+    from analysis.strategy_compose import STRATEGIES, StrategySpec
+    from analysis.backtest.config import OPTIMAL_EXIT_PARAMS_CROSS
+
+    and1_ref = ENTRY_COMPONENTS["AND-1"].ref
+    assert isinstance(and1_ref, StrategySpec)
+    try:
+        and1_ref.flags.append("__TEST_MUTATION__")
+        assert "__TEST_MUTATION__" not in STRATEGIES["AND-1"].flags
+    finally:
+        # ENTRY_COMPONENTS는 모듈 전역 싱글턴이므로 다른 테스트에 영향이
+        # 새지 않도록 원복 — 테스트 격리.
+        and1_ref.flags.remove("__TEST_MUTATION__")
+
+    cross_ref = EXIT_COMPONENTS["cross"].ref
+    assert isinstance(cross_ref, dict)
+    try:
+        cross_ref["trail_pct"] = -999.0
+        assert OPTIMAL_EXIT_PARAMS_CROSS["trail_pct"] != -999.0
+    finally:
+        cross_ref["trail_pct"] = OPTIMAL_EXIT_PARAMS_CROSS["trail_pct"]

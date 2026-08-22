@@ -20,6 +20,7 @@ ENTRY_CONDITIONS`, `config.OPTIMAL_EXIT_PARAMS*` 등 기존 import 경로는 전
 """
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -52,7 +53,11 @@ for _name, _spec in _COMPOSE_STRATEGIES.items():
         name=_name, kind="entry",
         source=f"analysis/strategy_compose.py::STRATEGIES[{_name!r}]",
         desc=f"compose {_spec.kind} 전략 — sources={_spec.sources}",
-        ref=_spec,
+        # deepcopy: StrategySpec은 non-frozen dataclass에 list/dict 필드(flags/
+        # weights)를 갖고 있어, 원본을 그대로 넘기면 카탈로그에서 실험 삼아
+        # spec.flags.append(...) 했을 때 실제 운용 중인 STRATEGIES 원본까지
+        # 조용히 오염된다(2026-08-22 adversarial review 발견).
+        ref=copy.deepcopy(_spec),
     )
 
 # quant 개별 기술조건 (analysis/backtest/quant_signals.py::ENTRY_CONDITIONS)
@@ -73,7 +78,6 @@ for _name, _cond in _QUANT_ENTRY_CONDITIONS.items():
         desc=_QUANT_ENTRY_DESC.get(_name, ""),
         ref=_cond,
     )
-del _name, _spec, _cond
 
 
 # ──────────────────────────────────────────────────────────────
@@ -86,6 +90,11 @@ del _name, _spec, _cond
 #   qvm_df = compute_qvm_score(ratios_df, momentum_df, factors=<factors>)
 #   universe = screen_qvm_top_pct(qvm_df, top_pct=<top_pct>)
 #   (mktcap_restrict=True면 시총상위200으로 추가 교집합 — run_quant_qvm_backtest.py 참고)
+#
+# 아래 factors/top_pct/mktcap_restrict 값은 scripts/run_quant_qvm_backtest.py의
+# build_variants()에서 수동으로 옮겨 적은 값이다 — 동기화를 강제하는 테스트는
+# 없으므로, 그 스크립트의 그리드가 바뀌면 여기 값도 함께 갱신해야 한다
+# (2026-08-22 maintainability review 발견, exit 쪽과 동일한 리스크).
 # ──────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
@@ -160,9 +169,12 @@ for _name, _params in _SPLIT_EXIT_PARAMS.items():
         name=_name, kind="exit",
         source="analysis/backtest/config.py + analysis/backtest/exit_models.py::_compute_exit_logic",
         desc=f"분할청산(TP1 {_params['tp1_pct']*100:.0f}%/{_params['tp1_ratio']*100:.0f}% + 트레일 {_params['trail_pct']*100:.0f}% + 손절 {_params['hard_stop_pct']*100:.0f}%)",
-        ref=_params,
+        # dict() 복사: _params는 config.py의 OPTIMAL_EXIT_PARAMS* 원본 dict 그
+        # 자체 — engine.py가 실제 운용에 쓰는 것과 동일 객체라, 카탈로그에서
+        # 실험 삼아 ref['trail_pct'] = ... 하면 운용 파라미터까지 조용히
+        # 바뀐다(2026-08-22 adversarial review 발견). 얕은 복사로 충분(전부 스칼라).
+        ref=dict(_params),
     )
-del _name, _params
 
 # quant 자기완결 청산(RSI 익절/MA20이탈/목표가/손절) — analysis/backtest/
 # quant_signals.py::_scan_exit가 아래 kwargs를 그대로 받는다. 세 변형은
