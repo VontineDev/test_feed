@@ -16,6 +16,7 @@ from analysis.backtest.config import (
 )
 from core.db import load_chart_signals_latest
 from data.kiwoom_paper_trader import (
+    ACTIVE_MODELS,
     MODEL_CONFIG,
     get_open_positions,
     update_to_closed,
@@ -394,6 +395,15 @@ async def paper_eod_sampler_job(db_pool, paper_trader) -> None:
     seed_base = int(today.strftime("%Y%m%d"))
 
     for _model, _signals, _params in model_queue:
+        if _model not in ACTIVE_MODELS:
+            # 자본배분 대상(ACTIVE_MODELS) 밖 모델 — 예: kosdaq. 여기서 걸러야
+            # paper_open_entry_job에서 영원히 pending으로 남는 후보가 애초에
+            # 생기지 않는다 (2026-08-22 code-review 발견: 144/145번 pending이
+            # 이 가드 부재로 8/20·8/21에 각각 생성돼 계속 스킵되고 있었음).
+            if _signals:
+                logger.info("[paper-sampler] [%s] 자본배분 대상 아님 — %d건 후보 스킵",
+                            _model, len(_signals))
+            continue
         if not _signals:
             continue
         _cfg       = MODEL_CONFIG.get(_model, {"max_slots": 10})
@@ -482,6 +492,21 @@ async def paper_open_entry_job(db_pool, paper_trader) -> None:
         _model  = _pos["model"]
         _pos_id = _pos["id"]
 
+        if _model not in _slot_krw:
+            # ACTIVE_MODELS(자본배분 대상)에 없는 모델 — 예: kosdaq은 신호 생성
+            # 버그로 후보가 없다는 전제하에 제외돼 있었으나(2026-07-29), 그 전제가
+            # 깨지고 후보가 들어오면 예전엔 10,000,000원 기본값이 적용돼 다른
+            # 모델 슬롯(수십만원)의 10배 이상 금액으로 진입하는 버그가 있었다
+            # (2026-08-20 발견). ACTIVE_MODELS 밖 모델은 자금 배정이 없다는 뜻이므로
+            # 스킵하고 pending 유지 — 다음 실행에서 재시도(가격조회 실패 스킵과 동일 패턴).
+            # _slot_krw만으로 판별 가능하므로 가격 조회(0.5초 딜레이 + 실 API 호출)보다
+            # 먼저 체크해 불필요한 API 소모를 막는다(2026-08-22 code-review 발견).
+            logger.warning(
+                "[paper-entry] %s 모델 '%s'는 자본배분 대상(ACTIVE_MODELS) 아님 — 스킵",
+                _ticker, _model,
+            )
+            continue
+
         # 시가 조회 (ka10001 open_pric, 실 API) — 종목 간 0.5초 딜레이로 rate limit 방지
         await asyncio.sleep(0.5)
         _open_px = await _loop.run_in_executor(None, paper_trader.get_open_price, _ticker)
@@ -491,7 +516,7 @@ async def paper_open_entry_job(db_pool, paper_trader) -> None:
             logger.warning("[paper-entry] %s 가격 조회 실패 — 스킵", _ticker)
             continue
 
-        _slot_amount = _slot_krw.get(_model, 10_000_000)
+        _slot_amount = _slot_krw[_model]
         _qty = _qty_from_price(_slot_amount, _open_px)
         if _qty <= 0:
             logger.warning("[paper-entry] %s qty=0 (price=%d) — 스킵", _ticker, _open_px)

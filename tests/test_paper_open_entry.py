@@ -86,3 +86,26 @@ async def test_confirmed_fill_updates_to_open_with_real_qty():
     mock_open.assert_called_once()
     call_args = mock_open.call_args[0]
     assert call_args[3] == 50
+
+
+@pytest.mark.asyncio
+async def test_model_outside_active_models_skips_before_price_fetch():
+    """ACTIVE_MODELS 밖 모델(예: kosdaq)은 가격 조회(0.5초 딜레이 + 실 API 호출)
+    전에 걸러야 한다 — 매번 스킵될 걸 알면서 API를 낭비하지 않도록
+    (2026-08-22 code-review 발견)."""
+    from jobs.paper_jobs import paper_open_entry_job
+
+    trader = _trader()
+    with (
+        patch("jobs.paper_jobs.get_pending_positions",
+              AsyncMock(return_value=[_pending(1, ticker="294570.KQ", model="kosdaq")])),
+        patch("jobs.paper_jobs.compute_slot_krw", return_value={"stage": 10_000_000}),
+        patch("jobs.paper_jobs.deployable_capital", return_value=100_000_000),
+        patch("jobs.paper_jobs.update_to_open", AsyncMock()),
+        patch("jobs.paper_jobs.update_to_closed", AsyncMock()),
+        patch("jobs.paper_jobs._post_message", AsyncMock()),
+    ):
+        await paper_open_entry_job(MagicMock(), trader)
+
+    trader.get_open_price.assert_not_called()
+    trader.get_current_price.assert_not_called()
