@@ -452,7 +452,8 @@ async def paper_eod_sampler_job(db_pool, paper_trader) -> None:
         try:
             _msg = (
                 f"모의투자 EOD 샘플링 ({today})\n"
-                f"Stage KOSPI {len(stage_kospi)}건 / KOSDAQ {len(stage_kosdaq)}건 / "
+                f"Stage KOSPI {len(stage_kospi)}건 / KOSDAQ {len(stage_kosdaq)}건"
+                f"{' (자본배분 대상 아님 — 전부 스킵)' if stage_kosdaq else ''} / "
                 f"Cross {len(cross_signals)}건 / Ichimoku {len(ichi_signals)}건\n"
                 f"→ pending 삽입: {total_inserted}건"
             )
@@ -487,6 +488,8 @@ async def paper_open_entry_job(db_pool, paper_trader) -> None:
     logger.info("[paper-entry] %d건 pending → 매수주문 시작 (배포가능자본=%.0f, 기투자=%.0f)",
                 len(_pending), _deployable, _invested)
 
+    _inactive_model_skips: dict[str, int] = defaultdict(int)  # 로그 스팸 방지용 집계
+
     for _pos in _pending:
         _ticker = _pos["ticker"]
         _model  = _pos["model"]
@@ -501,10 +504,11 @@ async def paper_open_entry_job(db_pool, paper_trader) -> None:
             # 스킵하고 pending 유지 — 다음 실행에서 재시도(가격조회 실패 스킵과 동일 패턴).
             # _slot_krw만으로 판별 가능하므로 가격 조회(0.5초 딜레이 + 실 API 호출)보다
             # 먼저 체크해 불필요한 API 소모를 막는다(2026-08-22 code-review 발견).
-            logger.warning(
-                "[paper-entry] %s 모델 '%s'는 자본배분 대상(ACTIVE_MODELS) 아님 — 스킵",
-                _ticker, _model,
-            )
+            # 건별 warning 대신 모델별로 집계해 루프 종료 후 한 번만 남긴다 —
+            # 이미 쌓인 pending이 매 실행마다 같은 경고를 반복 찍어 로그를
+            # 잠식하는 걸 막기 위함(2026-08-22 adversarial review 발견).
+            _inactive_model_skips[_model] += 1
+            logger.debug("[paper-entry] %s 모델 '%s'는 자본배분 대상 아님 — 스킵", _ticker, _model)
             continue
 
         # 시가 조회 (ka10001 open_pric, 실 API) — 종목 간 0.5초 딜레이로 rate limit 방지
@@ -601,5 +605,13 @@ async def paper_open_entry_job(db_pool, paper_trader) -> None:
                         _ticker, _filled, _open_px, _ord_no)
         except Exception as _e:
             logger.warning("[paper-entry] %s DB 업데이트 실패: %s", _ticker, _e)
+
+    if _inactive_model_skips:
+        _summary = ", ".join(f"{m}={n}건" for m, n in _inactive_model_skips.items())
+        logger.warning(
+            "[paper-entry] 자본배분 대상(ACTIVE_MODELS) 아닌 모델 pending 스킵: %s "
+            "(전부 다음 실행에서 재시도 — 계속 반복되면 수동 확인 필요)",
+            _summary,
+        )
 
     logger.info("[paper-entry] 완료")

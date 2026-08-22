@@ -143,3 +143,56 @@ async def test_kosdaq_model_skipped_no_pending_created():
     # 검증되는 건 아니다.
     slot_count_mock.assert_not_called()
     held_tickers_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_telegram_summary_notes_kosdaq_is_skipped_when_present():
+    """kosdaq 신호가 있으면(스킵되더라도) 텔레그램 요약에 "자본배분 대상 아님"
+    문구가 붙는다 — 그냥 개수만 보여주면 마치 kosdaq도 진입 후보에 포함된
+    것처럼 오해할 수 있음(2026-08-22 adversarial review 발견)."""
+    from jobs.paper_jobs import paper_eod_sampler_job
+
+    pool, _conn = _make_pool([_row("241710.KQ"), _row("999999.KS")])
+    trader = MagicMock()
+
+    post_message_mock = AsyncMock()
+    with (
+        patch("jobs.paper_jobs.load_chart_signals_latest",
+              AsyncMock(return_value=("2026-W33", []))),
+        patch("jobs.paper_jobs.get_open_slot_count", AsyncMock(return_value=0)),
+        patch("jobs.paper_jobs.get_open_or_pending_tickers", AsyncMock(return_value=set())),
+        patch("jobs.paper_jobs.insert_pending", AsyncMock(return_value=1)),
+        patch("jobs.paper_jobs._post_message", post_message_mock),
+    ):
+        await paper_eod_sampler_job(pool, trader)
+
+    post_message_mock.assert_called_once()
+    sent_msg = post_message_mock.call_args[0][3]
+    assert "KOSDAQ 1건" in sent_msg
+    assert "자본배분 대상 아님" in sent_msg
+    assert "pending 삽입: 1건" in sent_msg  # 999999.KS(stage)만 실제로 삽입됨
+
+
+@pytest.mark.asyncio
+async def test_telegram_summary_omits_kosdaq_note_when_no_kosdaq_signals():
+    """kosdaq 신호 자체가 없으면(0건) "자본배분 대상 아님" 문구를 굳이 붙이지
+    않는다 — 매번 뜨는 문구는 신호가 아니라 잡음이 된다."""
+    from jobs.paper_jobs import paper_eod_sampler_job
+
+    pool, _conn = _make_pool([_row("999999.KS")])
+    trader = MagicMock()
+
+    post_message_mock = AsyncMock()
+    with (
+        patch("jobs.paper_jobs.load_chart_signals_latest",
+              AsyncMock(return_value=("2026-W33", []))),
+        patch("jobs.paper_jobs.get_open_slot_count", AsyncMock(return_value=0)),
+        patch("jobs.paper_jobs.get_open_or_pending_tickers", AsyncMock(return_value=set())),
+        patch("jobs.paper_jobs.insert_pending", AsyncMock(return_value=1)),
+        patch("jobs.paper_jobs._post_message", post_message_mock),
+    ):
+        await paper_eod_sampler_job(pool, trader)
+
+    post_message_mock.assert_called_once()
+    sent_msg = post_message_mock.call_args[0][3]
+    assert "자본배분 대상 아님" not in sent_msg

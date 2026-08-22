@@ -144,3 +144,30 @@ async def test_active_model_still_processed_after_inactive_model_skipped():
 
     trader.get_open_price.assert_called_once_with("005930.KS")
     mock_open.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_inactive_model_skips_are_aggregated_not_logged_per_row(caplog):
+    """ACTIVE_MODELS 밖 모델의 pending이 여러 건이어도 건별 warning이 아니라
+    루프 종료 후 집계된 warning 1건만 남긴다 — 이미 쌓인 pending이 매 실행마다
+    반복 경고로 로그를 잠식하지 않도록(2026-08-22 adversarial review 발견)."""
+    from jobs.paper_jobs import paper_open_entry_job
+
+    trader = _trader()
+    with (
+        patch("jobs.paper_jobs.get_pending_positions", AsyncMock(return_value=[
+            _pending(1, ticker="294570.KQ", model="kosdaq"),
+            _pending(2, ticker="070300.KQ", model="kosdaq"),
+        ])),
+        patch("jobs.paper_jobs.compute_slot_krw", return_value={"stage": 10_000_000}),
+        patch("jobs.paper_jobs.deployable_capital", return_value=100_000_000),
+        patch("jobs.paper_jobs.update_to_open", AsyncMock()),
+        patch("jobs.paper_jobs.update_to_closed", AsyncMock()),
+        patch("jobs.paper_jobs._post_message", AsyncMock()),
+        caplog.at_level("WARNING", logger="jobs.paper_jobs"),
+    ):
+        await paper_open_entry_job(MagicMock(), trader)
+
+    skip_warnings = [r for r in caplog.records if "자본배분 대상" in r.message]
+    assert len(skip_warnings) == 1
+    assert "kosdaq=2건" in skip_warnings[0].message
