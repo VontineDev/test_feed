@@ -541,6 +541,45 @@ async def get_pending_positions(pool) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# 신호일로부터 이 기간(달력일 기준)이 지나도 여전히 pending이면 status='held'로
+# 전환 — 위 docstring이 설명하는 "오래 방치 → held" 정책이 실제로는 구현돼
+# 있지 않았다(2026-08-22 adversarial review 발견: kosdaq 144/145번 pending이
+# 이 정책 부재로 매일 스킵만 되며 무한히 쌓이고 있었음, 당시엔 수동 SQL로
+# 처리). 5일: 진입 job이 매일 재시도하므로 주말 1회를 포함해 통상적인 일시적
+# 실패(가격조회 실패·배포가능자본 초과 등)가 자연 해소될 시간은 주면서도,
+# 한 주 이상 방치되면 "신호 자체가 낡았다"고 보고 사람이 재검토하게 한다.
+STALE_PENDING_MAX_AGE_DAYS = 5
+
+
+async def mark_stale_pending_as_held(pool, max_age_days: int = STALE_PENDING_MAX_AGE_DAYS) -> int:
+    """signal_date가 max_age_days보다 오래된 pending 포지션을 held로 전환.
+
+    held는 get_pending_positions()/get_open_slot_count()/get_open_or_pending_tickers()
+    조회에서 전부 제외되므로(status IN ('pending')/('open','pending') 조건),
+    슬롯도 다시 열리고 같은 티커에 새 신호가 떠도 중복 진입 방지 로직에
+    걸리지 않는다 — 완전히 손을 뗀 상태가 되므로 재검토 후 수동으로 'pending'
+    복귀 필요. 반환: held로 전환된 건수.
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            UPDATE paper_positions
+            SET status='held'
+            WHERE status='pending'
+              AND signal_date < CURRENT_DATE - $1::int
+            RETURNING id, ticker, model, signal_date
+            """,
+            max_age_days,
+        )
+    if rows:
+        logger.warning(
+            "[paper] 신호일로부터 %d일 초과 pending %d건 held로 전환 (수동 재검토 필요): %s",
+            max_age_days, len(rows),
+            ", ".join(f"{r['ticker']}({r['model']}, {r['signal_date']})" for r in rows),
+        )
+    return len(rows)
+
+
 async def update_to_open(
     pool,
     pos_id: int,

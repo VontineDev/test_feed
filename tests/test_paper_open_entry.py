@@ -47,6 +47,7 @@ async def test_unconfirmed_fill_defers_to_open_qty_zero_instead_of_closing():
     mock_open = AsyncMock()
     mock_closed = AsyncMock()
     with (
+        patch("jobs.paper_jobs.mark_stale_pending_as_held", AsyncMock(return_value=0)),
         patch("jobs.paper_jobs.get_pending_positions", AsyncMock(return_value=[_pending(1)])),
         patch("jobs.paper_jobs.compute_slot_krw", return_value={"stage": 10_000_000}),
         patch("jobs.paper_jobs.deployable_capital", return_value=100_000_000),
@@ -73,6 +74,7 @@ async def test_confirmed_fill_updates_to_open_with_real_qty():
     mock_open = AsyncMock()
     mock_closed = AsyncMock()
     with (
+        patch("jobs.paper_jobs.mark_stale_pending_as_held", AsyncMock(return_value=0)),
         patch("jobs.paper_jobs.get_pending_positions", AsyncMock(return_value=[_pending(1)])),
         patch("jobs.paper_jobs.compute_slot_krw", return_value={"stage": 10_000_000}),
         patch("jobs.paper_jobs.deployable_capital", return_value=100_000_000),
@@ -99,6 +101,7 @@ async def test_model_outside_active_models_skips_before_price_fetch():
     mock_open = AsyncMock()
     mock_closed = AsyncMock()
     with (
+        patch("jobs.paper_jobs.mark_stale_pending_as_held", AsyncMock(return_value=0)),
         patch("jobs.paper_jobs.get_pending_positions",
               AsyncMock(return_value=[_pending(1, ticker="294570.KQ", model="kosdaq")])),
         patch("jobs.paper_jobs.compute_slot_krw", return_value={"stage": 10_000_000}),
@@ -130,6 +133,7 @@ async def test_active_model_still_processed_after_inactive_model_skipped():
     trader = _trader()
     mock_open = AsyncMock()
     with (
+        patch("jobs.paper_jobs.mark_stale_pending_as_held", AsyncMock(return_value=0)),
         patch("jobs.paper_jobs.get_pending_positions", AsyncMock(return_value=[
             _pending(1, ticker="294570.KQ", model="kosdaq"),
             _pending(2, ticker="005930.KS", model="stage"),
@@ -155,6 +159,7 @@ async def test_inactive_model_skips_are_aggregated_not_logged_per_row(caplog):
 
     trader = _trader()
     with (
+        patch("jobs.paper_jobs.mark_stale_pending_as_held", AsyncMock(return_value=0)),
         patch("jobs.paper_jobs.get_pending_positions", AsyncMock(return_value=[
             _pending(1, ticker="294570.KQ", model="kosdaq"),
             _pending(2, ticker="070300.KQ", model="kosdaq"),
@@ -171,3 +176,31 @@ async def test_inactive_model_skips_are_aggregated_not_logged_per_row(caplog):
     skip_warnings = [r for r in caplog.records if "자본배분 대상" in r.message]
     assert len(skip_warnings) == 1
     assert "kosdaq=2건" in skip_warnings[0].message
+
+
+@pytest.mark.asyncio
+async def test_stale_pending_marked_held_before_retry_and_excluded_from_processing():
+    """오래 방치된 pending은 이번 실행에서 재시도되기 전에 held로 먼저 걷어내진다
+    — mark_stale_pending_as_held가 실제로 호출되고, get_pending_positions가
+    반환한 이 항목이 아예 처리 루프에 들어가지 않는지 확인
+    (2026-08-23: kosdaq 144/145번 사례처럼 무한 재시도되던 pending을 자동으로
+    이관하는 정책을 실제 구현)."""
+    from jobs.paper_jobs import paper_open_entry_job
+
+    trader = _trader()
+    mark_held_mock = AsyncMock(return_value=1)
+    with (
+        patch("jobs.paper_jobs.mark_stale_pending_as_held", mark_held_mock),
+        # get_pending_positions는 실제 DB라면 위 held 전환 이후를 반영해 빈
+        # 목록을 반환할 것 — 여기서는 그 시퀀스를 직접 흉내낸다.
+        patch("jobs.paper_jobs.get_pending_positions", AsyncMock(return_value=[])),
+        patch("jobs.paper_jobs.compute_slot_krw", return_value={"stage": 10_000_000}),
+        patch("jobs.paper_jobs.deployable_capital", return_value=100_000_000),
+        patch("jobs.paper_jobs.update_to_open", AsyncMock()),
+        patch("jobs.paper_jobs.update_to_closed", AsyncMock()),
+        patch("jobs.paper_jobs._post_message", AsyncMock()),
+    ):
+        await paper_open_entry_job(MagicMock(), trader)
+
+    mark_held_mock.assert_called_once()
+    trader.get_open_price.assert_not_called()
