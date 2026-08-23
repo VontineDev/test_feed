@@ -11,6 +11,6 @@ for /f "usebackq tokens=1,* delims==" %%a in (".env") do (
 )
 
 :restart
-"C:\Users\1\test_feed\venv\Scripts\python.exe" "C:\Users\1\test_feed\run_scheduler.py" --interval 10 --no-summary
+"C:\Users\1\test_feed\venv\Scripts\python.exe" "C:\Users\1\test_feed\run_scheduler.py" --interval 10
 timeout /t 5 /nobreak >nul
 goto restart
