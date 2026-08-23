@@ -104,3 +104,24 @@ OPTIMAL_EXIT_PARAMS_ICHIMOKU: dict = {
     "hard_stop_pct":   0.10,
     "use_stage3_peak": False,
 }
+
+# ── quant 자기완결 청산(RSI 익절/MA20이탈/목표가/손절) 3변형 ──────────────
+# analysis/backtest/quant_signals.py::_scan_exit가 이 kwargs를 그대로 받는다.
+# 원래 scripts/run_cross_combo_backtest.py에만 있었는데 analysis/backtest/
+# model_registry.py가 손으로 옮겨 적으면서 두 값이 따로 놀 위험이 생겼음
+# (2026-08-22 review 발견) — 여기로 옮겨 양쪽 다 이 상수를 가져다 쓰게 통일
+# (2026-08-23).
+QUANT_EXIT_VARIANTS: dict[str, dict] = {
+    "quant_original": dict(     # 2안 문서 원안: RSI70 익절 / -7% 손절
+        hard_stop_pct=0.07, target_pct=None, use_ma20_exit=False,
+        use_rsi70_exit=True, rsi_overbought=70.0,
+    ),
+    "quant_optimized": dict(    # 2안 최적화(5단계 그리드서치 1위): RSI80 익절 / -12% 손절
+        hard_stop_pct=0.12, target_pct=None, use_ma20_exit=False,
+        use_rsi70_exit=True, rsi_overbought=80.0,
+    ),
+    "quant_scenario1": dict(    # 1안 문서 원안: +20%익절 / -5%손절 / MA20 하향이탈
+        hard_stop_pct=0.05, target_pct=0.20, use_ma20_exit=True,
+        use_rsi70_exit=False,
+    ),
+}

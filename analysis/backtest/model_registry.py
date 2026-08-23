@@ -26,6 +26,7 @@ from typing import Any, Optional
 
 from analysis.backtest import config as _config
 from analysis.backtest.quant_signals import ENTRY_CONDITIONS as _QUANT_ENTRY_CONDITIONS
+from analysis.fundamentals import QVM_UNIVERSE_VARIANTS as _QVM_UNIVERSE_VARIANTS
 from analysis.strategy_compose import STRATEGIES as _COMPOSE_STRATEGIES
 
 
@@ -91,10 +92,9 @@ for _name, _cond in _QUANT_ENTRY_CONDITIONS.items():
 #   universe = screen_qvm_top_pct(qvm_df, top_pct=<top_pct>)
 #   (mktcap_restrict=True면 시총상위200으로 추가 교집합 — run_quant_qvm_backtest.py 참고)
 #
-# 아래 factors/top_pct/mktcap_restrict 값은 scripts/run_quant_qvm_backtest.py의
-# build_variants()에서 수동으로 옮겨 적은 값이다 — 동기화를 강제하는 테스트는
-# 없으므로, 그 스크립트의 그리드가 바뀌면 여기 값도 함께 갱신해야 한다
-# (2026-08-22 maintainability review 발견, exit 쪽과 동일한 리스크).
+# QVM 5개 변형의 factors/top_pct/mktcap_restrict는 analysis/fundamentals.py::
+# QVM_UNIVERSE_VARIANTS가 단일 출처(2026-08-23, scripts/run_quant_qvm_backtest.py
+# 쪽도 같은 상수를 가져다 씀 — 손으로 옮겨 적어 값이 따로 놀던 문제 해소).
 # ──────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
@@ -104,48 +104,40 @@ class UniverseParams:
     mktcap_restrict: bool
 
 
-UNIVERSE_COMPONENTS: dict[str, Component] = {
-    "QVM_top10pct_mktcap200": Component(
-        name="QVM_top10pct_mktcap200", kind="universe",
-        source="scripts/run_quant_qvm_backtest.py (QVM_top10pct_mktcap200)",
-        desc="퀄리티+밸류+모멘텀 3팩터, 시총200∩상위10% (8종목) — 승률54.3%/평균+6.8%/MDD-16.5%, 신호35",
-        ref=UniverseParams(factors=("quality", "value", "momentum"), top_pct=0.10, mktcap_restrict=True),
-    ),
-    "QVM_top20pct_mktcap200": Component(
-        name="QVM_top20pct_mktcap200", kind="universe",
-        source="scripts/run_quant_qvm_backtest.py (QVM_top20pct_mktcap200)",
-        desc="퀄리티+밸류+모멘텀 3팩터, 시총200∩상위20% (15종목) — 승률57.4%/평균+8.5%/MDD-12.6%, 신호47 [비과최적화 조합 중 최고]",
-        ref=UniverseParams(factors=("quality", "value", "momentum"), top_pct=0.20, mktcap_restrict=True),
-    ),
-    "QVM_top30pct_mktcap200": Component(
-        name="QVM_top30pct_mktcap200", kind="universe",
-        source="scripts/run_quant_qvm_backtest.py (QVM_top30pct_mktcap200)",
-        desc="퀄리티+밸류+모멘텀 3팩터, 시총200∩상위30% (27종목) — 승률58.6%/평균+8.4%/MDD-18.4%, 신호70",
-        ref=UniverseParams(factors=("quality", "value", "momentum"), top_pct=0.30, mktcap_restrict=True),
-    ),
-    "QVM_top10pct_all": Component(
-        name="QVM_top10pct_all", kind="universe",
-        source="scripts/run_quant_qvm_backtest.py (QVM_top10pct_all)",
-        desc="3팩터, 시총제한없음∩상위10% (237종목) — 승률33.1%/평균+20.2%, 소수 대박종목 의존 구조(액면신뢰 금지)",
-        ref=UniverseParams(factors=("quality", "value", "momentum"), top_pct=0.10, mktcap_restrict=False),
-    ),
-    "QVM_top20pct_all": Component(
-        name="QVM_top20pct_all", kind="universe",
-        source="scripts/run_quant_qvm_backtest.py (QVM_top20pct_all)",
-        desc="3팩터, 시총제한없음∩상위20% (475종목) — 승률35.8%/평균+13.2%, 위와 동일 패턴",
-        ref=UniverseParams(factors=("quality", "value", "momentum"), top_pct=0.20, mktcap_restrict=False),
-    ),
-    "MOMENTUM_top20pct_mktcap200": Component(
-        name="MOMENTUM_top20pct_mktcap200", kind="universe",
-        source="scripts/run_quant_qvm_factor_ablation.py (momentum 단독, 시총200∩상위20% 고정)",
-        desc=(
-            "모멘텀(6개월수익률) 단독, 시총200∩상위20% (51종목) — 승률64.1%/평균+11.4%/"
-            "MDD-12.6%, 신호103 [퀄리티+밸류를 섞으면 오히려 희석됨, 4-2 팩터분해 결론]. "
-            "run_cross_combo_backtest.py에서 'MOMENTUM_TOP20'으로 참조."
-        ),
-        ref=UniverseParams(factors=("momentum",), top_pct=0.20, mktcap_restrict=True),
-    ),
+_QVM_UNIVERSE_DESC = {
+    "QVM_top10pct_mktcap200": "퀄리티+밸류+모멘텀 3팩터, 시총200∩상위10% (8종목) — 승률54.3%/평균+6.8%/MDD-16.5%, 신호35",
+    "QVM_top20pct_mktcap200": "퀄리티+밸류+모멘텀 3팩터, 시총200∩상위20% (15종목) — 승률57.4%/평균+8.5%/MDD-12.6%, 신호47 [비과최적화 조합 중 최고]",
+    "QVM_top30pct_mktcap200": "퀄리티+밸류+모멘텀 3팩터, 시총200∩상위30% (27종목) — 승률58.6%/평균+8.4%/MDD-18.4%, 신호70",
+    "QVM_top10pct_all": "3팩터, 시총제한없음∩상위10% (237종목) — 승률33.1%/평균+20.2%, 소수 대박종목 의존 구조(액면신뢰 금지)",
+    "QVM_top20pct_all": "3팩터, 시총제한없음∩상위20% (475종목) — 승률35.8%/평균+13.2%, 위와 동일 패턴",
 }
+
+UNIVERSE_COMPONENTS: dict[str, Component] = {}
+for _v in _QVM_UNIVERSE_VARIANTS:
+    UNIVERSE_COMPONENTS[_v["name"]] = Component(
+        name=_v["name"], kind="universe",
+        source="analysis/fundamentals.py::QVM_UNIVERSE_VARIANTS",
+        desc=_QVM_UNIVERSE_DESC.get(_v["name"]) or str(_v.get("note", "")),
+        ref=UniverseParams(
+            factors=("quality", "value", "momentum"),
+            top_pct=_v["top_pct"], mktcap_restrict=_v["mktcap_restrict"],
+        ),
+    )
+
+# 모멘텀 단독 유니버스는 QVM_UNIVERSE_VARIANTS에 없는 별도 발견(4-2 팩터분해
+# 결론) — build_factor_combos()의 itertools 조합 중 하나를 top_pct=0.20으로
+# 고른 것이라 "그리드에서 손으로 옮겨 적은 값"이 애초에 존재하지 않는다
+# (재현: scripts/run_quant_qvm_factor_ablation.py --top-pct 0.20).
+UNIVERSE_COMPONENTS["MOMENTUM_top20pct_mktcap200"] = Component(
+    name="MOMENTUM_top20pct_mktcap200", kind="universe",
+    source="scripts/run_quant_qvm_factor_ablation.py --top-pct 0.20 (momentum 단독)",
+    desc=(
+        "모멘텀(6개월수익률) 단독, 시총200∩상위20% (51종목) — 승률64.1%/평균+11.4%/"
+        "MDD-12.6%, 신호103 [퀄리티+밸류를 섞으면 오히려 희석됨, 4-2 팩터분해 결론]. "
+        "run_cross_combo_backtest.py에서 'MOMENTUM_TOP20'으로 참조."
+    ),
+    ref=UniverseParams(factors=("momentum",), top_pct=0.20, mktcap_restrict=True),
+)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -177,24 +169,11 @@ for _name, _params in _SPLIT_EXIT_PARAMS.items():
     )
 
 # quant 자기완결 청산(RSI 익절/MA20이탈/목표가/손절) — analysis/backtest/
-# quant_signals.py::_scan_exit가 아래 kwargs를 그대로 받는다. 세 변형은
-# scripts/run_cross_combo_backtest.py::QUANT_EXIT_VARIANTS와 동일 — 거기서
-# 정의된 걸 그대로 복제(스크립트를 모듈로 import하면 logging.basicConfig 등
-# 부작용이 있어 값만 재선언).
-_QUANT_EXIT_VARIANTS: dict[str, dict] = {
-    "quant_original": dict(     # 2안 문서 원안: RSI70 익절 / -7% 손절
-        hard_stop_pct=0.07, target_pct=None, use_ma20_exit=False,
-        use_rsi70_exit=True, rsi_overbought=70.0,
-    ),
-    "quant_optimized": dict(    # 2안 최적화(5단계 그리드서치 1위): RSI80 익절 / -12% 손절
-        hard_stop_pct=0.12, target_pct=None, use_ma20_exit=False,
-        use_rsi70_exit=True, rsi_overbought=80.0,
-    ),
-    "quant_scenario1": dict(    # 1안 문서 원안: +20%익절 / -5%손절 / MA20 하향이탈
-        hard_stop_pct=0.05, target_pct=0.20, use_ma20_exit=True,
-        use_rsi70_exit=False,
-    ),
-}
+# quant_signals.py::_scan_exit가 아래 kwargs를 그대로 받는다. 정의는
+# analysis/backtest/config.py::QUANT_EXIT_VARIANTS가 단일 출처(2026-08-23,
+# scripts/run_cross_combo_backtest.py도 같은 상수를 가져다 씀 — 예전엔 여기서
+# 손으로 복제하고 있었음).
+_QUANT_EXIT_VARIANTS: dict[str, dict] = _config.QUANT_EXIT_VARIANTS
 _QUANT_EXIT_DESC = {
     "quant_original": "2안 문서원안 청산 — SCENARIO2와 짝지으면 승률43.0~43.5%/평균+2.9~4.8%",
     "quant_optimized": "2안 최적화 청산(5단계 최적) — SCENARIO2와 짝지으면 승률50.4~55.2%/평균+9.47~16.82% (과최적화 위험, walk-forward에서 8폴드 중 5개 test 마이너스 전환)",

@@ -92,19 +92,14 @@ def _run_scenario2_with_mdd(
 
 def build_variants() -> list[dict]:
     """QVM 유니버스 배리에이션 정의(순수 함수). mktcap_restrict=True면 시총상위200과
-    교집합(2안 원안 유니버스 규모와 맞춤), False면 전체 시장 QVM 상위 N%."""
-    return [
-        {"name": "QVM_top10pct_mktcap200", "top_pct": 0.10, "mktcap_restrict": True,
-         "note": "시총상위200 ∩ QVM종합점수 상위10%"},
-        {"name": "QVM_top20pct_mktcap200", "top_pct": 0.20, "mktcap_restrict": True,
-         "note": "시총상위200 ∩ QVM종합점수 상위20%"},
-        {"name": "QVM_top30pct_mktcap200", "top_pct": 0.30, "mktcap_restrict": True,
-         "note": "시총상위200 ∩ QVM종합점수 상위30%"},
-        {"name": "QVM_top10pct_all", "top_pct": 0.10, "mktcap_restrict": False,
-         "note": "전체시장 QVM종합점수 상위10%(시총 제한 없음)"},
-        {"name": "QVM_top20pct_all", "top_pct": 0.20, "mktcap_restrict": False,
-         "note": "전체시장 QVM종합점수 상위20%(시총 제한 없음)"},
-    ]
+    교집합(2안 원안 유니버스 규모와 맞춤), False면 전체 시장 QVM 상위 N%.
+
+    실제 정의는 analysis/fundamentals.py::QVM_UNIVERSE_VARIANTS — analysis/backtest/
+    model_registry.py도 같은 상수를 가져다 쓴다(2026-08-23, 손으로 복제해 값이
+    따로 놀던 문제 해소). 리스트를 그대로 반환하면 호출자가 실수로 원본을
+    변형할 수 있어 얕은 복사본을 반환한다."""
+    from analysis.fundamentals import QVM_UNIVERSE_VARIANTS
+    return [dict(v) for v in QVM_UNIVERSE_VARIANTS]
 
 
 def main() -> None:
