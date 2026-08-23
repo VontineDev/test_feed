@@ -21,6 +21,7 @@ from data.kiwoom_paper_trader import (
     get_open_positions,
     update_to_closed,
     get_pending_positions,
+    mark_stale_pending_as_held,
     update_to_open,
     _qty_from_price,
     insert_pending,
@@ -476,6 +477,15 @@ async def paper_open_entry_job(db_pool, paper_trader) -> None:
     누적 반영해, 한 번에 여러 건을 살 때 배포 가능 자본을 넘기지 않도록 한다.
     """
     _loop = asyncio.get_running_loop()
+
+    # 오래 방치된 pending(신호일로부터 STALE_PENDING_MAX_AGE_DAYS 경과)은 이번
+    # 재시도 대상에서 먼저 걷어내 held로 전환 — 안 그러면 가격조회 실패나
+    # ACTIVE_MODELS 제외 같은 사유로 영원히 재시도만 반복되는 pending이 쌓인다
+    # (2026-08-22 adversarial review 발견: kosdaq 144/145번 pending 사례,
+    # 당시엔 수동 SQL로 처리 — 이제 자동화).
+    _n_held = await mark_stale_pending_as_held(db_pool)
+    if _n_held:
+        logger.info("[paper-entry] 신호일 초과 pending %d건 held로 전환", _n_held)
 
     # signal_date 무관하게 미체결 pending 전체 처리 (과거 실패분 포함 재시도)
     _pending = await get_pending_positions(db_pool)
