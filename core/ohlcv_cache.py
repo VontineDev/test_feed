@@ -246,12 +246,29 @@ def batch_fetch_cached(
         return sym, df
 
     if misses:
+        fetched: set[str] = set()
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {executor.submit(_fetch_and_cache, sym): sym for sym in misses}
             for fut in as_completed(futures):
                 sym, df = fut.result()
                 if df is not None:
                     result[sym] = df
+                    fetched.add(sym)
+
+        # 2026-08-10 사고(yfinance rate-limit으로 misses 대다수가 조용히 실패,
+        # 신호가 4~6건까지 무너져도 에러 로그가 전혀 안 남던 건) 재발 방지 —
+        # analysis/backtest/fetch.py::_batch_fetch_ohlcv와 동일한 가드를 실제
+        # 운영 경로(dsn 설정 시 여기가 호출됨, 그쪽은 dsn 미설정 폴백 전용)에도 추가.
+        miss_fail_ratio = 1 - (len(fetched) / len(misses))
+        if miss_fail_ratio >= 0.90:
+            _failed = [sym for sym in misses if sym not in fetched]
+            logger.error(
+                "[cache] yfinance 미스 수집 실패율 %.1f%% (%d/%d건 실패) — 개별종목 "
+                "결측이 아니라 일괄 장애(rate-limit 등)로 의심됨. 결과가 조용히 "
+                "오염될 수 있으니 백테스트 결과를 신뢰하기 전에 확인 필요. "
+                "실패 샘플: %s",
+                miss_fail_ratio * 100, len(_failed), len(misses), _failed[:10],
+            )
 
     return result
 
