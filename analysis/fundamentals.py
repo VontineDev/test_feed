@@ -259,6 +259,26 @@ def _percentile_rank(s: pd.Series, ascending: bool = True) -> pd.Series:
 
 QVM_FACTORS = ("quality", "value", "momentum")
 
+# QVM 유니버스 배리에이션 정의(순수 데이터) — scripts/run_quant_qvm_backtest.py와
+# analysis/backtest/model_registry.py 양쪽에서 참조하는 단일 출처. 원래
+# run_quant_qvm_backtest.py에만 있었는데 model_registry.py가 손으로 옮겨
+# 적으면서 두 값이 따로 놀 위험이 생겼음(2026-08-22 review 발견) — 여기로
+# 옮겨 양쪽 다 이 상수를 가져다 쓰게 통일(2026-08-23).
+# mktcap_restrict=True면 시총상위200과 교집합(2안 원안 유니버스 규모와 맞춤),
+# False면 전체 시장 QVM 상위 N%.
+QVM_UNIVERSE_VARIANTS: list[dict] = [
+    {"name": "QVM_top10pct_mktcap200", "top_pct": 0.10, "mktcap_restrict": True,
+     "note": "시총상위200 ∩ QVM종합점수 상위10%"},
+    {"name": "QVM_top20pct_mktcap200", "top_pct": 0.20, "mktcap_restrict": True,
+     "note": "시총상위200 ∩ QVM종합점수 상위20%"},
+    {"name": "QVM_top30pct_mktcap200", "top_pct": 0.30, "mktcap_restrict": True,
+     "note": "시총상위200 ∩ QVM종합점수 상위30%"},
+    {"name": "QVM_top10pct_all", "top_pct": 0.10, "mktcap_restrict": False,
+     "note": "전체시장 QVM종합점수 상위10%(시총 제한 없음)"},
+    {"name": "QVM_top20pct_all", "top_pct": 0.20, "mktcap_restrict": False,
+     "note": "전체시장 QVM종합점수 상위20%(시총 제한 없음)"},
+]
+
 
 def compute_qvm_score(
     ratios_df: pd.DataFrame,

@@ -81,21 +81,11 @@ QUANT_ENTRY_UNIVERSES = ["SCENARIO2_PER18", "SCENARIO2_PBR"]
 # 추가 — 여기서도 진입만 재사용하고 compose의 검증된 분할청산으로 교체해본다.
 QVM_ENTRY_UNIVERSES = ["QVM_TOP20", "MOMENTUM_TOP20"]
 
-# quant_signals._scan_exit()에 그대로 넘기는 파라미터 (자기완결 RSI/MA20/목표가 청산)
-QUANT_EXIT_VARIANTS: dict[str, dict] = {
-    "quant_original": dict(    # 2안 문서 원안: RSI70 익절 / -7% 손절
-        hard_stop_pct=0.07, target_pct=None, use_ma20_exit=False,
-        use_rsi70_exit=True, rsi_overbought=70.0,
-    ),
-    "quant_optimized": dict(   # 2안 최적화(5단계 그리드서치 1위): RSI80 익절 / -12% 손절
-        hard_stop_pct=0.12, target_pct=None, use_ma20_exit=False,
-        use_rsi70_exit=True, rsi_overbought=80.0,
-    ),
-    "quant_scenario1": dict(   # 1안 문서 원안: +20%익절 / -5%손절 / MA20 하향이탈
-        hard_stop_pct=0.05, target_pct=0.20, use_ma20_exit=True,
-        use_rsi70_exit=False,
-    ),
-}
+# quant_signals._scan_exit()에 그대로 넘기는 파라미터 (자기완결 RSI/MA20/목표가 청산).
+# 정의는 analysis/backtest/config.py::QUANT_EXIT_VARIANTS — analysis/backtest/
+# model_registry.py도 같은 상수를 가져다 쓴다(2026-08-23, 손으로 복제해 값이
+# 따로 놀던 문제 해소).
+from analysis.backtest.config import QUANT_EXIT_VARIANTS  # noqa: E402
 
 # exit_models.py 분할청산 모델(BacktestConfig 필드)에 그대로 넘기는 파라미터
 COMPOSE_EXIT_VARIANTS = ["cross", "score1", "funnel1"]
