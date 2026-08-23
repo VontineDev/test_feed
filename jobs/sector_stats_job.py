@@ -2,7 +2,14 @@
 
 sector_stats_job(db_pool) -> int
   daily_flow + krx_listings JOIN으로 섹터 집계 → sector_daily_stats upsert.
-  당일(trade_date=today) 기준으로 실행. 이미 오늘 row 있으면 갱신.
+  전일 영업일(trade_date=T-1) 기준으로 실행. 이미 해당 날짜 row 있으면 갱신.
+
+  T-1인 이유: daily_flow_sync_job(수급 동기화)이 trade_date를 항상 전일
+  영업일로 저장하는 --incremental 기본 동작이라(jobs/infra_jobs.py 참고),
+  daily_flow에는 "오늘" 날짜 행이 이 잡이 도는 시점(평일 20:30 KST)에
+  존재한 적이 없다. trade_date=today()로 조회하면 항상 0건이라 이 테이블이
+  영구히 비어있었다(2026-08-23 발견 — 2026-08-06 수정은 컬럼명 불일치로
+  인한 쿼리 크래시만 고쳤을 뿐, 이 날짜 불일치는 그대로 남아있었음).
 """
 
 import logging
@@ -10,6 +17,7 @@ from datetime import date
 
 import asyncpg
 
+from core.dates import last_trading_day
 from core.db import upsert_sector_daily_stats
 
 logger = logging.getLogger(__name__)
@@ -18,7 +26,7 @@ logger = logging.getLogger(__name__)
 async def sector_stats_job(db_pool: asyncpg.Pool) -> int:
     """섹터 일별 통계 집계 및 upsert.
 
-    daily_flow(오늘) + krx_listings(sector) + stage_classifications(오늘)를 JOIN.
+    daily_flow(전일)+ krx_listings(sector) + stage_classifications(전일)를 JOIN.
     stage_classifications는 LEFT JOIN으로 미분류 종목도 포함.
     반환: upsert된 섹터 수.
     """
@@ -26,7 +34,11 @@ async def sector_stats_job(db_pool: asyncpg.Pool) -> int:
         logger.warning("[섹터통계] DB 풀 없음 — 스킵")
         return 0
 
-    today = date.today()
+    # daily_flow_sync_job(krx_flow_sync.py --incremental)이 last_trading_day()
+    # 기준으로 trade_date를 저장하므로 여기도 동일 기준으로 맞춘다 — 단순
+    # timedelta(days=1)은 월요일 실행 시 일요일(비거래일)을 가리켜 여전히
+    # 0건이 나옴(2026-08-23 1차 수정 검증 중 발견).
+    today = last_trading_day(date.today())
     logger.info("[섹터통계] 집계 시작 (trade_date=%s)", today)
 
     try:
