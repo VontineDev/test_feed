@@ -37,10 +37,15 @@ def _row(ticker, price=10000.0):
 
 @pytest.mark.asyncio
 async def test_already_held_ticker_excluded_from_new_entry():
-    """모델이 이미 open/pending으로 보유 중인 티커는 재신호가 떠도 다시 진입하지 않는다."""
+    """모델이 이미 open/pending으로 보유 중인 티커는 재신호가 떠도 다시 진입하지 않는다.
+
+    .KS 티커 사용: .KQ는 stage_kosdaq(모델명 'kosdaq')로 분류되는데, kosdaq은
+    ACTIVE_MODELS 밖이라 2026-08-22 가드 이후 후보 단계에서 걸러진다 — 이 테스트가
+    검증하려는 건 held-ticker 중복 방지 로직이므로, ACTIVE_MODELS 안에 있는
+    'stage'(kospi) 모델로 라우팅되는 .KS 티커로 대체."""
     from jobs.paper_jobs import paper_eod_sampler_job
 
-    pool, _conn = _make_pool([_row("241710.KQ"), _row("999999.KQ")])
+    pool, _conn = _make_pool([_row("241710.KS"), _row("999999.KS")])
     trader = MagicMock()
 
     insert_mock = AsyncMock(return_value=1)
@@ -49,15 +54,15 @@ async def test_already_held_ticker_excluded_from_new_entry():
               AsyncMock(return_value=("2026-W33", []))),
         patch("jobs.paper_jobs.get_open_slot_count", AsyncMock(return_value=0)),
         patch("jobs.paper_jobs.get_open_or_pending_tickers",
-              AsyncMock(return_value={"241710.KQ"})),
+              AsyncMock(return_value={"241710.KS"})),
         patch("jobs.paper_jobs.insert_pending", insert_mock),
         patch("jobs.paper_jobs._post_message", AsyncMock()),
     ):
         await paper_eod_sampler_job(pool, trader)
 
     inserted_tickers = {c.kwargs["ticker"] for c in insert_mock.call_args_list}
-    assert "241710.KQ" not in inserted_tickers
-    assert "999999.KQ" in inserted_tickers
+    assert "241710.KS" not in inserted_tickers
+    assert "999999.KS" in inserted_tickers
 
 
 @pytest.mark.asyncio
@@ -65,7 +70,7 @@ async def test_all_signals_already_held_skips_insert_entirely():
     """당일 신호 전부가 이미 보유 중인 티커면 insert_pending을 아예 호출하지 않는다."""
     from jobs.paper_jobs import paper_eod_sampler_job
 
-    pool, _conn = _make_pool([_row("241710.KQ")])
+    pool, _conn = _make_pool([_row("241710.KS")])
     trader = MagicMock()
 
     insert_mock = AsyncMock(return_value=1)
@@ -74,7 +79,7 @@ async def test_all_signals_already_held_skips_insert_entirely():
               AsyncMock(return_value=("2026-W33", []))),
         patch("jobs.paper_jobs.get_open_slot_count", AsyncMock(return_value=0)),
         patch("jobs.paper_jobs.get_open_or_pending_tickers",
-              AsyncMock(return_value={"241710.KQ"})),
+              AsyncMock(return_value={"241710.KS"})),
         patch("jobs.paper_jobs.insert_pending", insert_mock),
         patch("jobs.paper_jobs._post_message", AsyncMock()),
     ):
@@ -88,7 +93,7 @@ async def test_no_held_tickers_inserts_all_within_slot_limit():
     """보유 중인 티커가 없으면(빈 집합) 기존처럼 슬롯 한도까지 정상 삽입된다."""
     from jobs.paper_jobs import paper_eod_sampler_job
 
-    pool, _conn = _make_pool([_row("241710.KQ"), _row("999999.KQ")])
+    pool, _conn = _make_pool([_row("241710.KS"), _row("999999.KS")])
     trader = MagicMock()
 
     insert_mock = AsyncMock(return_value=1)
@@ -104,3 +109,125 @@ async def test_no_held_tickers_inserts_all_within_slot_limit():
         await paper_eod_sampler_job(pool, trader)
 
     assert insert_mock.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_model_outside_active_models_skipped_no_pending_created():
+    """ACTIVE_MODELS 밖 모델은 신호가 있어도 pending을 아예 만들지 않는다.
+
+    2026-08-22 code-review 발견: 이 가드가 없으면 paper_open_entry_job이 매번
+    스킵만 하고 절대 처리되지 않는 pending이 쌓인다 (kosdaq 144/145번 사례,
+    8/20·8/21 생성 후 계속 미처리 — 단, kosdaq 자체는 2026-08-23 investigate로
+    "역대 0건" 전제가 틀렸음이 확인돼 ACTIVE_MODELS에 재편입됨. 가드 로직 자체는
+    "어떤 모델이든 ACTIVE_MODELS 밖이면 스킵"이라는 일반 규칙이므로, 특정
+    모델명에 의존하지 않고 ACTIVE_MODELS를 패치해 검증한다)."""
+    from jobs.paper_jobs import paper_eod_sampler_job
+
+    pool, _conn = _make_pool([_row("241710.KQ")])
+    trader = MagicMock()
+
+    insert_mock = AsyncMock(return_value=1)
+    slot_count_mock = AsyncMock(return_value=0)
+    held_tickers_mock = AsyncMock(return_value=set())
+    with (
+        patch("jobs.paper_jobs.ACTIVE_MODELS", {"stage", "cross", "ichimoku"}),  # kosdaq 제외
+        patch("jobs.paper_jobs.load_chart_signals_latest",
+              AsyncMock(return_value=("2026-W33", []))),
+        patch("jobs.paper_jobs.get_open_slot_count", slot_count_mock),
+        patch("jobs.paper_jobs.get_open_or_pending_tickers", held_tickers_mock),
+        patch("jobs.paper_jobs.insert_pending", insert_mock),
+        patch("jobs.paper_jobs._post_message", AsyncMock()),
+    ):
+        await paper_eod_sampler_job(pool, trader)
+
+    insert_mock.assert_not_called()
+    # 2026-08-22 review 발견: ACTIVE_MODELS 밖 모델은 슬롯 조회/held-ticker
+    # 조회 이전에 걸러져야 한다 — insert만 안 됐다고 효율성 의도까지
+    # 검증되는 건 아니다.
+    slot_count_mock.assert_not_called()
+    held_tickers_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_telegram_summary_notes_when_kosdaq_style_model_is_inactive():
+    """ACTIVE_MODELS 밖 모델의 신호가 있으면(스킵되더라도) 텔레그램 요약에
+    "자본배분 대상 아님" 문구가 붙는다 — 그냥 개수만 보여주면 마치 진입 후보에
+    포함된 것처럼 오해할 수 있음(2026-08-22 adversarial review 발견).
+
+    kosdaq 자체는 2026-08-23 ACTIVE_MODELS에 재편입돼 이 문구가 안 뜨므로,
+    가드 로직 검증을 위해 ACTIVE_MODELS를 패치해 kosdaq이 빠진 상황을 재현한다."""
+    from jobs.paper_jobs import paper_eod_sampler_job
+
+    pool, _conn = _make_pool([_row("241710.KQ"), _row("999999.KS")])
+    trader = MagicMock()
+
+    post_message_mock = AsyncMock()
+    with (
+        patch("jobs.paper_jobs.ACTIVE_MODELS", {"stage", "cross", "ichimoku"}),  # kosdaq 제외
+        patch("jobs.paper_jobs.load_chart_signals_latest",
+              AsyncMock(return_value=("2026-W33", []))),
+        patch("jobs.paper_jobs.get_open_slot_count", AsyncMock(return_value=0)),
+        patch("jobs.paper_jobs.get_open_or_pending_tickers", AsyncMock(return_value=set())),
+        patch("jobs.paper_jobs.insert_pending", AsyncMock(return_value=1)),
+        patch("jobs.paper_jobs._post_message", post_message_mock),
+    ):
+        await paper_eod_sampler_job(pool, trader)
+
+    post_message_mock.assert_called_once()
+    sent_msg = post_message_mock.call_args[0][3]
+    assert "KOSDAQ 1건" in sent_msg
+    assert "자본배분 대상 아님" in sent_msg
+    assert "pending 삽입: 1건" in sent_msg  # 999999.KS(stage)만 실제로 삽입됨
+
+
+@pytest.mark.asyncio
+async def test_telegram_summary_omits_note_when_kosdaq_is_active():
+    """kosdaq이 ACTIVE_MODELS 안에 있는 현재 상태에서는(2026-08-23 재편입),
+    kosdaq 신호가 있어도 "자본배분 대상 아님" 문구를 붙이지 않는다 — 실제로는
+    정상 진입 후보로 처리되는데 스킵된 것처럼 오해하게 만들면 안 된다."""
+    from jobs.paper_jobs import paper_eod_sampler_job
+
+    pool, _conn = _make_pool([_row("241710.KQ"), _row("999999.KS")])
+    trader = MagicMock()
+
+    post_message_mock = AsyncMock()
+    with (
+        patch("jobs.paper_jobs.load_chart_signals_latest",
+              AsyncMock(return_value=("2026-W33", []))),
+        patch("jobs.paper_jobs.get_open_slot_count", AsyncMock(return_value=0)),
+        patch("jobs.paper_jobs.get_open_or_pending_tickers", AsyncMock(return_value=set())),
+        patch("jobs.paper_jobs.insert_pending", AsyncMock(return_value=1)),
+        patch("jobs.paper_jobs._post_message", post_message_mock),
+    ):
+        await paper_eod_sampler_job(pool, trader)
+
+    post_message_mock.assert_called_once()
+    sent_msg = post_message_mock.call_args[0][3]
+    assert "자본배분 대상 아님" not in sent_msg
+    assert "pending 삽입: 2건" in sent_msg  # kosdaq(241710.KQ)도 실제로 삽입됨
+
+
+@pytest.mark.asyncio
+async def test_telegram_summary_omits_kosdaq_note_when_no_kosdaq_signals():
+    """kosdaq 신호 자체가 없으면(0건) "자본배분 대상 아님" 문구를 굳이 붙이지
+    않는다 — 매번 뜨는 문구는 신호가 아니라 잡음이 된다."""
+    from jobs.paper_jobs import paper_eod_sampler_job
+
+    pool, _conn = _make_pool([_row("999999.KS")])
+    trader = MagicMock()
+
+    post_message_mock = AsyncMock()
+    with (
+        patch("jobs.paper_jobs.ACTIVE_MODELS", {"stage", "cross", "ichimoku"}),  # kosdaq 제외
+        patch("jobs.paper_jobs.load_chart_signals_latest",
+              AsyncMock(return_value=("2026-W33", []))),
+        patch("jobs.paper_jobs.get_open_slot_count", AsyncMock(return_value=0)),
+        patch("jobs.paper_jobs.get_open_or_pending_tickers", AsyncMock(return_value=set())),
+        patch("jobs.paper_jobs.insert_pending", AsyncMock(return_value=1)),
+        patch("jobs.paper_jobs._post_message", post_message_mock),
+    ):
+        await paper_eod_sampler_job(pool, trader)
+
+    post_message_mock.assert_called_once()
+    sent_msg = post_message_mock.call_args[0][3]
+    assert "자본배분 대상 아님" not in sent_msg
