@@ -4,6 +4,14 @@
   FUNNEL-1  top-10 : 수급 스크린 후 이치모쿠 돌파 진입
   AND-1     top-5  : 이치모쿠 ∩ Stage2+ ∩ 수급 비매도 (전체 아님 — _STRATEGIES_CFG에서 5로 캡)
   SCORE-1   top-5  : Stage·거래대금·수급 z-score 가중합 (2026-06-16 추가)
+
+청산 파라미터(tp1_pct/tp1_ratio/trail_pct/hard_stop_pct)는 전략별로 다르게
+튜닝돼 있어(analysis/backtest/config.py::OPTIMAL_EXIT_PARAMS*) 전략마다
+`EXIT_COMPONENTS`에서 맞는 값을 가져다 쓴다 — 예전엔 3개 전략 전부
+0.15/0.50/0.10/0.10(cross 값)로 하드코딩돼 있어 FUNNEL-1/SCORE-1이 자기
+튜닝값(ratio 0.70, trail 0.15)을 못 쓰고 있었다(2026-08-23 발견,
+[[project_technicalquant_backtest]] 참고). AND-1은 전용 튜닝값이 없어
+구성(이치모쿠∩Stage2)이 가장 가까운 cross를 그대로 사용.
 """
 
 from __future__ import annotations
@@ -12,6 +20,7 @@ import asyncio
 import logging
 from datetime import date, timedelta
 
+from analysis.backtest.model_registry import EXIT_COMPONENTS
 from analysis.strategy_compose import STRATEGIES, derive_flags, iso_week, load_signal_frame
 from data.kiwoom_paper_trader import MODEL_CONFIG, get_open_slot_count, insert_pending
 
@@ -21,9 +30,10 @@ logger = logging.getLogger(__name__)
 _FUNNEL_LOOKBACK_WEEKS = 8
 
 _STRATEGIES_CFG = [
-    ("FUNNEL-1", "compose-funnel1", 10),
-    ("AND-1",    "compose-and1",     5),
-    ("SCORE-1",  "compose-score1",   5),
+    # (전략, 모델명, top_n, EXIT_COMPONENTS 키)
+    ("FUNNEL-1", "compose-funnel1", 10, "funnel1"),
+    ("AND-1",    "compose-and1",     5, "cross"),
+    ("SCORE-1",  "compose-score1",   5, "score1"),
 ]
 
 
@@ -69,7 +79,9 @@ async def compose_paper_entry_job(dsn: str, pool) -> None:
     loop = asyncio.get_running_loop()
     today = date.today()
 
-    for strategy, model, top_n in _STRATEGIES_CFG:
+    for strategy, model, top_n, exit_key in _STRATEGIES_CFG:
+        exit_params = EXIT_COMPONENTS[exit_key].ref
+        assert exit_params is not None, f"EXIT_COMPONENTS[{exit_key!r}]에 ref 없음 — 분할청산 파라미터 딕셔너리가 있는 키만 써야 함"
         try:
             tickers = await asyncio.wait_for(
                 loop.run_in_executor(
@@ -111,10 +123,10 @@ async def compose_paper_entry_job(dsn: str, pool) -> None:
             await insert_pending(
                 pool, model, ticker, today,
                 entry_theory=0.0,   # paper_open_entry_job이 실시간 시세로 채움
-                tp1_pct=0.15,
-                tp1_ratio=0.50,
-                trail_pct=0.10,
-                hard_stop_pct=0.10,
+                tp1_pct=exit_params["tp1_pct"],
+                tp1_ratio=exit_params["tp1_ratio"],
+                trail_pct=exit_params["trail_pct"],
+                hard_stop_pct=exit_params["hard_stop_pct"],
             )
             inserted += 1
             logger.info("[compose-paper] pending 추가: %s %s", model, ticker)
