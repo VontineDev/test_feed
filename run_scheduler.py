@@ -427,10 +427,17 @@ async def summary_worker() -> None:
 async def main(interval: int, enable_summary: bool) -> None:
     global _summary_queue
 
-    logger.info("뉴스 크롤러 시작 — 수집 %d분 간격", interval)
-    logger.info("구조: [수집 잡] → Queue → [요약 워커] (완전 분리)")
-    logger.info("한글 요약: %s | 피드 %d개 | Ctrl+C 로 종료\n",
-                "ON (Ollama→LM Studio)" if enable_summary else "OFF", len(FEEDS))
+    # NEWS_JOBS_ENABLED=0 — 뉴스 수집/요약/신호 잡만 통째로 중지.
+    # KRX/DART/YouTube/Stage/모의투자 잡은 이 스위치와 무관하게 계속 실행됨.
+    news_enabled = os.getenv("NEWS_JOBS_ENABLED", "1").strip().lower() not in ("0", "false", "no")
+
+    if news_enabled:
+        logger.info("뉴스 크롤러 시작 — 수집 %d분 간격", interval)
+        logger.info("구조: [수집 잡] → Queue → [요약 워커] (완전 분리)")
+        logger.info("한글 요약: %s | 피드 %d개 | Ctrl+C 로 종료\n",
+                    "ON (Ollama→LM Studio)" if enable_summary else "OFF", len(FEEDS))
+    else:
+        logger.info("뉴스 잡 비활성 (NEWS_JOBS_ENABLED=0) — 수집/요약/신호 스킵, 그 외 잡은 정상 실행")
 
     # ── KOREA_BASE_RATE 신선도 체크 ───────────────────────────
     _env_path = Path(".env")
@@ -512,7 +519,7 @@ async def main(interval: int, enable_summary: bool) -> None:
 
     # ── 요약 워커 초기화 ──────────────────────────────────────
     worker_task = None
-    if enable_summary:
+    if enable_summary and news_enabled:
         _summary_queue = asyncio.Queue()
         worker_task = asyncio.create_task(summary_worker())
 
@@ -533,16 +540,25 @@ async def main(interval: int, enable_summary: bool) -> None:
     scheduler = AsyncIOScheduler(timezone="UTC", jobstores=jobstores)
 
     # ── 잡 등록 ──────────────────────────────────────────────
-    scheduler.add_job(
-        collect_job,
-        trigger="interval",
-        minutes=interval,
-        id="news_collect",
-        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=3),  # 스케줄러 시작 후 3초 뒤 첫 실행
-        max_instances=1,                            # 중복 실행 방지
-        coalesce=True,                              # 밀린 잡 합치기
-        replace_existing=True,
-    )
+    if news_enabled:
+        scheduler.add_job(
+            collect_job,
+            trigger="interval",
+            minutes=interval,
+            id="news_collect",
+            next_run_time=datetime.now(timezone.utc) + timedelta(seconds=3),  # 스케줄러 시작 후 3초 뒤 첫 실행
+            max_instances=1,                            # 중복 실행 방지
+            coalesce=True,                              # 밀린 잡 합치기
+            replace_existing=True,
+        )
+    else:
+        # 이전 실행에서 등록된 news_collect가 Postgres 잡스토어에 영속돼 있을 수 있음 —
+        # add_job을 스킵하는 것만으로는 안 지워지므로 명시적으로 제거.
+        try:
+            scheduler.remove_job("news_collect")
+            logger.info("[뉴스] 잡스토어에 남아있던 news_collect 제거 완료")
+        except Exception:
+            pass  # 애초에 등록된 적 없으면 조용히 무시
     scheduler.add_job(
         _daily_krx_refresh_job,
         CronTrigger(hour=20, minute=0, timezone="Asia/Seoul"),

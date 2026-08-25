@@ -38,13 +38,15 @@ python run_scheduler.py --no-summary  # 요약 없이 수집만
 
 ## 등록된 잡 전체 목록
 
-### 뉴스 수집 (항상 활성)
+### 뉴스 수집 (`NEWS_JOBS_ENABLED` 필요, 기본 ON)
 
 | 잡 ID | 트리거 | 내용 |
 |-------|--------|------|
 | `news_collect` | `interval minutes=N` | Reuters/Yahoo/Bloomberg/CNBC/연합/한경/매경 RSS 수집 → Queue |
 
 시작 후 3초 뒤 첫 실행. `coalesce=True` (밀린 잡 합치기).
+
+`NEWS_JOBS_ENABLED=0`이면 `news_collect` 잡 등록 자체를 건너뛰고(잡스토어에 이전 실행분이 남아있으면 `remove_job`으로 제거), 요약 워커(`summary_worker`)도 기동하지 않는다. 뉴스 수집/요약/Telegram 신호만 멈추며 KRX/DART/YouTube/Stage/모의투자 잡은 그대로 실행된다. 2026-08-23: 뉴스 기반 buy/sell 판단 신뢰도 문제로 한동안 비활성화(`.env`에서 설정).
 
 ### 분석 잡 (DB 연결 필수)
 
@@ -169,6 +171,7 @@ scheduler.add_job(
 
 | 환경변수 | 없을 때 비활성화되는 잡 |
 |----------|------------------------|
+| `NEWS_JOBS_ENABLED=0` | news_collect, 요약 워커(신호 감지 → Telegram 뉴스 알림) — 기본값 1(ON), 명시적으로 0 설정 시에만 비활성 |
 | `DART_API_KEY` | daily_dart_disclosures, monthly_dart_xbrl, dart_extractions_spring/autumn/winter |
 | `YOUTUBE_API_KEY` | youtube_narrative_sync, youtube_attention_score, youtube_forward_return |
 | `KIWOOM_MOCK_APPKEY` | paper_open_entry, paper_exit_checker, paper_eod_sampler |
