@@ -9,11 +9,18 @@ backtest._apply_compose_exit`(score1만 — cross/funnel1은 왜곡 확인됨, �
 절 참고) 재사용.
 
 랭킹 팩터:
-  - D_new_high20: {"d_breakout_pct": 1.0, "stage": 1.0}
-    (d_breakout_pct = 그 주 최대 돌파폭 (Close-high20_prev)/high20_prev)
+  - D_new_high20: {"d_vol_ratio": 1.0, "stage": 1.0}
+    (d_vol_ratio = 그 주 최대 거래량배율 당일/전일. **2026-08-26 1차 시도
+    {"d_breakout_pct": 1.0, "stage": 1.0}는 기각** — 게이트만보다 승률·평균
+    모두 악화, 중앙값이 score1 hard_stop_pct(10%)에 정확히 몰림. "그 주
+    최대 돌파폭"이 건강한 추세 시작이 아니라 과열된 단기 급등(블로우오프)을
+    역선택했을 가능성이 있어, 이번엔 가격 변동폭 대신 거래량 확인(volume
+    confirmation — 돌파+거래량 동반 급증이 더 신뢰할 수 있다는 통상적
+    기술적분석 논리)으로 팩터 자체를 바꿔 재시도.)
   - E_flow_streak: {"foreign_net_w": 1.0, "stage": 1.0}
     (streak 길이는 게이트로만 씀 — 95%가 임계값에 몰려 랭킹에 못 쓴다는
-    2026-08-26 발견 반영. 랭킹은 SCORE-1과 동일한 순매수 "규모" 컬럼 재사용)
+    2026-08-26 발견 반영. 랭킹은 SCORE-1과 동일한 순매수 "규모" 컬럼 재사용.
+    이미 성공 확인됨 — 이번 실행은 D 재시도와 나란히 비교하기 위해 유지.)
 
 두 컬럼 다 stage_classifications(폭넓은 커버리지)에서 오므로 chart_signals
 (ichimoku 스크리너 통과 종목만 있는 좁은 테이블)는 소스에서 뺐다 — D/E
@@ -147,8 +154,8 @@ def main() -> None:
 
     d_weekly = (
         pd.DataFrame(d_daily).groupby(["ticker", "week"], as_index=False)
-        .agg(d_breakout_pct=("breakout_pct", "max"))
-    ) if d_daily else pd.DataFrame(columns=pd.Index(["ticker", "week", "d_breakout_pct"]))
+        .agg(d_breakout_pct=("breakout_pct", "max"), d_vol_ratio=("vol_ratio", "max"))
+    ) if d_daily else pd.DataFrame(columns=pd.Index(["ticker", "week", "d_breakout_pct", "d_vol_ratio"]))
     e_weekly = (
         pd.DataFrame(e_daily)[["ticker", "week"]].drop_duplicates()
     ) if e_daily else pd.DataFrame(columns=pd.Index(["ticker", "week"]))
@@ -159,7 +166,7 @@ def main() -> None:
     logger.info("[팩터] stage/flow 프레임 %d행", len(factor_frame))
 
     plans = [
-        ("D_new_high20", d_weekly, {"d_breakout_pct": 1.0, "stage": 1.0}),
+        ("D_new_high20", d_weekly, {"d_vol_ratio": 1.0, "stage": 1.0}),
         ("E_flow_streak", e_weekly, {"foreign_net_w": 1.0, "stage": 1.0}),
     ]
 
