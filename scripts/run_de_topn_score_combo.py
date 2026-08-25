@@ -71,6 +71,8 @@ def _pct(v, dp: int = 1) -> str:
 
 
 def _diagnose(signals, label: str) -> dict:
+    from analysis.backtest.helpers import _compute_signal_interval_mdd
+
     closed = [s for s in signals if s.blended_return is not None]
     if not closed:
         return {"label": label, "n": 0}
@@ -82,6 +84,7 @@ def _diagnose(signals, label: str) -> dict:
         "label": label, "n": len(closed),
         "win_rate": sum(1 for r in returns if r > 0) / len(returns),
         "avg_return": st.mean(returns), "median_return": st.median(returns),
+        "mdd": _compute_signal_interval_mdd(signals),
         "avg_hold_days": st.mean(holds) if holds else None,
         "max_hold_days": max(holds) if holds else None,
         "period_end_pct": period_end / len(closed),
@@ -225,15 +228,15 @@ def main() -> None:
     elapsed = time.time() - t0
     logger.info("전체 완료 — %.0f초", elapsed)
 
-    print("\n" + "=" * 120)
-    print(f"{'조합':<38} {'신호':>7} {'승률':>8} {'평균수익':>10} {'중앙값':>10} {'기간종료%':>10} {'고유종목':>8}")
-    print("-" * 120)
+    print("\n" + "=" * 130)
+    print(f"{'조합':<38} {'신호':>7} {'승률':>8} {'평균수익':>10} {'중앙값':>10} {'MDD':>8} {'기간종료%':>10} {'고유종목':>8}")
+    print("-" * 130)
     for label, d, base in rows:
         print(f"{label:<38} {d['n']:>7} {_pct(d['win_rate']):>8} {_pct(d['avg_return']):>10} "
-              f"{_pct(d['median_return']):>10} {d['period_end_pct']*100:>9.1f}% {d['n_unique_tickers']:>8}")
+              f"{_pct(d['median_return']):>10} {_pct(d['mdd']):>8} {d['period_end_pct']*100:>9.1f}% {d['n_unique_tickers']:>8}")
         print(f"{'  (비교) 게이트만/랭킹없음(기존 절)':<38} {base['n']:>7} {_pct(base['win_rate']):>8} "
               f"{_pct(base['avg_return']):>10} {_pct(base['median_return']):>10}")
-    print("=" * 120)
+    print("=" * 130)
 
     out_path = Path(__file__).parent.parent / "results" / "de_topn_score_combo.csv"
     out_path.parent.mkdir(exist_ok=True)
