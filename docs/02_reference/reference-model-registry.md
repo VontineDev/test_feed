@@ -80,6 +80,7 @@
 | **SCENARIO2 원안 (4.5년 재검증, 가장 신뢰)** | PER≤15+시총200 / 원안청산 | `ENTRY_COMPONENTS["SCENARIO2"]` × `quant_original` | 39.6% | +2.2% | 535 | 순수 기술조건 중 유일하게 유의미 |
 | SCENARIO3(ROE단독) | ROE≥8%+시총200 / 원안청산 | | 42.8% | +4.1% | 152 | 참고용 |
 | SCENARIO4(PER+ROE) | PER≤18 AND ROE≥8% / 원안청산 | | 42.2% | +2.7% | 83 | 참고용 |
+| D_new_high20/E_flow_streak × score1분할청산 | 신고가돌파/수급streak 진입(무필터) / score1 | `ENTRY_COMPONENTS["D_new_high20"]`(E_flow_streak는 quant_signals.replay_quant 직접호출) × `EXIT_COMPONENTS["score1"]` | 50.8~51.0% | +2.4~2.9% | 29,235~67,686 | **부분채택(2026-08-23)** — 원안청산 대비 폐기→유의미로 전환됐으나 top-N 선별 로직 없어 미완성. 같은 진입×cross/funnel1은 중앙값-10.3%로 왜곡(승률<50%, 대박종목 의존) — score1만 신뢰. 상세: `TechnicalQuant.md` |
 
 **Walk-forward 메타 결론**(개별 수치 아님): train→test 평균수익 하락폭 평균 -26.7%p,
 8개 폴드×필터 중 test 플러스 유지는 3개뿐. 단 "청산을 넓히면 개선"이라는 방향성
@@ -108,6 +109,7 @@
 | G(Larry Williams 변동성돌파) | k=0.5 상태전이 없는 매일판정 | `ENTRY_COMPONENTS["G_volatility_breakout"]` | 28.7% | +13.7%(액면신뢰금지) | 208,727 | **신뢰 금지** — 스퀴즈 필터 부재로 시장베타 포착 |
 | QVM 시총제한없음 (top10/20%) | 3팩터, 유니버스 제한없음 | `UNIVERSE_COMPONENTS["QVM_top10pct_all"]`/`["QVM_top20pct_all"]` | 33.1~35.8% | +13.2~20.2%(액면신뢰금지) | 1,334~2,472 | 참고용 — 소수 대박종목 의존(G와 동일 패턴) |
 | 팩터 분해 비교군 (quality/value 단독·조합) | quality/value/quality+value/quality+momentum/value+momentum | (시총200∩top20 고정) | 41.5~58.3% | +3.1~8.3% | 46~127 | 참고용 — 전부 모멘텀 단독보다 열위 |
+| MOMENTUM_TOP20/QVM_TOP20 × quant_optimized | 모멘텀·QVM 진입 / RSI80익절·-12%손절 | `UNIVERSE_COMPONENTS["MOMENTUM_top20pct_mktcap200"/"QVM_top20pct_mktcap200"]` × `EXIT_COMPONENTS["quant_optimized"]` | 40.8~71.1%(허수) | +28.7~45.7%(허수) | 51~90 | **기각(2026-08-23)** — 헤드라인상 역대 최고처럼 보이나 청산에 최대보유기간 제한이 없어 27%가 미실현 평가익(보유 최대506일)으로 왜곡, 종목 중복도 있음. 상세: `TechnicalQuant.md` "신규 조합 시도" 절 |
 
 ---
 
