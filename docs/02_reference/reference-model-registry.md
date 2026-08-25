@@ -82,7 +82,7 @@
 | SCENARIO4(PER+ROE) | PER≤18 AND ROE≥8% / 원안청산 | | 42.2% | +2.7% | 83 | 참고용 |
 | D_new_high20/E_flow_streak × score1분할청산 | 신고가돌파/수급streak 진입(무필터) / score1 | `ENTRY_COMPONENTS["D_new_high20"]`(E_flow_streak는 quant_signals.replay_quant 직접호출) × `EXIT_COMPONENTS["score1"]` | 50.8~51.0% | +2.4~2.9% | 29,235~67,686 | **부분채택(2026-08-23)** — 원안청산 대비 폐기→유의미로 전환됐으나 top-N 선별 로직 없어 미완성. 같은 진입×cross/funnel1은 중앙값-10.3%로 왜곡(승률<50%, 대박종목 의존) — score1만 신뢰. 상세: `TechnicalQuant.md` |
 | E_flow_streak×top20(순매수규모+stage) | E_flow_streak 게이트 + `composite_score`({foreign_net_w,stage}) top20 / score1 | `strategy_compose.composite_score` 재사용(리서치 스크립트, `strategy_compose.py` 미변경) × `EXIT_COMPONENTS["score1"]` | **53.5%** | **+3.9%** | 1,640 | **유망(2026-08-26)** — 게이트만(50.8%/+2.4%/신호67,686) 대비 승률·평균·중앙값 전부 개선. 재현: `scripts/run_de_topn_score_combo.py` |
-| D_new_high20×top20(돌파폭+stage) | D_new_high20 게이트 + `composite_score`({d_breakout_pct,stage}) top20 / score1 | 〃 | 42.5% | +0.1% | 1,660 | **기각(2026-08-26)** — 게이트만(51.0%/+2.9%) 대비 오히려 악화, 중앙값-10.5%로 hard_stop 몰림(대안 팩터 미탐색). 상세: `TechnicalQuant.md` |
+| D_new_high20×top20(돌파폭 또는 거래량배율+stage) | D_new_high20 게이트 + `composite_score`({d_breakout_pct 또는 d_vol_ratio,stage}) top20 / score1 | 〃 | 42.4~42.5% | +0.1~0.4% | 1,660 | **기각(2026-08-26, 2회 확인)** — 게이트만(51.0%/+2.9%) 대비 오히려 악화, 중앙값-10.4~-10.5%로 hard_stop 몰림. 팩터를 돌파폭→거래량배율로 교체해도 거의 동일한 결과 — "이번 주 가장 극단적인 신호를 고른다"는 랭킹 방식 자체의 문제로 판단, 추가 팩터 그리드서치 중단. D는 top-N 없이 게이트만 유지(부분채택 상태 그대로). 상세: `TechnicalQuant.md` |
 
 **Walk-forward 메타 결론**(개별 수치 아님): train→test 평균수익 하락폭 평균 -26.7%p,
 8개 폴드×필터 중 test 플러스 유지는 3개뿐. 단 "청산을 넓히면 개선"이라는 방향성
