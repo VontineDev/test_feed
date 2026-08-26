@@ -23,8 +23,9 @@ DO $$ DECLARE
     'scheduler_triggers', 'aftermarket_snap', 'paper_positions',
     'manual_portfolio', 'dart_extractions', 'apscheduler_jobs',
     'daily_market_snap', 'dart_companies', 'dart_disclosures',
-    'dart_xbrl', 'dart_segments', 'sector_daily_stats',
-    'youtube_mention_raw', 'youtube_attention_scores', 'youtube_mention_forward_returns'
+    'dart_xbrl', 'dart_segments', 'dart_fundamentals', 'sector_daily_stats',
+    'youtube_mention_raw', 'youtube_attention_scores', 'youtube_mention_forward_returns',
+    'youtube_backfill_queue', 'paper_positions_archive_gen1'
   ];
 BEGIN
   FOREACH _tbl IN ARRAY _tables LOOP

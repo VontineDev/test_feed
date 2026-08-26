@@ -368,6 +368,7 @@ _RLS_ALWAYS: list[str] = [
     "dart_disclosures",
     "dart_xbrl",
     "dart_segments",
+    "dart_fundamentals",
     "sector_daily_stats",
 ]
 

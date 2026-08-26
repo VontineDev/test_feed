@@ -1238,6 +1238,41 @@ ollama pull qwen2.5:7b   # 또는 Qwen3.5-9B
 | 대시보드 localhost 인증 우회 차단 — `client.host` 기반 면제 로직 제거 (Nginx 뒤 모든 요청이 127.0.0.1로 보여 사실상 인증 전면 무력화됐던 취약점 수정, v0.9.8.x) | ✅ |
 | 포트폴리오 API 서버사이드 전용 — 키움 Bearer 토큰 브라우저 미노출, admin·special 역할만 접근 (v0.9.9.6~) | ✅ |
 
+### 9-1. 새 테이블 추가 시 RLS 체크리스트 (필독)
+
+2026-08-26에 `dart_fundamentals` 테이블이 `CREATE TABLE`은 있지만 RLS 목록 등록을
+빠뜨려 Supabase Security Advisor의 "RLS Disabled in Public" 경고가 발생했다.
+같은 실수를 반복하지 않으려면 새 테이블을 추가할 때마다 아래 두 가지 중 **반드시 하나**를 해야 한다.
+
+**케이스 A — 코드(`core/db_schema.py`, 또는 `dashboard/backend/main.py`,
+`data/*_sync.py` 등 자체 `CREATE TABLE`을 가진 모듈)로 테이블을 만드는 경우:**
+
+1. `CREATE TABLE IF NOT EXISTS`를 추가한 그 함수/모듈 안에서 곧바로
+   `ALTER TABLE <table> ENABLE ROW LEVEL SECURITY`를 실행하도록 코드를 같이 넣는다.
+   - `core/db_schema.py`라면 새 테이블명을 `_RLS_ALWAYS`(항상 존재 보장)
+     또는 `_RLS_IF_EXISTS`(init_db 시점에 없을 수도 있음) 목록에 추가한다.
+     **CREATE TABLE만 추가하고 이 목록을 빼먹는 것이 바로 이번 사고의 원인이었다.**
+2. `sql/rls_policies.sql`의 `_tables` 배열에도 같은 테이블명을 추가해
+   Supabase SQL 에디터에서 수동으로 재실행할 때도 커버되게 한다(문서 target: 실제 스키마와 항상 동기화).
+3. 코드 수정만으로는 스케줄러가 재시작될 때까지 Supabase에 반영되지 않는다
+   ([[project_supabase_rls]] 참고). 급하면 `sql/rls_policies.sql`을 Supabase SQL
+   에디터에서 바로 실행하거나 `scripts\restart_scheduler.bat`로 재시작한다.
+4. `tests/test_db_schema_rls.py::test_every_defined_table_has_rls_entry`가
+   `core/db_schema.py`에 정의된 모든 테이블이 RLS 목록에 있는지 자동 검증한다
+   (누락 시 CI/로컬 테스트가 즉시 FAIL). `pytest` 실행으로 확인.
+
+**케이스 B — Supabase SQL 에디터에서 직접(수동) 테이블을 만드는 경우
+(예: 아카이브/스냅샷 테이블, `paper_positions_archive_gen1`처럼 저장소 코드가 전혀 관리하지 않는 테이블):**
+
+- 이런 테이블은 애초에 위 코드 경로를 거치지 않으므로 자동화된 안전망이 없다.
+- **테이블 생성 SQL과 `ALTER TABLE ... ENABLE ROW LEVEL SECURITY`를 항상 같은
+  트랜잭션/같은 실행 블록에 넣어서 실행한다.** 나중에 하겠다고 미루지 않는다.
+- 가능하면 `sql/rls_policies.sql`의 `_tables` 배열에도 등록해 향후 재실행 시
+  누락 여부를 다시 확인할 수 있게 한다.
+
+**정기 점검**: Supabase 대시보드 → Advisors → Security에서 "RLS Disabled in
+Public" / "Policy Exists RLS Disabled" 경고가 뜨면 위 체크리스트를 다시 따라간다.
+
 ---
 
 ## 10. 향후 개선 방향
