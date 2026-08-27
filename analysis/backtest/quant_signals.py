@@ -13,6 +13,11 @@
 예: MA20 돌파(A)를 상태로 재면 상승추세 내내 매일 신호가 발생해 사실상 같은
 추세를 수십 번 중복 계산하게 된다 — 실제 트레이딩에서 "진입 시점"의 의미와도
 맞지 않아 전이 판정으로 통일.
+
+2026-08-26: BNF_TradingModel.md(코테카와 타카시 역추세 모델) 재현 추가
+(compute_bnf_indicators/_cond_bnf_entry/_scan_exit_bnf/replay_bnf) — F/G/H와
+동일하게 ENTRY_CONDITIONS 딕셔너리로 표현 안 되는 lookback/파라미터 의존
+모델이라 전용 함수로 분리. scripts/run_bnf_backtest.py 참고.
 """
 
 from __future__ import annotations
@@ -436,6 +441,203 @@ def replay_quant_bb_exit(
 
         sell_date, sell_reason, sell_return, hold_days = _scan_exit_bb(
             df, i, entry_price, row_date, tx_cost_rt, rsi_exit,
+        )
+        sig = SignalRecord(
+            ticker=ticker, name=name, signal_date=row_date,
+            close_at_signal=entry_price, mode="quant", market=market,
+        )
+        sig.sell_date = sell_date
+        sig.sell_reason = sell_reason
+        sig.sell_return = sell_return
+        sig.blended_return = sell_return
+        sig.hold_days = hold_days
+        signals.append(sig)
+
+    return signals
+
+
+# ── BNF(코테카와 타카시) 역추세 모델 — BNF_TradingModel.md 재현 ─────────
+# 이격도(EMA25 기준) 급락 + RSI 과매도 + MACD 히스토그램 전환의 4단계 매수
+# 트리거, 손절/추세별 트레일링/모멘텀 소진의 3원칙 매도. F/G/H와 마찬가지로
+# ENTRY_CONDITIONS 딕셔너리(cur/prev 페어만 받음)로는 표현이 안 되는 모델이라
+# (이격도 임계값이 자산유형/시장추세별 파라미터고, RSI/이격도 판정에 lookback
+# 윈도우가 필요) 전용 함수로 분리.
+
+def compute_bnf_indicators(daily_df: pd.DataFrame) -> pd.DataFrame:
+    """BNF 모델 전용 지표. compute_indicators()가 이미 만드는 rsi14/macd/
+    macd_signal/ma60을 재사용하고, EMA25·이격도·MACD 히스토그램만 추가로
+    얹는다. compute_indicators 자체에 넣지 않은 이유: EMA25/이격도는 이
+    모델(BNF_TradingModel.md) 전용 개념이라 A-H 범용 지표와 섞으면 그쪽
+    함수의 의미가 흐려짐."""
+    df = compute_indicators(daily_df)
+    closes = cast(pd.Series, df["Close"])
+    df["ema25"] = closes.ewm(span=25, min_periods=25, adjust=False).mean()
+    df["discrepancy"] = (closes - df["ema25"]) / df["ema25"]
+    df["macd_hist"] = df["macd"] - df["macd_signal"]
+    return df
+
+
+def _cond_bnf_entry(
+    df: pd.DataFrame,
+    i: int,
+    disc_threshold: float,
+    rsi_oversold: float = 30.0,
+    lookback: int = 10,
+) -> bool:
+    """BNF 4단계 매수 트리거.
+
+    [1단계] 단기 급락 스크리닝은 [2단계](이격도)로 판정을 대체한다 — 이격도가
+    disc_threshold(음수, 예 -0.25)만큼 벌어지려면 그 자체로 단기 급락이
+    선행해야 하므로 별도 조건이 불필요.
+    [2단계] 최근 lookback일 내에 이격도가 disc_threshold 이하로 벌어진 적이
+    있는지.
+    [3단계] 같은 lookback 윈도우 내에 RSI(14)가 rsi_oversold 이하로 내려간
+    적이 있는지.
+    [4단계·최종 트리거] 오늘 MACD 히스토그램이 0선 아래(-)에서 위(+)로 전환
+    (전이 판정 — 자연히 크로스 당일 하루만 발동).
+
+    [2]/[3]을 "오늘" 시점이 아니라 lookback 윈도우로 판정하는 이유: 문서가
+    묘사하는 바닥 다지기 과정에서 이격도/RSI는 먼저 회복되고 MACD 히스토그램
+    전환은 며칠 뒤에 나타나는 경우가 흔하다 — 모든 조건을 같은 날 강제하면
+    실제 매매 타점을 대부분 놓친다.
+    """
+    cur, prev = df.iloc[i], df.iloc[i - 1]
+    if pd.isna(cur.get("macd_hist")) or pd.isna(prev.get("macd_hist")):
+        return False
+    macd_cross = float(prev["macd_hist"]) < 0 and float(cur["macd_hist"]) >= 0
+    if not macd_cross:
+        return False
+
+    win_start = max(0, i - lookback + 1)
+    window = df.iloc[win_start:i + 1]
+    disc_hit = bool((window["discrepancy"] <= disc_threshold).any())
+    rsi_hit = bool((window["rsi14"] <= rsi_oversold).any())
+    return disc_hit and rsi_hit
+
+
+def _scan_exit_bnf(
+    df: pd.DataFrame,
+    entry_idx: int,
+    entry_price: float,
+    signal_date: date,
+    hard_stop_pct: float,
+    trail_pct_uptrend: float,
+    trail_pct_downtrend: float,
+    tx_cost_rt: float,
+) -> tuple[Optional[date], str, Optional[float], Optional[int]]:
+    """BNF 청산 3원칙 재현. 우선순위: 손절(고정%) → 추세별 트레일링 스탑 →
+    모멘텀 소진 청산 → 기간 종료.
+
+    "전체 시장 추세"는 문서 원문 개념이지만 이 저장소에는 KOSPI/KOSDAQ 지수
+    일봉 파이프라인이 없어(core/db_market.py는 개별 종목만 저장) 종목 자신의
+    MA60 상태(종가>MA60 AND MA60 5일 전보다 상승)로 근사한다 — 다른 자기완결
+    청산 로직(_scan_exit_bb 등)과 동일한 단순화 방침.
+    상승추세로 판정되면 trail_pct_uptrend(넓게), 아니면 trail_pct_downtrend
+    (좁게)를 고점 대비 트레일링 스탑으로 적용해 "상승장은 여유, 하락장은
+    빠르게"를 재현한다.
+
+    모멘텀 소진 조건(거래량 2일 연속 감소 + 캔들 몸통 축소 + MACD 히스토그램
+    둔화)은 진입 직후(며칠 이내)엔 트리거 정의상 히스토그램이 막 플러스로
+    돌아선 시점이라 오탐 가능성이 커 entry_idx+3일 이후부터만 판정한다.
+    """
+    stop_price = entry_price * (1.0 - hard_stop_pct)
+    peak_close = entry_price
+
+    for j in range(entry_idx + 1, len(df)):
+        ts = df.index[j]
+        row_date = ts.date() if isinstance(ts, datetime) else cast(date, ts)
+        cur = df.iloc[j]
+        if pd.isna(cur["Close"]):
+            continue
+        close = float(cur["Close"])
+        is_last = (j == len(df) - 1)
+        peak_close = max(peak_close, close)
+
+        def _ret(p: float) -> float:
+            return (p / entry_price - 1.0) - tx_cost_rt
+
+        if close <= stop_price:
+            return row_date, f"손절 -{hard_stop_pct*100:.0f}%", _ret(close), (row_date - signal_date).days
+
+        ma60_now = cur.get("ma60")
+        uptrend = False
+        if not pd.isna(ma60_now) and close > float(ma60_now) and j >= 5:
+            ma60_prev5 = df.iloc[j - 5].get("ma60")
+            if not pd.isna(ma60_prev5):
+                uptrend = float(ma60_now) > float(ma60_prev5)
+        trail_pct = trail_pct_uptrend if uptrend else trail_pct_downtrend
+        if close <= peak_close * (1.0 - trail_pct):
+            label = "상승추세 트레일링" if uptrend else "하락추세 트레일링"
+            return row_date, f"{label} -{trail_pct*100:.0f}%", _ret(close), (row_date - signal_date).days
+
+        if j >= entry_idx + 3:
+            vol_declining = (
+                float(df.iloc[j]["Volume"]) < float(df.iloc[j - 1]["Volume"])
+                < float(df.iloc[j - 2]["Volume"])
+            )
+            body_today = abs(float(cur["Close"]) - float(cur["Open"]))
+            body_prev = abs(float(df.iloc[j - 1]["Close"]) - float(df.iloc[j - 1]["Open"]))
+            body_shrinking = body_today < body_prev
+            hist_today, hist_prev = cur.get("macd_hist"), df.iloc[j - 1].get("macd_hist")
+            momentum_fading = (
+                not pd.isna(hist_today) and not pd.isna(hist_prev)
+                and float(hist_today) < float(hist_prev)
+            )
+            if vol_declining and body_shrinking and momentum_fading:
+                return row_date, "모멘텀 소진 청산", _ret(close), (row_date - signal_date).days
+
+        if is_last:
+            return row_date, "보유 중 (기간 종료)", _ret(close), (row_date - signal_date).days
+
+    return None, "보유 중", None, None
+
+
+def replay_bnf(
+    ticker: str,
+    name: str,
+    daily_df: pd.DataFrame,
+    market: str,
+    start: date,
+    end: date,
+    disc_threshold: float = -0.25,
+    rsi_oversold: float = 30.0,
+    lookback: int = 10,
+    hard_stop_pct: float = 0.08,
+    trail_pct_uptrend: float = 0.15,
+    trail_pct_downtrend: float = 0.07,
+    tx_cost_rt: float = TX_COST_DEFAULT,
+) -> list[SignalRecord]:
+    """BNF_TradingModel.md 매매 규칙 재현 — 이격도(EMA25) 급락 + RSI 과매도 +
+    MACD 히스토그램 전환의 역추세(평균회귀) 매수, 손절/추세별 트레일링/모멘텀
+    소진의 3원칙 매도.
+
+    disc_threshold 기본값 -0.25(-25%)는 문서의 "대형 우량주/상승장" 구간
+    (-20%~-25%) 중 보수적인 쪽. "중소형주/하락장"(-30%~-35%)을 재현하려면
+    호출부에서 disc_threshold=-0.325 등으로 넘긴다
+    (scripts/run_bnf_backtest.py --disc-threshold).
+    """
+    df = compute_bnf_indicators(daily_df)
+    signals: list[SignalRecord] = []
+    min_start = 121  # ma120 워밍업 — compute_indicators 계열 관례와 통일
+
+    for i in range(min_start, len(df)):
+        ts = df.index[i]
+        row_date = ts.date() if isinstance(ts, datetime) else cast(date, ts)
+        if row_date < start or row_date > end:
+            continue
+        cur = df.iloc[i]
+        if pd.isna(cur["Close"]):
+            continue
+        if not _cond_bnf_entry(df, i, disc_threshold, rsi_oversold, lookback):
+            continue
+
+        entry_price = float(cur["Close"])
+        if entry_price <= 0:
+            continue
+
+        sell_date, sell_reason, sell_return, hold_days = _scan_exit_bnf(
+            df, i, entry_price, row_date,
+            hard_stop_pct, trail_pct_uptrend, trail_pct_downtrend, tx_cost_rt,
         )
         sig = SignalRecord(
             ticker=ticker, name=name, signal_date=row_date,
