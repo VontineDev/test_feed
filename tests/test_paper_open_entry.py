@@ -63,6 +63,9 @@ async def test_unconfirmed_fill_defers_to_open_qty_zero_instead_of_closing():
     assert call_args[1] == 1          # pos_id
     assert call_args[3] == 0          # qty=0 — 미확인 보류
     assert call_args[4] == "0099999"  # 주문번호는 보존(추후 재조정 추적용)
+    # qty_ordered(목표수량)는 미확인 상태에서도 반드시 남아야 나중에
+    # _reconcile_multi_model_ticker()가 동시보유 시 FIFO 귀속을 할 수 있다.
+    assert mock_open.call_args.kwargs["qty_ordered"] == 142  # 10,000,000 // 70,000
 
 
 @pytest.mark.asyncio
@@ -88,6 +91,7 @@ async def test_confirmed_fill_updates_to_open_with_real_qty():
     mock_open.assert_called_once()
     call_args = mock_open.call_args[0]
     assert call_args[3] == 50
+    assert mock_open.call_args.kwargs["qty_ordered"] == 142
 
 
 @pytest.mark.asyncio

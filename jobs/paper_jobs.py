@@ -35,6 +35,94 @@ from telegram.telegram_notify import _get_token, _get_chat_id, _post_message
 logger = logging.getLogger(__name__)
 
 
+async def _reconcile_multi_model_ticker(db_pool, paper_trader, _loop, ticker: str, positions: list) -> int:
+    """같은 티커를 2개 이상 모델이 동시 보유할 때의 근사 재조정 (2026-08-30).
+
+    중복 매매를 모델 독립성을 위해 허용하기로 한 이상, 브로커 계좌가
+    모델별로 쪼개지지 않는다는 제약은 그대로 남는다 — 그래서 완전한 정확도
+    대신 다음 근사를 쓴다:
+
+    - 이미 체결 확정된(qty>0) 포지션은 과거에 이미 옳게 귀속됐다고 신뢰하고
+      건드리지 않는다.
+    - 아직 미확인인(qty=0) 포지션들만, 브로커 실보유 중 확정분을 뺀 "남는
+      수량"을 주문 접수 순서(FIFO, created_at 오름차순 — 먼저 낸 주문이
+      먼저 채워졌을 것이라는 가정)로 자신의 목표 수량(qty_ordered)까지 채운다.
+    - 브로커는 "이 주문이 몇 주 채웠는지"를 모델별로 알려주지 않으므로 이건
+      근사치다 — 남는 수량이 목표에 못 미치면 그만큼만 채우고 나머지 모델은
+      다음 실행에서 재시도, qty_ordered 자체가 없는(이 컬럼 도입 이전) 구
+      데이터가 섞여 있거나 확정분 합계가 실보유보다 이미 많으면(모델을 특정
+      할 수 없는 매도 발생) 여전히 손대지 않고 수동 확인으로 넘긴다.
+    """
+    if any((p["qty"] or 0) < 0 for p in positions):
+        logger.info("[paper-exit] %s 같은 티커 %d개 모델 동시보유 — 음수 qty 포함, "
+                    "자동 재조정 스킵(수동 확인 필요)", ticker, len(positions))
+        return 0
+
+    _settled   = [p for p in positions if (p["qty"] or 0) > 0]
+    _unsettled = [p for p in positions if (p["qty"] or 0) == 0]
+
+    if not _unsettled:
+        logger.info("[paper-exit] %s 같은 티커 %d개 모델 동시보유(전부 체결 확정) — "
+                    "자동 재조정 스킵(수동 확인 필요)", ticker, len(positions))
+        return 0
+
+    if any(p.get("qty_ordered") is None for p in _unsettled):
+        logger.info("[paper-exit] %s 같은 티커 %d개 모델 동시보유 — qty_ordered 없는 "
+                    "구버전 행 포함, 자동 재조정 스킵(수동 확인 필요)", ticker, len(positions))
+        return 0
+
+    _actual_total = await _loop.run_in_executor(None, paper_trader.get_position_qty, ticker)
+    _settled_sum  = sum(p["qty"] or 0 for p in _settled)
+
+    if _settled_sum > _actual_total:
+        logger.info(
+            "[paper-exit] %s 같은 티커 %d개 모델 동시보유 — 체결확정분 합계(%d)가 "
+            "실보유(%d)보다 많음(모델 특정 불가한 매도 발생) — 자동 재조정 스킵(수동 확인 필요)",
+            ticker, len(positions), _settled_sum, _actual_total,
+        )
+        return 0
+
+    _remaining = _actual_total - _settled_sum
+    if _remaining <= 0:
+        logger.info("[paper-exit] %s 같은 티커 %d개 모델 동시보유 — 아직 남는 실보유 없음, "
+                    "미확인 %d건 다음 실행 재시도", ticker, len(positions), len(_unsettled))
+        return 0
+
+    _avg_price = await _loop.run_in_executor(None, paper_trader.get_position_avg_price, ticker)
+    if not _avg_price:
+        logger.warning("[paper-exit] %s FIFO 귀속용 평균단가 조회 실패 — 다음 실행에서 재시도", ticker)
+        return 0
+
+    _n_fixed = 0
+    for _pos in sorted(_unsettled, key=lambda p: p["created_at"]):
+        _target = _pos["qty_ordered"]
+        if _remaining <= 0 or _target <= 0:
+            logger.info("[paper-exit] %s FIFO 귀속: %s(id=%d) 여전히 미확인(순번 대기) — 스킵",
+                        ticker, _pos["model"], _pos["id"])
+            continue
+
+        _grant = min(_target, _remaining)
+        _remaining -= _grant
+        try:
+            async with db_pool.acquire() as _conn:
+                await _conn.execute(
+                    "UPDATE paper_positions SET qty=$1, entry_actual=$2 WHERE id=$3",
+                    _grant, float(_avg_price), _pos["id"],
+                )
+            _note = "" if _grant == _target else f"(목표 {_target}주 중 {_grant}주만 근사귀속 — 나머지는 다음 실행 재시도)"
+            logger.info(
+                "[paper-exit] %s FIFO 귀속(동시보유 %d개 모델): %s(id=%d) qty 0→%d, entry_actual=%s %s",
+                ticker, len(positions), _pos["model"], _pos["id"], _grant, _avg_price, _note,
+            )
+            _n_fixed += 1
+        except Exception as _e:
+            logger.warning("[paper-exit] %s FIFO 귀속 DB 업데이트 실패(%s, id=%d): %s",
+                            ticker, _pos["model"], _pos["id"], _e)
+            _remaining += _grant  # 실패했으니 다음 후보에게라도 배분 기회를 되돌려준다
+
+    return _n_fixed
+
+
 async def _reconcile_stale_positions(db_pool, paper_trader) -> int:
     """직전 실행에서 "매도 체결 미확인"으로 남은 open 포지션을 브로커 실보유와
     대조해 자동 정정.
@@ -53,9 +141,14 @@ async def _reconcile_stale_positions(db_pool, paper_trader) -> int:
     길어짐), "확인은 다음 실행에서"로 설계를 바꾼 것.
 
     같은 티커를 여러 모델이 동시 보유하면 브로커 잔고가 모델별로 분리되지
-    않아 어느 쪽이 얼마나 팔렸는지 안전하게 판단할 수 없다 — 그 경우는
-    건드리지 않고 로그만 남긴다(수동 확인 필요, 2026-08-11 investigate
-    세션에서 A/B/C 그룹 정리 때와 동일한 제약).
+    않는다. 2026-08-30부터 이 경우도 무조건 스킵하지 않고, 이미 체결
+    확정된(qty>0) 포지션은 그대로 신뢰하면서 아직 미확인인(qty=0) 포지션들
+    사이에서만 "남는 실보유"를 주문 접수 순서(FIFO, created_at)로 근사
+    배분한다(_reconcile_multi_model_ticker 참고) — 브로커가 어느 주문 몫인지
+    알려주지 않으므로 근사치이며, 이미 줄어든 몫이 있는 경우(체결확정분
+    합계가 실보유보다 많음) 등 정말 애매한 경우는 여전히 스킵하고 로그만
+    남긴다(수동 확인 필요, 2026-08-11 investigate 세션에서 A/B/C 그룹 정리
+    때와 동일한 제약).
     """
     _loop = asyncio.get_running_loop()
     _open_positions = await get_open_positions(db_pool)
@@ -69,8 +162,9 @@ async def _reconcile_stale_positions(db_pool, paper_trader) -> int:
     _n_fixed = 0
     for _ticker, _positions in _by_ticker.items():
         if len(_positions) > 1:
-            logger.info("[paper-exit] %s 같은 티커 %d개 모델 동시보유 — 자동 재조정 스킵(수동 확인 필요)",
-                        _ticker, len(_positions))
+            _n_fixed += await _reconcile_multi_model_ticker(
+                db_pool, paper_trader, _loop, _ticker, _positions
+            )
             continue
 
         _pos = _positions[0]
@@ -580,7 +674,8 @@ async def paper_open_entry_job(db_pool, paper_trader) -> None:
             logger.warning("[paper-entry] %s 매수 체결 미확인 (주문번호=%s) — open(qty=0)로 보류, "
                             "다음 실행 재조정에서 최종 판정", _ticker, _ord_no)
             try:
-                await update_to_open(db_pool, _pos_id, float(_open_px), 0, _ord_no)
+                await update_to_open(db_pool, _pos_id, float(_open_px), 0, _ord_no,
+                                      qty_ordered=_qty)
             except Exception as _e:
                 logger.warning("[paper-entry] %s DB 업데이트 실패: %s", _ticker, _e)
             try:
@@ -613,7 +708,8 @@ async def paper_open_entry_job(db_pool, paper_trader) -> None:
 
         # pending → open (실제 체결 수량 기준)
         try:
-            await update_to_open(db_pool, _pos_id, float(_open_px), _filled, _ord_no)
+            await update_to_open(db_pool, _pos_id, float(_open_px), _filled, _ord_no,
+                                  qty_ordered=_qty)
             logger.info("[paper-entry] %s %d주 매수 완료 (시가=%d, 주문번호=%s)",
                         _ticker, _filled, _open_px, _ord_no)
         except Exception as _e:
