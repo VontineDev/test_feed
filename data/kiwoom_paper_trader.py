@@ -443,6 +443,7 @@ CREATE TABLE IF NOT EXISTS paper_positions (
     exit_price      FLOAT,
     exit_type       VARCHAR(20),
     blended_return  FLOAT,
+    qty_ordered     INTEGER,
     status          VARCHAR(20)     NOT NULL DEFAULT 'pending',
     created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
@@ -464,6 +465,7 @@ ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS tp1_date       DATE;
 ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS tp1_price      FLOAT;
 ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS watermark      FLOAT;
 ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS blended_return FLOAT;
+ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS qty_ordered    INTEGER;
 """
 
 
@@ -586,19 +588,27 @@ async def update_to_open(
     entry_actual: float,
     qty: int,
     order_no: str,
+    qty_ordered: Optional[int] = None,
 ) -> None:
-    """pending → open: 실제 체결가, 수량, 주문번호 기록."""
+    """pending → open: 실제 체결가, 수량, 주문번호 기록.
+
+    qty_ordered: 이 주문에서 원래 노리던 목표 수량(체결 확인 여부와 무관하게
+    항상 기록). qty=0(체결 미확인 보류)으로 열린 뒤에도 이 값이 남아있어야
+    나중에 _reconcile_multi_model_ticker()가 같은 티커를 동시보유한 다른
+    모델과 구분해 FIFO로 근사 배분할 수 있다 — 여기 없으면 그 배분은
+    불가능해 수동 확인으로 넘어간다.
+    """
     async with pool.acquire() as conn:
         await conn.execute(
             """
             UPDATE paper_positions
             SET status='open', entry_actual=$1, qty=$2,
-                kiwoom_buy_no=$3,
+                kiwoom_buy_no=$3, qty_ordered=$5,
                 slippage_pct=($1 - entry_theory) / NULLIF(entry_theory, 0),
                 watermark=$1
             WHERE id=$4
             """,
-            entry_actual, qty, order_no, pos_id,
+            entry_actual, qty, order_no, pos_id, qty_ordered,
         )
 
 
