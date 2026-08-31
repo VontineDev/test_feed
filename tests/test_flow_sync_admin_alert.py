@@ -9,6 +9,7 @@ _alert_flow_sync_failure() wiring in jobs/infra_jobs.py close that gap.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from unittest.mock import AsyncMock, patch
 
@@ -101,6 +102,49 @@ class TestAlertFlowSyncFailure:
             new=AsyncMock(side_effect=RuntimeError("network down")),
         ):
             await ij._alert_flow_sync_failure("test reason")  # must not raise
+
+
+# ── jobs/infra_jobs.py:daily_flow_sync_job() 중복 실행 방지 락 ──────────────
+#
+# 2026-08-31: cron(평일 18:00 KST)·대시보드 트리거(scheduler_triggers 폴링)·
+# 텔레그램(/run_flow, /run_all) 3개의 독립 진입 경로가 daily_flow_sync_job()을
+# 호출할 수 있는데, 텔레그램 경로에만 자체 락(bot._flow_lock)이 있어 나머지
+# 둘과 조율이 안 됐다 — cron이 아직 실행 중인데 /run_all이 같은
+# krx_flow_sync.py 서브프로세스를 하나 더 띄워 ~9분간 동시 실행되는 사고가
+# 났다. 락을 호출부가 아니라 실제 자원을 쓰는 함수 자체(flow_sync_lock)에
+# 둬서 세 경로 전부가 자동으로 보호받도록 고쳤다.
+
+class TestFlowSyncLock:
+    @pytest.mark.asyncio
+    async def test_second_call_skips_without_spawning_subprocess_while_first_running(self):
+        """이미 실행 중이면(락 보유 중) 새 호출은 서브프로세스를 아예 안 띄우고
+        즉시 리턴한다 — 대기하지 않음(cron이 텔레그램 실행을 몇 시간씩
+        기다리게 두면 안 되므로)."""
+        import jobs.infra_jobs as ij
+
+        async def _hold_lock_forever():
+            async with ij.flow_sync_lock:
+                await asyncio.sleep(10)
+
+        holder = asyncio.create_task(_hold_lock_forever())
+        await asyncio.sleep(0)  # holder가 락을 잡을 기회를 준다
+        try:
+            assert ij.flow_sync_lock.locked()
+            with patch("asyncio.create_subprocess_exec", new=AsyncMock()) as mock_spawn:
+                await ij.daily_flow_sync_job()
+            mock_spawn.assert_not_called()
+        finally:
+            holder.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await holder
+
+    def test_telegram_bot_flow_lock_is_the_same_object(self):
+        """telegram_bot._flow_lock이 jobs.infra_jobs.flow_sync_lock을 그대로
+        re-export한 것인지 확인 — 별개 락 객체로 다시 갈라지면 이번에 고친
+        보호가 텔레그램 경로에서만 조용히 무력화된다."""
+        import jobs.infra_jobs as ij
+        import telegram.telegram_bot as bot
+        assert bot._flow_lock is ij.flow_sync_lock
 
 
 # ── jobs/infra_jobs.py:_relog_subprocess_line() ─────────────────────────────

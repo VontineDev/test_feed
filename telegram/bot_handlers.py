@@ -650,15 +650,19 @@ async def _run_screener_task(http: httpx.AsyncClient, chat_id: str, pool) -> Non
 # ── 파이프라인 수동 트리거 내부 태스크 ───────────────────────────
 
 async def _run_flow_task(http: httpx.AsyncClient, chat_id: str) -> None:
+    # bot._flow_lock은 daily_flow_sync_job() 내부에서 쓰는 락과 같은 객체다
+    # (jobs/infra_jobs.py::flow_sync_lock을 re-export) — 여기서 또 async with로
+    # 감싸면 같은 락을 자기 자신이 쥔 채로 다시 기다려 데드락 난다. 함수
+    # 자체가 이미 락을 잡고, 이미 실행 중이면 조용히 스킵하므로 그냥 호출만
+    # 한다(cron/대시보드 트리거와 동일하게).
     import telegram.telegram_bot as bot
-    async with bot._flow_lock:
-        try:
-            from jobs.infra_jobs import daily_flow_sync_job
-            await daily_flow_sync_job()
-            await bot._send_plain(http, chat_id, "✅ 수급 수집 완료.")
-        except Exception as e:
-            logger.warning("[봇/run_flow] 실패: %s", e)
-            await bot._send_plain(http, chat_id, f"수급 수집 실패: {e}")
+    try:
+        from jobs.infra_jobs import daily_flow_sync_job
+        await daily_flow_sync_job()
+        await bot._send_plain(http, chat_id, "✅ 수급 수집 완료.")
+    except Exception as e:
+        logger.warning("[봇/run_flow] 실패: %s", e)
+        await bot._send_plain(http, chat_id, f"수급 수집 실패: {e}")
 
 
 async def _run_stage_task(http: httpx.AsyncClient, chat_id: str, pool) -> None:

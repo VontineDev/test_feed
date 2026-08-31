@@ -8,6 +8,22 @@ import sys
 
 logger = logging.getLogger(__name__)
 
+# daily_flow_sync_job()에는 서로를 모르는 3개의 독립 진입 경로가 있다 —
+# APScheduler cron(평일 09:00 UTC=18:00 KST), 대시보드→scheduler_triggers
+# DB 폴링(jobs/scheduler_jobs.py::_trigger_watcher_job), 텔레그램 /run_flow·
+# /run_all(telegram/bot_handlers.py). 텔레그램 쪽만 자체 락(_flow_lock)이
+# 있었고 나머지 둘은 그 존재를 몰라, 2026-08-31 18:00 cron 실행이 아직
+# 안 끝난 상태에서 /run_all이 같은 krx_flow_sync.py 서브프로세스를 하나 더
+# 띄워 ~9분간 동시 실행되는 사고가 났다(둘 다 같은 KRX 세션/API를 두고
+# 경합 — save_daily_flow가 upsert라 데이터 오염까지는 안 갔지만 무의미한
+# 중복 작업 + 세션/rate-limit 경합 위험). 호출부마다 락을 챙기게 하는 대신
+# 실제 자원을 쓰는 이 함수 자체에 락을 둬서, 세 경로 전부가 자동으로
+# 보호받게 한다(단일 진실 공급원). telegram/telegram_bot.py의 _flow_lock은
+# 이 락을 그대로 re-export한 것 — 같은 객체이므로 텔레그램 쪽에서 또
+# async with로 감싸면 자기 자신을 기다리며 데드락 나니 감싸면 안 됨
+# (텔레그램은 .locked()로 미리 훑어보고 안내 메시지만 내보낸다).
+flow_sync_lock: asyncio.Lock = asyncio.Lock()
+
 _SUBPROCESS_LOG_LEVEL_RE = re.compile(r"\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]")
 _SUBPROCESS_LOG_FNS = {
     "DEBUG": logger.debug,
@@ -278,31 +294,42 @@ async def daily_flow_sync_job() -> None:
     classify_stage_v15의 Stage2 "개인 출회" 게이트가 무력화되는 문제가 있었음
     (TODOS.md 기록 참고) — krx-direct로 되돌려 개인 순매수까지 정확히 채움.
     KRX_SESSION 쿠키가 만료되면 이 잡이 실패하므로 .env 갱신이 필요할 수 있다.
+
+    cron·대시보드 트리거·텔레그램 3개 경로가 동시에 호출할 수 있어
+    flow_sync_lock으로 보호한다 — 이미 실행 중이면 대기하지 않고 즉시
+    건너뛴다(cron 경로가 텔레그램 실행을 몇 시간씩 기다리게 두는 것보다,
+    다음 스케줄/재시도에 맡기는 편이 낫다).
     """
-    logger.info("[flow-sync] krx_flow_sync --incremental --backend krx-direct 시작")
-    try:
-        _root   = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
-        _script = os.path.join(_root, "data", "krx_flow_sync.py")
-        _env    = {**os.environ, "PYTHONPATH": _root}
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable, _script, "--incremental", "--backend", "krx-direct",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            env=_env,
-        )
-        out, _ = await proc.communicate()
-        if proc.returncode == 0:
-            logger.info("[flow-sync] 완료 (exit=0)")
-        else:
-            logger.warning("[flow-sync] 비정상 종료 (exit=%d) — KRX_SESSION 만료 의심", proc.returncode)
-            await _alert_flow_sync_failure(f"daily_flow_sync_job 비정상 종료 (exit={proc.returncode})")
-        if out:
-            for line in out.decode("utf-8", errors="replace").splitlines():
-                if line.strip():
-                    _relog_subprocess_line(line)
-    except Exception as e:
-        logger.warning("[flow-sync] 실행 실패: %s", e)
-        await _alert_flow_sync_failure(f"daily_flow_sync_job 실행 실패: {e}")
+    if flow_sync_lock.locked():
+        logger.warning("[flow-sync] 이미 다른 실행이 진행 중 — 이번 트리거는 건너뜀 "
+                        "(중복 실행 방지, 2026-08-31 cron/텔레그램 동시실행 사고 계기)")
+        return
+
+    async with flow_sync_lock:
+        logger.info("[flow-sync] krx_flow_sync --incremental --backend krx-direct 시작")
+        try:
+            _root   = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
+            _script = os.path.join(_root, "data", "krx_flow_sync.py")
+            _env    = {**os.environ, "PYTHONPATH": _root}
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, _script, "--incremental", "--backend", "krx-direct",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=_env,
+            )
+            out, _ = await proc.communicate()
+            if proc.returncode == 0:
+                logger.info("[flow-sync] 완료 (exit=0)")
+            else:
+                logger.warning("[flow-sync] 비정상 종료 (exit=%d) — KRX_SESSION 만료 의심", proc.returncode)
+                await _alert_flow_sync_failure(f"daily_flow_sync_job 비정상 종료 (exit={proc.returncode})")
+            if out:
+                for line in out.decode("utf-8", errors="replace").splitlines():
+                    if line.strip():
+                        _relog_subprocess_line(line)
+        except Exception as e:
+            logger.warning("[flow-sync] 실행 실패: %s", e)
+            await _alert_flow_sync_failure(f"daily_flow_sync_job 실행 실패: {e}")
 
 
 async def _alert_flow_sync_failure(reason: str) -> None:

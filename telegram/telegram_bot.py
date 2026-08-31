@@ -46,7 +46,14 @@ _seen_hashes_ref: Optional[set] = None
 # 스크리너 중복 실행 방지 락
 _scan_lock: asyncio.Lock = asyncio.Lock()
 # 파이프라인 수동 트리거 락
-_flow_lock: asyncio.Lock = asyncio.Lock()
+# _flow_lock: jobs/infra_jobs.py::daily_flow_sync_job()이 실제로 쓰는 락을
+# 그대로 re-export한다(같은 객체) — cron/대시보드트리거/텔레그램 3개 진입
+# 경로가 서로 몰라 동시 실행되던 사고(2026-08-31) 이후, 락을 자원을 쓰는
+# 함수 자체에 두고 여기선 같은 락을 "훑어보기"(.locked())용으로만 참조한다.
+# 텔레그램 쪽에서 또 async with로 감싸면 자기 자신을 기다리며 데드락 나니
+# 감싸면 안 됨 — _run_flow_task()가 daily_flow_sync_job()을 직접 호출하는
+# 이유가 이것.
+from jobs.infra_jobs import flow_sync_lock as _flow_lock  # noqa: E402,F401 — bot._flow_lock로 외부 참조
 _stage_lock: asyncio.Lock = asyncio.Lock()
 _youtube_lock: asyncio.Lock = asyncio.Lock()
 # /backtest 중복 실행 방지 락
