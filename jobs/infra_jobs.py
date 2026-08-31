@@ -199,25 +199,39 @@ async def daily_aftermarket_sync_job() -> None:
         logger.warning("[aftermarket-sync] 실행 실패: %s", e)
 
 
+# cron(평일 09:05 KST)·대시보드 트리거(scheduler_triggers 폴링)·텔레그램
+# (/run_youtube, /run_all) 3개의 독립 경로가 youtube_narrative_sync_job()을
+# 부를 수 있다(flow_sync_lock과 동일 구조·동일 사고 위험, 2026-08-31 발견).
+# 실제 Tor 회로/LLM 서버를 공유하는 이 함수만 락으로 보호 — 뒤이어 도는
+# youtube_attention_score_job()은 로컬 DB 집계라 자원 경합 위험이 낮아
+# 대상에서 뺐다.
+youtube_sync_lock: asyncio.Lock = asyncio.Lock()
+
+
 async def youtube_narrative_sync_job() -> None:
     """평일 09:05 KST — 전일 삼프로TV 업로드 수집 + LLM 추출 → youtube_mention_raw."""
-    import os
-    from datetime import date as _date, timedelta as _td
-    from core.db import get_dsn as _get_dsn
-    from data.youtube_narrative_sync import run_sync, ensure_tables
-    logger.info("[yt-sync] 운영 수집 시작")
-    try:
-        dsn        = _get_dsn()
-        api_key = os.environ.get("YOUTUBE_API_KEY", "")
-        if not api_key:
-            logger.warning("[yt-sync] YOUTUBE_API_KEY 미설정 — 건너뜀")
-            return
-        ensure_tables(dsn)
-        yesterday = _date.today() - _td(days=1)
-        n = await asyncio.to_thread(run_sync, dsn, api_key, yesterday, yesterday)
-        logger.info("[yt-sync] 완료: %d건", n)
-    except Exception as e:
-        logger.error("[yt-sync] 실패: %s", e)
+    if youtube_sync_lock.locked():
+        logger.warning("[yt-sync] 이미 다른 실행이 진행 중 — 이번 트리거는 건너뜀 (중복 실행 방지)")
+        return
+
+    async with youtube_sync_lock:
+        import os
+        from datetime import date as _date, timedelta as _td
+        from core.db import get_dsn as _get_dsn
+        from data.youtube_narrative_sync import run_sync, ensure_tables
+        logger.info("[yt-sync] 운영 수집 시작")
+        try:
+            dsn        = _get_dsn()
+            api_key = os.environ.get("YOUTUBE_API_KEY", "")
+            if not api_key:
+                logger.warning("[yt-sync] YOUTUBE_API_KEY 미설정 — 건너뜀")
+                return
+            ensure_tables(dsn)
+            yesterday = _date.today() - _td(days=1)
+            n = await asyncio.to_thread(run_sync, dsn, api_key, yesterday, yesterday)
+            logger.info("[yt-sync] 완료: %d건", n)
+        except Exception as e:
+            logger.error("[yt-sync] 실패: %s", e)
 
 
 async def youtube_attention_score_job() -> None:

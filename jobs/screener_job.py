@@ -15,8 +15,26 @@ from telegram.telegram_notify import send_weekly_screener as tg_send_weekly_scre
 
 logger = logging.getLogger(__name__)
 
+# cron·대시보드 트리거(scheduler_triggers 폴링)·텔레그램(/run_screener,
+# /run_all) 3개의 독립 경로가 이 잡을 부를 수 있다(2026-08-31
+# jobs/infra_jobs.py::flow_sync_lock 참고 — 같은 3-경로 구조에서 텔레그램만
+# 락이 있어 동시 실행되는 사고가 남). 텔레그램 경로(telegram/bot_handlers.py
+# ::_run_screener_task)는 이 함수를 호출하지 않고 run_weekly_screen()을 직접
+# 재구현해 쓰므로, 그쪽도 같은 락(bot._scan_lock — 이 객체를 re-export)으로
+# 감싸 상호 배제한다.
+screener_lock: asyncio.Lock = asyncio.Lock()
+
 
 async def weekly_screener_job(db_pool) -> set[str]:
+    if screener_lock.locked():
+        logger.warning("[차트스크리너] 이미 다른 실행이 진행 중 — 이번 트리거는 건너뜀 (중복 실행 방지)")
+        return set()
+
+    async with screener_lock:
+        return await _weekly_screener_job_impl(db_pool)
+
+
+async def _weekly_screener_job_impl(db_pool) -> set[str]:
     loop = asyncio.get_running_loop()
     results = []
     try:

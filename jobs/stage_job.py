@@ -40,7 +40,25 @@ def _fetch_daily_ohlcv(ticker: str):
         return None
 
 
+# cron(평일)·대시보드 트리거(scheduler_triggers 폴링)·텔레그램(/run_stage,
+# /run_all) 3개의 독립 경로가 daily_stage_job()을 부를 수 있다 — 2026-08-31
+# daily_flow_sync_job에서 이 3-경로 구조가 텔레그램 쪽에만 락이 있어 동시
+# 실행되는 사고가 난 걸 발견(jobs/infra_jobs.py::flow_sync_lock 참고), 같은
+# 패턴을 가진 stage/screener/youtube도 예방적으로 고친다. 호출부가 아니라
+# 자원을 실제로 쓰는 함수 자체에 락을 둬서 어느 경로로 불러도 자동으로
+# 보호받게 한다.
+stage_job_lock: asyncio.Lock = asyncio.Lock()
+
+
 async def daily_stage_job(db_pool) -> set[str]:
+    if stage_job_lock.locked():
+        logger.warning("[3단계] 이미 다른 실행이 진행 중 — 이번 트리거는 건너뜀 (중복 실행 방지)")
+        return set()
+    async with stage_job_lock:
+        return await _daily_stage_job_impl(db_pool)
+
+
+async def _daily_stage_job_impl(db_pool) -> set[str]:
     if not db_pool:
         logger.warning("[3단계] DB 풀 없음 — 스킵")
         return set()

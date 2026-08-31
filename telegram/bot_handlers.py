@@ -666,28 +666,34 @@ async def _run_flow_task(http: httpx.AsyncClient, chat_id: str) -> None:
 
 
 async def _run_stage_task(http: httpx.AsyncClient, chat_id: str, pool) -> None:
+    # bot._stage_lock은 daily_stage_job() 내부(jobs/stage_job.py::stage_job_lock)와
+    # 같은 객체다 — 여기서 또 async with로 감싸면 자기 자신을 기다리며
+    # 데드락 나므로(flow_sync_lock과 동일 사고) 그냥 호출만 한다.
     import telegram.telegram_bot as bot
-    async with bot._stage_lock:
-        try:
-            from jobs.stage_job import daily_stage_job
-            new_active = await daily_stage_job(pool)
-            await bot._send_plain(http, chat_id, f"✅ 스테이지 분류 완료 — 활성 {len(new_active)}종목.")
-        except Exception as e:
-            logger.warning("[봇/run_stage] 실패: %s", e)
-            await bot._send_plain(http, chat_id, f"스테이지 분류 실패: {e}")
+    try:
+        from jobs.stage_job import daily_stage_job
+        new_active = await daily_stage_job(pool)
+        await bot._send_plain(http, chat_id, f"✅ 스테이지 분류 완료 — 활성 {len(new_active)}종목.")
+    except Exception as e:
+        logger.warning("[봇/run_stage] 실패: %s", e)
+        await bot._send_plain(http, chat_id, f"스테이지 분류 실패: {e}")
 
 
 async def _run_youtube_task(http: httpx.AsyncClient, chat_id: str) -> None:
+    # bot._youtube_lock은 youtube_narrative_sync_job() 내부(jobs/infra_jobs.py
+    # ::youtube_sync_lock)와 같은 객체다 — 여기서 또 async with로 감싸면
+    # 자기 자신을 기다리며 데드락 나므로(flow_sync_lock과 동일 사고) 그냥
+    # 호출만 한다. youtube_attention_score_job()은 그 락 대상이 아니라서
+    # (로컬 DB 집계, 경합 위험 낮음) 원래처럼 감싸지 않고 이어서 부른다.
     import telegram.telegram_bot as bot
-    async with bot._youtube_lock:
-        try:
-            from jobs.infra_jobs import youtube_narrative_sync_job, youtube_attention_score_job
-            await youtube_narrative_sync_job()
-            await youtube_attention_score_job()
-            await bot._send_plain(http, chat_id, "✅ 유튜브 수집 + 어텐션 점수 완료.")
-        except Exception as e:
-            logger.warning("[봇/run_youtube] 실패: %s", e)
-            await bot._send_plain(http, chat_id, f"유튜브 수집 실패: {e}")
+    try:
+        from jobs.infra_jobs import youtube_narrative_sync_job, youtube_attention_score_job
+        await youtube_narrative_sync_job()
+        await youtube_attention_score_job()
+        await bot._send_plain(http, chat_id, "✅ 유튜브 수집 + 어텐션 점수 완료.")
+    except Exception as e:
+        logger.warning("[봇/run_youtube] 실패: %s", e)
+        await bot._send_plain(http, chat_id, f"유튜브 수집 실패: {e}")
 
 
 # ── 파이프라인 수동 트리거 핸들러 ─────────────────────────────────
