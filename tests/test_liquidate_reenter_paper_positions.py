@@ -90,11 +90,11 @@ async def test_full_liquidation_closes_old_rows_and_inserts_fresh_pending():
     trader.confirm_fill.assert_called_once_with("085620.KS", "0099999", 92, False, 92)
 
     conn.execute.assert_called_once()
-    sql, exit_date, exit_price, ids = conn.execute.call_args[0]
+    sql, exit_date, exit_type, exit_price, ids = conn.execute.call_args[0]
     assert exit_date == date.today()
+    assert exit_type == "liquidate_reentry"
     assert exit_price == 24450.0
     assert set(ids) == {1, 2}
-    assert "manual_liquidate_reentry" in sql
     assert "blended_return=NULL" in sql
 
     assert mock_insert.call_count == 2
@@ -146,6 +146,34 @@ async def test_already_zero_actual_skips_sell_but_still_reenters():
     trader.place_sell.assert_not_called()
     conn.execute.assert_called_once()
     assert mock_insert.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_main_isolates_per_ticker_failure_and_continues(monkeypatch):
+    """2026-08-31 실행에서 실제로 겪은 사고 재현 방지: 한 티커 처리 중 예외가
+    나도(예: exit_type 컬럼 길이 초과) 뒤에 남은 티커는 계속 처리돼야 한다 —
+    그때는 세 번째 티커가 죽으면서 네 번째 티커가 아예 시도조차 안 됐다."""
+    import scripts.liquidate_reenter_paper_positions as mod
+
+    processed = []
+
+    async def _fake_liquidate(pool, trader, ticker, apply):
+        processed.append(ticker)
+        if ticker == "003230.KS":
+            raise RuntimeError("value too long for type character varying(20)")
+
+    monkeypatch.setattr(sys, "argv",
+                         ["prog", "--ticker", "036800.KQ,003230.KS,121890.KQ", "--apply"])
+    monkeypatch.setattr(mod, "liquidate_and_reenter", _fake_liquidate)
+    monkeypatch.setattr(mod._db, "create_pool", AsyncMock(return_value=MagicMock(close=AsyncMock())))
+    monkeypatch.setattr(mod, "KiwoomPaperTrader", MagicMock())
+
+    with pytest.raises(SystemExit) as exc_info:
+        await mod.main()
+
+    # 실패한 티커 이후({003230.KS} 다음의 121890.KQ)도 계속 처리됐어야 한다.
+    assert processed == ["036800.KQ", "003230.KS", "121890.KQ"]
+    assert exc_info.value.code == 1
 
 
 @pytest.mark.asyncio

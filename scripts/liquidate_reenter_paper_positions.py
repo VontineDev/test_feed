@@ -22,7 +22,7 @@ qty_ordered가 기록된 이후의 신규 동시보유에만 적용된다. 그 �
      여기서 멈추고 아무 것도 정리하지 않는다 — 재실행은 항상 안전하다(매번
      그 시점의 실제 잔고 전체를 다시 조회해 판단하므로 중복 매도 위험 없음).
   3. 매도 후 실보유가 0으로 확인되면(또는 애초에 이미 0이었다면): 기존 open
-     행 전부를 status='closed', exit_type='manual_liquidate_reentry',
+     행 전부를 status='closed', exit_type='liquidate_reentry',
      exit_price=<매도 확인 시점 현재가>, blended_return=NULL(모델별 귀속
      불가하니 통계 제외 — consolidate_paper_positions.py의 consolidated_equal과
      동일 관례)로 정리.
@@ -53,6 +53,14 @@ if str(ROOT) not in sys.path:
 
 import core.db as _db  # noqa: E402
 from data.kiwoom_paper_trader import KiwoomPaperTrader, insert_pending  # noqa: E402
+
+# paper_positions.exit_type는 VARCHAR(20) — 2026-08-31 실행에서 이보다 긴 값
+# ("manual_liquidate_reentry", 25자)을 썼다가 003230.KS 정리 도중
+# StringDataRightTruncationError로 죽어 121890.KQ가 아예 시도조차 안 되는
+# 사고가 났다(테스트는 asyncpg를 통째로 mock해서 이 스키마 제약을 못 잡았음).
+# 상수 하나로 묶어 길이 회귀를 assert로 막는다.
+EXIT_TYPE_LIQUIDATE_REENTER = "liquidate_reentry"
+assert len(EXIT_TYPE_LIQUIDATE_REENTER) <= 20, "paper_positions.exit_type는 VARCHAR(20)"
 
 
 async def _load_open_rows(pool, ticker: str) -> list[dict]:
@@ -88,7 +96,7 @@ async def liquidate_and_reenter(pool, trader, ticker: str, apply: bool) -> None:
 
     if not apply:
         print("  계획: 브로커 실보유 전량 매도 → 위 open 전부 closed"
-              "(exit_type=manual_liquidate_reentry) → 모델별 새 pending 삽입")
+              "(exit_type=liquidate_reentry) → 모델별 새 pending 삽입")
         print("  (dry-run — 실제로 반영하려면 --apply, 장중에만 실행)")
         return
 
@@ -114,11 +122,11 @@ async def liquidate_and_reenter(pool, trader, ticker: str, apply: bool) -> None:
             await conn.execute(
                 """
                 UPDATE paper_positions
-                SET status='closed', exit_date=$1, exit_type='manual_liquidate_reentry',
-                    exit_price=$2, blended_return=NULL
-                WHERE id = ANY($3::int[])
+                SET status='closed', exit_date=$1, exit_type=$2,
+                    exit_price=$3, blended_return=NULL
+                WHERE id = ANY($4::int[])
                 """,
-                date.today(), float(exit_price), old_ids,
+                date.today(), EXIT_TYPE_LIQUIDATE_REENTER, float(exit_price), old_ids,
             )
 
     new_ids = {}
@@ -150,11 +158,24 @@ async def main() -> None:
 
     pool = await _db.create_pool()
     trader = KiwoomPaperTrader()
+    failed = []
     try:
         for ticker in tickers:
-            await liquidate_and_reenter(pool, trader, ticker, args.apply)
+            try:
+                await liquidate_and_reenter(pool, trader, ticker, args.apply)
+            except Exception as e:
+                # 한 티커의 실패(예: 매도는 이미 나갔는데 DB 정리 단계에서 에러)가
+                # 뒤에 남은 티커 처리를 막지 않도록 격리한다 — 2026-08-31 실행에서
+                # exit_type 컬럼 길이 초과로 세 번째 티커가 죽으면서 네 번째
+                # 티커(121890.KQ)가 아예 시도조차 안 된 사고가 계기.
+                print(f"[{ticker}] 처리 중 오류 — 다음 티커로 계속 진행: {e}")
+                failed.append(ticker)
     finally:
         await pool.close()
+
+    if failed:
+        print(f"\n실패한 티커 {len(failed)}건: {failed} — 원인 해결 후 그 티커만 다시 실행하세요.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -43,12 +43,22 @@ _last_update_id: int = 0
 _start_time: datetime = datetime.now(timezone.utc)
 # 누적 수집 건수 참조 (run_scheduler에서 주입)
 _seen_hashes_ref: Optional[set] = None
-# 스크리너 중복 실행 방지 락
-_scan_lock: asyncio.Lock = asyncio.Lock()
-# 파이프라인 수동 트리거 락
-_flow_lock: asyncio.Lock = asyncio.Lock()
-_stage_lock: asyncio.Lock = asyncio.Lock()
-_youtube_lock: asyncio.Lock = asyncio.Lock()
+# _scan_lock/_flow_lock/_stage_lock/_youtube_lock: 각각 jobs/screener_job.py
+# ::screener_lock, jobs/infra_jobs.py::flow_sync_lock, jobs/stage_job.py
+# ::stage_job_lock, jobs/infra_jobs.py::youtube_sync_lock을 그대로
+# re-export한다(같은 객체, 새로 만드는 게 아님) — cron/대시보드트리거
+# (scheduler_triggers 폴링)/텔레그램 3개 진입 경로가 서로 몰라 동시
+# 실행되는 사고(2026-08-31, daily_flow_sync_job에서 처음 발견)를 막으려면
+# 락이 호출부가 아니라 자원을 실제로 쓰는 함수 자체에 있어야 한다. 여기선
+# 같은 락을 "훑어보기"(.locked())용으로만 참조. 해당 함수를 직접 호출하는
+# 태스크(_run_flow_task/_run_stage_task/_run_youtube_task)는 절대 이 락을
+# async with로 다시 감싸면 안 됨 — 자기 자신을 기다리며 데드락 난다
+# (_run_screener_task는 예외: run_weekly_screen()을 직접 재구현해 부르므로
+# 같은 락을 async with로 감싸도 재귀 호출이 아니라 안전하다).
+from jobs.infra_jobs import flow_sync_lock as _flow_lock  # noqa: E402,F401 — bot._flow_lock로 외부 참조
+from jobs.infra_jobs import youtube_sync_lock as _youtube_lock  # noqa: E402,F401
+from jobs.screener_job import screener_lock as _scan_lock  # noqa: E402,F401
+from jobs.stage_job import stage_job_lock as _stage_lock  # noqa: E402,F401
 # /backtest 중복 실행 방지 락
 _backtest_lock: asyncio.Lock = asyncio.Lock()
 
