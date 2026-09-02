@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 > **2026-06-21 버전 체계 통합**: 이 프로젝트는 한동안 두 개의 독립된 changelog를 병행 운영했습니다 — `ARCHITECTURE.md`(블록쿼트, `v1.0.x` 계열)와 본 `CHANGELOG.md`(`v0.10.1.x` 계열). 둘 다 활발히 갱신되며 서로 갈라졌고, `VERSION` 파일은 `v0.10.0.0`에서 멈춰 있었습니다. 앞으로는 **이 `CHANGELOG.md`가 유일한 변경 이력**이며, `ARCHITECTURE.md`는 정적 아키텍처 설명만 유지합니다. `v1.0.x` 계열의 항목 6건(2026-06-14~16 발생, 실제 발생일 기준 정렬)을 아래로 이전했습니다 — 날짜가 위 항목(`0.10.1.11` 등)보다 과거인 것은 의도된 것입니다.
 
+## [0.10.2.0] - 2026-09-02
+
+### Fixed
+- **모의투자 멀티모델 동시보유 재조정에서 부분체결 포지션이 영구 고착되던 버그 수정** (`jobs/paper_jobs.py: _reconcile_multi_model_ticker`): 같은 티커를 2개 이상 모델이 동시 보유할 때, 기존 로직은 `qty>0`이면(부분체결이어도) 무조건 "이미 확정"으로 신뢰하고 다시는 채워주지 않았다. 단일 티커 케이스(`_reconcile_stale_positions` 본체)는 `qty>0`이어도 브로커 실보유가 더 크면 top-up하는데, confirm_fill()의 짧은 폴링창 때문에 부분체결로 기록된 뒤 나머지가 나중에 체결되는 동일한 근본 원인이 멀티모델 쪽만 빠져 있었다 — 실사고: `036800.KQ`(compose-funnel1 id=178, compose-score1 id=179)가 08-31 진입 이후 목표수량의 19~29%(22/76, 29/153)에서 이틀간 고착. 목표수량(`qty_ordered`) 도달 여부로 top-up 대상을 재정의(qty=0이든 부분체결이든 미달이면 대상)해 FIFO로 각자의 잔여 목표까지 채우도록 수정. 회귀 테스트 2건 추가(`tests/test_paper_exit_reconcile.py`), 라이브 DB 재조정으로 위 두 포지션 즉시 정정 확인(22→76, 29→153).
+
 ## [0.10.1.18] - 2026-07-24
 
 ### Fixed
