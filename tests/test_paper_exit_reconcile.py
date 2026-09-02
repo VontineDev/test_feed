@@ -275,6 +275,61 @@ async def test_multi_model_settled_plus_unsettled_grants_remainder():
 
 
 @pytest.mark.asyncio
+async def test_multi_model_partial_fills_top_up_both():
+    """2026-09-02 회귀: qty>0(부분체결)이어도 목표수량 미달이면 top-up 대상이다
+    (036800.KQ id=178/179 — 22/76, 29/153으로 이틀간 영구 고착됐던 실제 사고).
+    두 모델의 목표 합계가 실보유와 정확히 일치하면 FIFO로 각자 잔여목표만큼
+    채워 정확히 확정된다."""
+    from jobs.paper_jobs import _reconcile_stale_positions
+
+    pool, conn = _make_pool()
+    trader = MagicMock()
+    trader.get_position_qty.return_value = 229           # 76 + 153
+    trader.get_position_avg_price.return_value = 7519
+    positions = [
+        _pos(178, "036800.KQ", 22, model="compose-funnel1", qty_ordered=76,
+             created_at=_T0),
+        _pos(179, "036800.KQ", 29, model="compose-score1", qty_ordered=153,
+             created_at=_T0 + timedelta(milliseconds=100)),
+    ]
+
+    with patch("jobs.paper_jobs.get_open_positions", AsyncMock(return_value=positions)):
+        n = await _reconcile_stale_positions(pool, trader)
+
+    assert n == 2
+    assert conn.execute.call_count == 2
+    first_call, second_call = conn.execute.call_args_list
+    assert first_call[0][1:] == (76, 7519.0, 178)   # 22→76(잔여목표 54만큼 top-up)
+    assert second_call[0][1:] == (153, 7519.0, 179)  # 29→153(잔여목표 124만큼 top-up)
+
+
+@pytest.mark.asyncio
+async def test_multi_model_partial_fill_still_short_of_target():
+    """실보유가 두 모델의 잔여목표 합계보다 적으면 먼저 접수된 모델부터 채우고
+    나머지는 다음 실행까지 부분체결 상태로 남는다."""
+    from jobs.paper_jobs import _reconcile_stale_positions
+
+    pool, conn = _make_pool()
+    trader = MagicMock()
+    trader.get_position_qty.return_value = 60            # 이미 기록된 22+29=51 + 신규 9
+    trader.get_position_avg_price.return_value = 7519
+    positions = [
+        _pos(178, "036800.KQ", 22, model="compose-funnel1", qty_ordered=76,
+             created_at=_T0),
+        _pos(179, "036800.KQ", 29, model="compose-score1", qty_ordered=153,
+             created_at=_T0 + timedelta(milliseconds=100)),
+    ]
+
+    with patch("jobs.paper_jobs.get_open_positions", AsyncMock(return_value=positions)):
+        n = await _reconcile_stale_positions(pool, trader)
+
+    assert n == 1
+    conn.execute.assert_called_once()
+    call_args = conn.execute.call_args[0]
+    assert call_args[1:] == (31, 7519.0, 178)  # 22→31 (남는 9주만 먼저 접수된 쪽에 귀속)
+
+
+@pytest.mark.asyncio
 async def test_multi_model_shrink_ambiguous_still_skipped():
     """체결확정분 합계가 실보유보다 많으면(모델 특정 불가한 매도 발생) 여전히
     손대지 않는다 — 근사 귀속은 "늘어나는" 방향에만 적용."""

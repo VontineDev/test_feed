@@ -36,56 +36,73 @@ logger = logging.getLogger(__name__)
 
 
 async def _reconcile_multi_model_ticker(db_pool, paper_trader, _loop, ticker: str, positions: list) -> int:
-    """같은 티커를 2개 이상 모델이 동시 보유할 때의 근사 재조정 (2026-08-30).
+    """같은 티커를 2개 이상 모델이 동시 보유할 때의 근사 재조정 (2026-08-30, 2026-09-02 부분체결 top-up 확장).
 
     중복 매매를 모델 독립성을 위해 허용하기로 한 이상, 브로커 계좌가
     모델별로 쪼개지지 않는다는 제약은 그대로 남는다 — 그래서 완전한 정확도
     대신 다음 근사를 쓴다:
 
-    - 이미 체결 확정된(qty>0) 포지션은 과거에 이미 옳게 귀속됐다고 신뢰하고
-      건드리지 않는다.
-    - 아직 미확인인(qty=0) 포지션들만, 브로커 실보유 중 확정분을 뺀 "남는
-      수량"을 주문 접수 순서(FIFO, created_at 오름차순 — 먼저 낸 주문이
-      먼저 채워졌을 것이라는 가정)로 자신의 목표 수량(qty_ordered)까지 채운다.
+    - 목표수량(qty_ordered)에 이미 도달한(qty>=qty_ordered) 포지션은 과거에
+      이미 옳게 귀속됐다고 신뢰하고 건드리지 않는다. qty_ordered 자체가
+      없는(이 컬럼 도입 이전) 구 데이터도 qty>0이면 같은 취급(목표를 모르니
+      현재 값을 그대로 신뢰).
+    - qty_ordered가 없는데 qty=0인 행은 "남는 실보유"를 얼마나 줘야 할지 판단
+      근거가 없으므로 그룹 전체를 스킵한다(수동 확인 필요).
+    - 나머지(목표에 못 미친 행 — 미확인 qty=0이든 부분체결 qty>0이든)는,
+      브로커 실보유 중 신뢰 대상(위 두 항목) 및 이 행들이 이미 기록한 만큼을
+      뺀 "아직 아무 행에도 귀속 안 된 수량"을 주문 접수 순서(FIFO, created_at
+      오름차순 — 먼저 낸 주문이 먼저 채워졌을 것이라는 가정)로 각자의 남은
+      목표(qty_ordered - 현재 qty)까지 채운다.
+      2026-09-02 발견(036800.KQ, id=178/179): 예전엔 qty>0이면(부분체결
+      포함) 무조건 "이미 확정"으로 취급해 다시는 채워주지 않았다 — 단일
+      티커 케이스(이 파일 위쪽 _reconcile_stale_positions 본체)는 qty>0이어도
+      브로커 실보유가 더 크면 top-up하는데, confirm_fill()의 짧은 폴링창
+      때문에 부분체결로 기록된 뒤 나머지가 나중에 체결되는 동일한 근본
+      원인이 멀티모델 쪽만 빠져 있어 목표의 19~29%에서 이틀째 영구 고착됐던
+      버그.
     - 브로커는 "이 주문이 몇 주 채웠는지"를 모델별로 알려주지 않으므로 이건
       근사치다 — 남는 수량이 목표에 못 미치면 그만큼만 채우고 나머지 모델은
-      다음 실행에서 재시도, qty_ordered 자체가 없는(이 컬럼 도입 이전) 구
-      데이터가 섞여 있거나 확정분 합계가 실보유보다 이미 많으면(모델을 특정
-      할 수 없는 매도 발생) 여전히 손대지 않고 수동 확인으로 넘긴다.
+      다음 실행에서 재시도, 신뢰 대상 + 이미 기록된 부분체결 합계가 실보유
+      보다 이미 많으면(모델을 특정할 수 없는 매도 발생) 여전히 손대지 않고
+      수동 확인으로 넘긴다.
     """
     if any((p["qty"] or 0) < 0 for p in positions):
         logger.info("[paper-exit] %s 같은 티커 %d개 모델 동시보유 — 음수 qty 포함, "
                     "자동 재조정 스킵(수동 확인 필요)", ticker, len(positions))
         return 0
 
-    _settled   = [p for p in positions if (p["qty"] or 0) > 0]
-    _unsettled = [p for p in positions if (p["qty"] or 0) == 0]
+    _ambiguous = [p for p in positions
+                  if (p["qty"] or 0) == 0 and p.get("qty_ordered") is None]
+    if _ambiguous:
+        logger.info("[paper-exit] %s 같은 티커 %d개 모델 동시보유 — qty_ordered 없는 "
+                    "구버전 미확인 행 포함, 자동 재조정 스킵(수동 확인 필요)", ticker, len(positions))
+        return 0
 
-    if not _unsettled:
-        logger.info("[paper-exit] %s 같은 티커 %d개 모델 동시보유(전부 체결 확정) — "
+    _needs_fill = [p for p in positions
+                   if p.get("qty_ordered") is not None and (p["qty"] or 0) < p["qty_ordered"]]
+    _needs_fill_ids = {p["id"] for p in _needs_fill}
+    _settled = [p for p in positions if p["id"] not in _needs_fill_ids]
+
+    if not _needs_fill:
+        logger.info("[paper-exit] %s 같은 티커 %d개 모델 동시보유(전부 목표수량 도달) — "
                     "자동 재조정 스킵(수동 확인 필요)", ticker, len(positions))
         return 0
 
-    if any(p.get("qty_ordered") is None for p in _unsettled):
-        logger.info("[paper-exit] %s 같은 티커 %d개 모델 동시보유 — qty_ordered 없는 "
-                    "구버전 행 포함, 자동 재조정 스킵(수동 확인 필요)", ticker, len(positions))
-        return 0
-
     _actual_total = await _loop.run_in_executor(None, paper_trader.get_position_qty, ticker)
-    _settled_sum  = sum(p["qty"] or 0 for p in _settled)
+    _claimed_sum = sum(p["qty"] or 0 for p in _settled) + sum(p["qty"] or 0 for p in _needs_fill)
 
-    if _settled_sum > _actual_total:
+    if _claimed_sum > _actual_total:
         logger.info(
-            "[paper-exit] %s 같은 티커 %d개 모델 동시보유 — 체결확정분 합계(%d)가 "
+            "[paper-exit] %s 같은 티커 %d개 모델 동시보유 — 이미 기록된 합계(확정+부분체결, %d)가 "
             "실보유(%d)보다 많음(모델 특정 불가한 매도 발생) — 자동 재조정 스킵(수동 확인 필요)",
-            ticker, len(positions), _settled_sum, _actual_total,
+            ticker, len(positions), _claimed_sum, _actual_total,
         )
         return 0
 
-    _remaining = _actual_total - _settled_sum
+    _remaining = _actual_total - _claimed_sum
     if _remaining <= 0:
         logger.info("[paper-exit] %s 같은 티커 %d개 모델 동시보유 — 아직 남는 실보유 없음, "
-                    "미확인 %d건 다음 실행 재시도", ticker, len(positions), len(_unsettled))
+                    "미확인/부분체결 %d건 다음 실행 재시도", ticker, len(positions), len(_needs_fill))
         return 0
 
     _avg_price = await _loop.run_in_executor(None, paper_trader.get_position_avg_price, ticker)
@@ -94,25 +111,27 @@ async def _reconcile_multi_model_ticker(db_pool, paper_trader, _loop, ticker: st
         return 0
 
     _n_fixed = 0
-    for _pos in sorted(_unsettled, key=lambda p: p["created_at"]):
-        _target = _pos["qty_ordered"]
-        if _remaining <= 0 or _target <= 0:
+    for _pos in sorted(_needs_fill, key=lambda p: p["created_at"]):
+        _current = _pos["qty"] or 0
+        _target_remaining = _pos["qty_ordered"] - _current
+        if _remaining <= 0 or _target_remaining <= 0:
             logger.info("[paper-exit] %s FIFO 귀속: %s(id=%d) 여전히 미확인(순번 대기) — 스킵",
                         ticker, _pos["model"], _pos["id"])
             continue
 
-        _grant = min(_target, _remaining)
+        _grant = min(_target_remaining, _remaining)
         _remaining -= _grant
+        _new_qty = _current + _grant
         try:
             async with db_pool.acquire() as _conn:
                 await _conn.execute(
                     "UPDATE paper_positions SET qty=$1, entry_actual=$2 WHERE id=$3",
-                    _grant, float(_avg_price), _pos["id"],
+                    _new_qty, float(_avg_price), _pos["id"],
                 )
-            _note = "" if _grant == _target else f"(목표 {_target}주 중 {_grant}주만 근사귀속 — 나머지는 다음 실행 재시도)"
+            _note = "" if _new_qty == _pos["qty_ordered"] else f"(목표 {_pos['qty_ordered']}주 중 {_new_qty}주만 근사귀속 — 나머지는 다음 실행 재시도)"
             logger.info(
-                "[paper-exit] %s FIFO 귀속(동시보유 %d개 모델): %s(id=%d) qty 0→%d, entry_actual=%s %s",
-                ticker, len(positions), _pos["model"], _pos["id"], _grant, _avg_price, _note,
+                "[paper-exit] %s FIFO 귀속(동시보유 %d개 모델): %s(id=%d) qty %d→%d, entry_actual=%s %s",
+                ticker, len(positions), _pos["model"], _pos["id"], _current, _new_qty, _avg_price, _note,
             )
             _n_fixed += 1
         except Exception as _e:
